@@ -9,22 +9,33 @@
 #   * a dedicated ssh keypair the workstation's Linux boot will trust with
 #     a forced command (see linux/setup.sh) — printed at the end
 #
-# Run from the workstation (either boot):
-#   ./pi/setup.sh
-#   PI_HOST=user@192.168.1.51 ./pi/setup.sh   # from Windows
+# Run from the workstation (either boot). Every address below is an
+# example — pass your own:
+#   PI_HOST=user@192.168.1.51 PI_LAN_IP=192.168.1.51 \
+#   WS_LAN=192.168.1.50 WS_MAC=AA:BB:CC:DD:EE:FF \
+#   LINUX_SSH=user@192.168.100.1 ./pi/setup.sh
 set -euo pipefail
 
 PI="${PI_HOST:-pi-node1}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The fauxmo device must answer on the LAN the Echo lives on, not the
-# direct link.
+# The fauxmo devices must answer on the LAN the Echo lives on, not a
+# point-to-point link.
 PI_LAN_IP="${PI_LAN_IP:-192.168.1.51}"
+# The workstation being booted: LAN address (same under both OSes — pin
+# it with a DHCP reservation), the wired NIC's MAC for the WOL packet,
+# its broadcast address, and how to ssh it while it is in Linux.
+WS_LAN="${WS_LAN:-192.168.1.50}"
+WS_MAC="${WS_MAC:-AA:BB:CC:DD:EE:FF}"
+WS_BROADCAST="${WS_BROADCAST:-192.168.1.255}"
+LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
 DEVICE_NAME="${DEVICE_NAME:-flight sim}"
 DEVICE_PORT=49915
 
 scp -q "${HERE}/flightsim-boot.sh" "${PI}:/tmp/flightsim-boot.sh"
 
-ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='${DEVICE_PORT}' bash -s" <<'REMOTE'
+ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='${DEVICE_PORT}' \
+    WS_LAN='${WS_LAN}' WS_MAC='${WS_MAC}' WS_BROADCAST='${WS_BROADCAST}' \
+    LINUX_SSH='${LINUX_SSH}' bash -s" <<'REMOTE'
 set -euo pipefail
 
 # A Windows checkout may ship CRLF — a CR after the shebang breaks exec.
@@ -32,16 +43,17 @@ sed -i 's/\r$//' /tmp/flightsim-boot.sh
 sudo install -m 755 /tmp/flightsim-boot.sh /usr/local/bin/flightsim-boot.sh
 rm /tmp/flightsim-boot.sh
 
-# Defaults live in the script; the env file exists to override without a
-# redeploy. Create once, keep local edits.
+# The orchestrator reads this at every trigger, so it is the one place to
+# correct an address without redeploying. Written once from the values
+# passed to this script; local edits are kept on re-runs.
 sudo mkdir -p /etc/flightsim
 if [ ! -f /etc/flightsim/boot.env ]; then
-    sudo tee /etc/flightsim/boot.env >/dev/null <<'ENV'
-# flightsim-boot.sh overrides (defaults shown; uncomment to change)
-#WS_LAN=192.168.1.50
-#WS_MAC=AA:BB:CC:DD:EE:FF
-#WS_BROADCAST=192.168.1.255
-#LINUX_SSH=user@192.168.100.1
+    sudo tee /etc/flightsim/boot.env >/dev/null <<ENV
+# flightsim-boot.sh settings (see pi/flightsim-boot.sh for the full list)
+WS_LAN=${WS_LAN}
+WS_MAC=${WS_MAC}
+WS_BROADCAST=${WS_BROADCAST}
+LINUX_SSH=${LINUX_SSH}
 # Required for the "boot into Linux" device — the token printed by
 # windows/setup.ps1 (C:\ProgramData\dualboot\boot-agent.token):
 #WIN_AGENT_TOKEN=
@@ -102,28 +114,28 @@ cat > /opt/fauxmo/config.json <<CONF
           "port": ${DEVICE_PORT},
           "on_cmd": "FLIGHT_INTENT=sim /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "pc",
           "port": 49917,
           "on_cmd": "FLIGHT_INTENT=plain /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "squadrons",
           "port": 49918,
           "on_cmd": "FLIGHT_INTENT=squadrons /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "workstation",
           "port": 49916,
           "on_cmd": "/usr/local/bin/flightsim-boot.sh linux bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9105/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9105/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
         }
       ]
     }

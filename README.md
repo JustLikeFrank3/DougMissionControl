@@ -56,16 +56,30 @@ linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeti
 
 ## One-time setup (in this order)
 
+Every address in this repo is an example — `192.168.1.50` is the
+workstation, `192.168.1.51` the Pi, `192.168.100.1` a point-to-point link
+to the workstation's Linux boot. Substitute your own throughout.
+
 1. **Windows boot** (elevated PowerShell):
-   `powershell -ExecutionPolicy Bypass -File windows\setup.ps1`
+   ```
+   powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
+       -PiHost user@192.168.1.51 -AdapterName Ethernet
+   ```
    — arms NIC WOL, disables Fast Startup, installs the JarvisGreeting
    logon task and the boot agent, prints the agent token and a BIOS +
-   auto-logon checklist.
-2. **Pi** (from either boot; set `PI_HOST` when the direct-link ssh alias
-   isn't available): `PI_HOST=user@pi-ip ./pi/setup.sh`
-   — installs fauxmo and the orchestrator, prints the Pi's public key.
-   Put the token from step 1 into `/etc/flightsim/boot.env` as
-   `WIN_AGENT_TOKEN=`.
+   auto-logon checklist. `-PiHost` is baked into the installed greeting so
+   it can read back which trigger caused the boot; a re-run without it
+   keeps the value already installed.
+2. **Pi** (from either boot):
+   ```
+   PI_HOST=user@192.168.1.51 PI_LAN_IP=192.168.1.51 \
+   WS_LAN=192.168.1.50 WS_MAC=AA:BB:CC:DD:EE:FF \
+   WS_BROADCAST=192.168.1.255 LINUX_SSH=user@192.168.100.1 ./pi/setup.sh
+   ```
+   — installs fauxmo and the orchestrator, writes those values to
+   `/etc/flightsim/boot.env`, prints the Pi's public key. Add the token
+   from step 1 to that file as `WIN_AGENT_TOKEN=`. The env file is the
+   one place to correct an address later; re-runs keep your edits.
 3. **Linux boot** (sudo, with the key from step 2):
    `sudo ./linux/setup.sh 'ssh-ed25519 AAAA… flightsim-boot@pi'`
    — GRUB_DEFAULT=saved, the `boot-to-windows` helper, the forced-command

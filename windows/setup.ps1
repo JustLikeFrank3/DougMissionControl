@@ -1,7 +1,8 @@
 # windows/setup.ps1 — one-time prep on the workstation's WINDOWS boot.
 # Run from an elevated PowerShell in the repo root:
 #
-#   powershell -ExecutionPolicy Bypass -File windows\setup.ps1
+#   powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
+#       -PiHost user@192.168.1.51 -AdapterName Ethernet
 #
 # Does:
 #   * arms Wake-on-Magic-Packet on the wired NIC (driver + OS wake grant)
@@ -9,9 +10,17 @@
 #   * installs jarvis-greeting.ps1 + boot-agent.ps1 to $dest and registers
 #     their scheduled tasks (logon / startup)
 # Then prints the manual checklist (BIOS, auto-logon).
+#
+# -PiHost is baked into the installed greeting so it can read back which
+# voice trigger caused this boot. Re-running with a different value
+# repoints it; omitting it keeps whatever the installed copy already has.
+param(
+    [string]$PiHost = '',
+    [string]$AdapterName = 'Ethernet'
+)
 
 $ErrorActionPreference = 'Stop'
-$adapterName = 'Ethernet'   # Intel I226-V, MAC AA-BB-CC-DD-EE-FF, 192.168.1.50
+$adapterName = $AdapterName
 $dest = 'C:\ProgramData\dualboot'
 # Pre-extraction home; the token is migrated from here so the Pi's copy
 # stays valid across the move.
@@ -41,8 +50,24 @@ Write-Host 'Fast Startup: off'
 
 # --- Jarvis greeting logon task -------------------------------------------
 New-Item -ItemType Directory -Force $dest | Out-Null
+# Carry forward the installed PiHost when this run didn't supply one, so a
+# plain re-run never silently reverts it to the repo's example address.
+if (-not $PiHost -and (Test-Path "$dest\jarvis-greeting.ps1")) {
+    $existing = Select-String -Path "$dest\jarvis-greeting.ps1" `
+        -Pattern "^\`$PiHost\s*=\s*'([^']+)'" | Select-Object -First 1
+    if ($existing) { $PiHost = $existing.Matches[0].Groups[1].Value }
+}
 Copy-Item "$PSScriptRoot\jarvis-greeting.ps1" $dest -Force
 Copy-Item "$PSScriptRoot\boot-agent.ps1" $dest -Force
+if ($PiHost) {
+    (Get-Content "$dest\jarvis-greeting.ps1") `
+        -replace "^\`$PiHost\s*=\s*'[^']*'", "`$PiHost = '$PiHost'" |
+        Set-Content "$dest\jarvis-greeting.ps1"
+    Write-Host "Greeting reads boot intent from: $PiHost"
+} else {
+    Write-Host 'WARNING: no -PiHost given — the greeting cannot read the boot intent,'
+    Write-Host '         so no game will launch. Re-run with -PiHost user@pi-address.'
+}
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\jarvis-greeting.ps1`""
