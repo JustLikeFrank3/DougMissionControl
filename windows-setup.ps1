@@ -73,6 +73,8 @@ $agentSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName 'FlightSimBootAgent' -Action $agentAction -Trigger $agentTrigger `
     -Principal $agentPrincipal -Settings $agentSettings -Force | Out-Null
+# Bounce so a rerun loads the freshly copied script, not the old instance.
+Stop-ScheduledTask -TaskName 'FlightSimBootAgent' -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName 'FlightSimBootAgent'
 Write-Host 'FlightSimBootAgent startup task registered and started'
 Write-Host "Boot-agent token (put in /etc/flightsim/boot.env on the Pi as WIN_AGENT_TOKEN=): $(Get-Content $tokenFile -TotalCount 1)"

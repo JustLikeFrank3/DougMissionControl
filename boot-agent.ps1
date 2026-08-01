@@ -4,6 +4,10 @@
 #
 #   GET /status                  -> 200 "windows"
 #   GET /reboot?token=<token>    -> 200 "rebooting", reboot in 5 s
+#   GET /launch?token=<token>    -> 200 "launching", runs the
+#                                   JarvisGreeting task in the logged-on
+#                                   user's session (greeting + sim when
+#                                   the recorded intent is "sim")
 #
 # Token: first line of C:\ProgramData\jobcontext\boot-agent.token (created
 # by windows-setup.ps1, mirrored into /etc/flightsim/boot.env on the Pi).
@@ -21,6 +25,7 @@ $listener.Start()
 while ($true) {
     $client = $listener.AcceptTcpClient()
     $reboot = $false
+    $launch = $false
     try {
         $stream = $client.GetStream()
         $stream.ReadTimeout = 3000
@@ -31,9 +36,11 @@ while ($true) {
         $status = '404 Not Found'; $body = 'not found'
         if ($request -match '^GET /status') {
             $status = '200 OK'; $body = 'windows'
-        } elseif ($request -match '^GET /reboot\?token=([^ ]+)') {
-            if ($token -and ($Matches[1] -ceq $token)) {
-                $status = '200 OK'; $body = 'rebooting'; $reboot = $true
+        } elseif ($request -match '^GET /(reboot|launch)\?token=([^ ]+)') {
+            if ($token -and ($Matches[2] -ceq $token)) {
+                $status = '200 OK'
+                if ($Matches[1] -eq 'reboot') { $body = 'rebooting'; $reboot = $true }
+                else { $body = 'launching'; $launch = $true }
             } else {
                 $status = '403 Forbidden'; $body = 'forbidden'
             }
@@ -48,4 +55,5 @@ while ($true) {
     } catch { } finally { $client.Close() }
 
     if ($reboot) { & shutdown /r /t 5 /f }
+    if ($launch) { Start-ScheduledTask -TaskName 'JarvisGreeting' }
 }

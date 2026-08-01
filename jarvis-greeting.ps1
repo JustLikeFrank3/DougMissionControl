@@ -7,8 +7,9 @@
 # the live GPU line), caches the mp3 for offline boots, SAPI only as the
 # last resort.
 #
-# Set $LaunchSim = $true (and pick the right AppId/URI below) to also start
-# the simulator after the greeting.
+# Whether the sim launches after the greeting is decided by the boot
+# intent recorded on the Pi ("flight sim bootup" = sim, "boot into
+# Windows" = plain); manual boots follow $SimOnManualBoot.
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -16,11 +17,22 @@ $Voice = 'en-GB-RyanNeural'   # try en-GB-ThomasNeural / en-US-GuyNeural
 $Rate  = '-5%'
 $CacheDir = Join-Path $env:ProgramData 'jobcontext\jarvis'
 
-$LaunchSim = $true
 # MSFS 2020 (Store):  explorer.exe shell:AppsFolder\Microsoft.FlightSimulator_8wekyb3d8bbwe!App
 # MSFS 2024 (Store):  explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App
 # MSFS (Steam):       Start-Process "steam://rungameid/1250410"
 $SimCommand = { explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App }
+$SimOnManualBoot = $false   # sim on power-button boots with no voice intent
+
+# Which Alexa trigger caused this boot? flightsim-boot.sh on the Pi records
+# "sim <epoch>" ("flight sim bootup") or "plain <epoch>" ("boot into
+# Windows"). Stale/absent (manual boot, Pi down) falls back to
+# $SimOnManualBoot.
+$LaunchSim = $SimOnManualBoot
+$intentRaw = & ssh -o BatchMode=yes -o ConnectTimeout=4 user@192.168.1.51 'cat /tmp/flightsim-intent 2>/dev/null'
+if ($intentRaw -match '^(sim|plain) (\d+)$') {
+    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$Matches[2]
+    if ($age -lt 1800) { $LaunchSim = ($Matches[1] -eq 'sim') }
+}
 
 # Let the audio stack finish coming up before speaking.
 Start-Sleep -Seconds 8
@@ -35,7 +47,9 @@ $gpuLine = ''
 $temp = (& nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | Select-Object -First 1)
 if ($temp) { $gpuLine = " G P U thermals at $($temp.Trim()) degrees and nominal." }
 
-$greeting = "$timeOfDay, sir. Boot sequence complete. All systems are online.$gpuLine The flight deck is ready when you are."
+$closing = if ($LaunchSim) { 'The flight deck is ready when you are.' }
+           else { 'Ready when you are.' }
+$greeting = "$timeOfDay, sir. Boot sequence complete. All systems are online.$gpuLine $closing"
 
 New-Item -ItemType Directory -Force $CacheDir | Out-Null
 $cached = Join-Path $CacheDir 'greeting.mp3'

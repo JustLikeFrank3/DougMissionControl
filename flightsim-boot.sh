@@ -38,6 +38,11 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/flightsim_ed25519}"
 WIN_AGENT_PORT="${WIN_AGENT_PORT:-9107}"
 WIN_AGENT_TOKEN="${WIN_AGENT_TOKEN:-}"     # set in boot.env; see boot-agent.ps1
 POLL_SECS="${POLL_SECS:-300}"              # give WOL + a chained double boot time
+# Why this Windows boot was requested: "sim" (flight deck: greeting +
+# MSFS) or "plain" (greeting only). Set per fauxmo device via env, read
+# back by jarvis-greeting.ps1 over ssh at logon.
+FLIGHT_INTENT="${FLIGHT_INTENT:-sim}"
+INTENT_FILE=/tmp/flightsim-intent
 
 TARGET=windows
 case "${1:-}" in windows|linux) TARGET="$1"; shift ;; esac
@@ -96,8 +101,19 @@ fi
 
 log "trigger received — probing workstation state"
 
+# Record the intent for the Windows logon greeting to read (sim vs plain).
+[ "$TARGET" = windows ] && echo "$FLIGHT_INTENT $(date +%s)" > "$INTENT_FILE"
+
 if target_up; then
-    log "$TARGET already up — nothing to do"
+    if [ "$TARGET" = windows ] && [ "$FLIGHT_INTENT" = sim ] && [ -n "$WIN_AGENT_TOKEN" ]; then
+        # Already in Windows but the flight deck was asked for — fire the
+        # greeting + sim launch remotely instead of doing nothing.
+        log "windows already up — launching flight deck via boot-agent"
+        curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/launch?token=${WIN_AGENT_TOKEN}" >/dev/null \
+            || log "WARN: launch request failed"
+    else
+        log "$TARGET already up — nothing to do"
+    fi
     exit 0
 fi
 
