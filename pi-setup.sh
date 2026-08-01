@@ -27,6 +27,8 @@ scp -q "${ROOT}/flightsim/flightsim-boot.sh" "${PI}:/tmp/flightsim-boot.sh"
 ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='${DEVICE_PORT}' bash -s" <<'REMOTE'
 set -euo pipefail
 
+# A Windows checkout may ship CRLF — a CR after the shebang breaks exec.
+sed -i 's/\r$//' /tmp/flightsim-boot.sh
 sudo install -m 755 /tmp/flightsim-boot.sh /usr/local/bin/flightsim-boot.sh
 rm /tmp/flightsim-boot.sh
 
@@ -40,6 +42,10 @@ if [ ! -f /etc/flightsim/boot.env ]; then
 #WS_MAC=AA:BB:CC:DD:EE:FF
 #WS_BROADCAST=192.168.1.255
 #LINUX_SSH=user@192.168.100.1
+# Required for the "boot into Linux" device — the token printed by
+# windows-setup.ps1 (C:\ProgramData\jobcontext\boot-agent.token):
+#WIN_AGENT_TOKEN=
+#WIN_AGENT_PORT=9107
 ENV
 fi
 
@@ -94,9 +100,16 @@ cat > /opt/fauxmo/config.json <<CONF
         {
           "name": "${DEVICE_NAME}",
           "port": ${DEVICE_PORT},
-          "on_cmd": "/usr/local/bin/flightsim-boot.sh bg",
+          "on_cmd": "/usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
           "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null"
+        },
+        {
+          "name": "workstation",
+          "port": 49916,
+          "on_cmd": "/usr/local/bin/flightsim-boot.sh linux bg",
+          "off_cmd": "true",
+          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9105/ >/dev/null"
         }
       ]
     }
@@ -123,7 +136,8 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now fauxmo.service
+sudo systemctl enable fauxmo.service
+sudo systemctl restart fauxmo.service
 sleep 2
 systemctl is-active fauxmo.service
 

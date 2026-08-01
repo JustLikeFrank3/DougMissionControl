@@ -1,17 +1,23 @@
 #!/bin/bash
-# flightsim-boot.sh — bring the dual-boot workstation up in Windows from
-# whatever state it is in. Runs ON THE PI (installed to /usr/local/bin by
-# scripts/flightsim/pi-setup.sh), fired by the fauxmo "flight sim" device
-# when the Alexa routine turns it on.
+# flightsim-boot.sh — bring the dual-boot workstation up in a requested OS
+# from whatever state it is in. Runs ON THE PI (installed to
+# /usr/local/bin by scripts/flightsim/pi-setup.sh), fired by the fauxmo
+# devices when an Alexa routine turns one on:
+#
+#   flightsim-boot.sh [windows|linux] [bg|run]     (default: windows)
 #
 # State detection reuses the wallboard's exporters (only one OS runs at a
 # time — see k8s/monitoring/pi/prometheus-pi.yaml):
-#   :9106 answers  -> Windows is up (gpu-exporter.ps1)   -> nothing to do
-#   :9105 answers  -> Linux is up (ollama-exporter.py)   -> ssh the
-#                     forced-command key: grub-reboot Windows + reboot
-#   no ping        -> powered off -> WOL magic packet; if GRUB's default
-#                     lands it in Linux, the poll loop chains through the
-#                     ssh path once :9105 appears
+#   :9106 answers -> Windows is up (gpu-exporter.ps1)
+#   :9105 answers -> Linux is up (ollama-exporter.py)
+#
+# target windows: Linux up -> ssh forced-command key (grub-reboot + reboot);
+#   off -> WOL, chaining through the ssh path if GRUB lands in Linux.
+# target linux: Windows up -> token-guarded boot-agent on :9107 reboots it
+#   (GRUB saved default IS Linux, so a plain reboot lands there); off ->
+#   WOL boots straight to the Linux default. NOTE: this leg assumes the
+#   saved default is Linux — if you flip the default to Windows for faster
+#   cold sim starts, the linux target's Windows-up leg cannot work.
 #
 # "bg" arg: re-exec detached so fauxmo's on() returns immediately.
 set -u
@@ -29,17 +35,22 @@ LINUX_PORT="${LINUX_PORT:-9105}"
 # only when :9105 says Linux is up, so it is always valid when used.
 LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/flightsim_ed25519}"
+WIN_AGENT_PORT="${WIN_AGENT_PORT:-9107}"
+WIN_AGENT_TOKEN="${WIN_AGENT_TOKEN:-}"     # set in boot.env; see boot-agent.ps1
 POLL_SECS="${POLL_SECS:-300}"              # give WOL + a chained double boot time
 
-log() { logger -t flightsim-boot -- "$*"; echo "$(date '+%H:%M:%S') $*"; }
+TARGET=windows
+case "${1:-}" in windows|linux) TARGET="$1"; shift ;; esac
+
+log() { logger -t flightsim-boot -- "[$TARGET] $*"; echo "$(date '+%H:%M:%S') [$TARGET] $*"; }
 
 if [ "${1:-}" = "bg" ]; then
-    nohup "$0" run >>"$HOME/flightsim-boot.log" 2>&1 &
+    nohup "$0" "$TARGET" run >>"$HOME/flightsim-boot.log" 2>&1 &
     exit 0
 fi
 
-# One run at a time — a second "Alexa, flight sim bootup" while a boot is
-# in flight must not fire a second WOL/ssh volley.
+# One run at a time — a second trigger while a boot is in flight must not
+# fire a second WOL/reboot volley.
 exec 9>/tmp/flightsim-boot.lock
 flock -n 9 || { log "already running — ignoring duplicate trigger"; exit 0; }
 
@@ -66,17 +77,34 @@ boot_to_windows() {
         -o StrictHostKeyChecking=accept-new "$LINUX_SSH" boot
 }
 
+boot_to_linux() {
+    # Windows boot-agent (scripts/flightsim/boot-agent.ps1): plain reboot,
+    # which lands in the GRUB saved default = Linux.
+    [ -n "$WIN_AGENT_TOKEN" ] || { log "WARN: WIN_AGENT_TOKEN unset in $CONF"; return 1; }
+    curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/reboot?token=${WIN_AGENT_TOKEN}" >/dev/null
+}
+
+if [ "$TARGET" = windows ]; then
+    target_up() { win_up; }
+    other_up()  { linux_up; }
+    kick()      { boot_to_windows; }
+else
+    target_up() { linux_up; }
+    other_up()  { win_up; }
+    kick()      { boot_to_linux; }
+fi
+
 log "trigger received — probing workstation state"
 
-if win_up; then
-    log "Windows already up — nothing to do"
+if target_up; then
+    log "$TARGET already up — nothing to do"
     exit 0
 fi
 
-ssh_done=0
-if linux_up; then
-    log "Linux is up — requesting grub-reboot into Windows"
-    if boot_to_windows; then ssh_done=1; else log "WARN: ssh reboot request failed"; fi
+kicked=0
+if other_up; then
+    log "other OS is up — requesting reboot into $TARGET"
+    if kick; then kicked=1; else log "WARN: reboot request failed"; fi
 elif pingable; then
     log "host answers ping but no exporter yet (mid-boot?) — watching"
 else
@@ -87,16 +115,16 @@ fi
 deadline=$(( $(date +%s) + POLL_SECS ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 10
-    if win_up; then
-        log "Windows is up — flight deck online"
+    if target_up; then
+        log "$TARGET is up — deck online"
         exit 0
     fi
-    if [ "$ssh_done" -eq 0 ] && linux_up; then
-        # Cold boot landed in Linux (GRUB default) — chain through.
-        log "Linux came up after WOL — requesting grub-reboot into Windows"
-        if boot_to_windows; then ssh_done=1; else log "WARN: ssh reboot request failed"; fi
+    if [ "$kicked" -eq 0 ] && other_up; then
+        # Cold boot landed in the other OS — chain through.
+        log "other OS came up after WOL — requesting reboot into $TARGET"
+        if kick; then kicked=1; else log "WARN: reboot request failed"; fi
     fi
 done
 
-log "gave up after ${POLL_SECS}s — machine not in Windows (check BIOS WOL / logon task)"
+log "gave up after ${POLL_SECS}s — machine not in $TARGET (check BIOS WOL / logon task)"
 exit 1

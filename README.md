@@ -26,6 +26,19 @@ wallboard already uses to tell which OS is booted.
         which also flips the wallboard to the gaming playlist.
 ```
 
+## The reverse direction: "Alexa, workstation bootup" → Linux
+
+A second fauxmo device, **workstation** (port 49916), boots the machine
+into Linux the same way: Linux up → no-op; powered off → WOL (GRUB's
+saved default already boots Linux); Windows up → the Pi calls the
+token-guarded **boot-agent** (boot-agent.ps1, :9107, SYSTEM startup task)
+which plain-reboots Windows into the GRUB default. At Linux logon an
+autostart entry speaks a boot confirmation (same neural voice) and opens
+VS Code. Alexa routine: phrase "workstation bootup" → Alexa Speaks → turn
+on **workstation**. Caveat: if you ever flip the GRUB saved default to
+Windows for faster cold sim starts, the Windows→Linux leg stops working
+(a plain reboot would land back in Windows).
+
 ## One-time setup (in this order)
 
 1. **Windows boot** (elevated PowerShell):

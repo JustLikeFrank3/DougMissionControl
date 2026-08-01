@@ -40,6 +40,7 @@ Write-Host 'Fast Startup: off'
 # --- Jarvis greeting logon task -------------------------------------------
 New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item "$PSScriptRoot\jarvis-greeting.ps1" $dest -Force
+Copy-Item "$PSScriptRoot\boot-agent.ps1" $dest -Force
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\jarvis-greeting.ps1`""
@@ -49,6 +50,30 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
 Register-ScheduledTask -TaskName 'JarvisGreeting' -Action $action -Trigger $trigger `
     -Settings $settings -Force | Out-Null
 Write-Host 'JarvisGreeting logon task registered'
+
+# --- Boot agent (Pi-triggered reboot into Linux) --------------------------
+# Runs as SYSTEM at startup so the Pi can reboot Windows into the GRUB
+# default (Linux) even before anyone logs on. Token-guarded; the same
+# token goes into /etc/flightsim/boot.env on the Pi.
+$tokenFile = "$dest\boot-agent.token"
+if (-not (Test-Path $tokenFile)) {
+    [guid]::NewGuid().ToString('N') | Set-Content $tokenFile -Encoding ascii
+}
+if (-not (Get-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -Direction Inbound `
+        -Protocol TCP -LocalPort 9107 -Action Allow -Profile Private | Out-Null
+}
+$agentAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\boot-agent.ps1`""
+$agentTrigger = New-ScheduledTaskTrigger -AtStartup
+$agentPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$agentSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'FlightSimBootAgent' -Action $agentAction -Trigger $agentTrigger `
+    -Principal $agentPrincipal -Settings $agentSettings -Force | Out-Null
+Start-ScheduledTask -TaskName 'FlightSimBootAgent'
+Write-Host 'FlightSimBootAgent startup task registered and started'
+Write-Host "Boot-agent token (put in /etc/flightsim/boot.env on the Pi as WIN_AGENT_TOKEN=): $(Get-Content $tokenFile -TotalCount 1)"
 
 Write-Host @'
 

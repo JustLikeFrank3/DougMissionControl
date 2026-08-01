@@ -13,6 +13,8 @@
 #   * authorized_keys entry for the Pi key, command=-forced to that script
 #   * WOL persistence: ethtool wol g on the wired NIC at boot (the Linux
 #     driver otherwise disarms WOL, breaking wake-after-Linux-shutdown)
+#   * logon autostart: spoken boot confirmation (neural TTS with espeak
+#     fallback) + VS Code — the Linux mirror of jarvis-greeting.ps1
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
@@ -92,6 +94,51 @@ else
     echo "WARN: no interface with MAC $WS_MAC found — arm WOL manually (ethtool -s <iface> wol g)"
 fi
 
+# --- Logon greeting + VS Code (mirror of the Windows JarvisGreeting) -------
+apt-get install -y -qq mpg123 espeak-ng >/dev/null 2>&1 || true
+sudo -u "$REAL_USER" python3 -m pip install --user --quiet --break-system-packages edge-tts 2>/dev/null || true
+
+cat > /usr/local/bin/workstation-greeting <<'EOF'
+#!/bin/bash
+# Installed by scripts/flightsim/linux-setup.sh — spoken boot confirmation
+# + VS Code at Linux logon. Neural voice via edge-tts when network/pip
+# allow, espeak-ng as the offline fallback.
+sleep 6
+temp=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1)
+hour=$(date +%H)
+if   [ "$hour" -lt 12 ]; then tod="Good morning"
+elif [ "$hour" -lt 18 ]; then tod="Good afternoon"
+else tod="Good evening"; fi
+msg="$tod, sir. Linux workstation online. All services nominal.${temp:+ G P U thermals at ${temp} degrees.} Development environment ready."
+
+spoken=0
+if python3 -m edge_tts --voice en-GB-RyanNeural --rate=-5% \
+        --text "$msg" --write-media /tmp/ws-greeting.mp3 2>/dev/null \
+        && [ -s /tmp/ws-greeting.mp3 ] && command -v mpg123 >/dev/null; then
+    mpg123 -q /tmp/ws-greeting.mp3 && spoken=1
+fi
+[ "$spoken" -eq 0 ] && command -v espeak-ng >/dev/null && espeak-ng -v en-gb "$msg"
+
+command -v code >/dev/null && (code >/dev/null 2>&1 &)
+exit 0
+EOF
+chmod 755 /usr/local/bin/workstation-greeting
+
+install -d -m 755 -o "$REAL_USER" -g "$REAL_USER" "$REAL_HOME/.config/autostart"
+cat > "$REAL_HOME/.config/autostart/flightsim-greeting.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Workstation Greeting
+Exec=/usr/local/bin/workstation-greeting
+X-GNOME-Autostart-enabled=true
+EOF
+chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.config/autostart/flightsim-greeting.desktop"
+
 echo
 echo "Done. Test from the Pi:  ssh -i ~/.ssh/flightsim_ed25519 $REAL_USER@192.168.100.1 boot"
 echo "(that reboots this machine into Windows immediately)"
+echo
+echo "For a fully hands-free Linux boot (greeting + VS Code without touching"
+echo "the keyboard), enable desktop auto-login for $REAL_USER in your display"
+echo "manager (GNOME: /etc/gdm3/custom.conf -> AutomaticLoginEnable=true,"
+echo "AutomaticLogin=$REAL_USER; or Settings > Users > Automatic Login)."
