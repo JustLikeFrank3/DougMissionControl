@@ -60,8 +60,10 @@ if (-not (Test-Path $tokenFile)) {
     [guid]::NewGuid().ToString('N') | Set-Content $tokenFile -Encoding ascii
 }
 if (-not (Get-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -ErrorAction SilentlyContinue)) {
+    # Profile Any: this LAN shows as Public in Windows' eyes, and the
+    # agent is token-guarded — a Private-only rule silently blocked the Pi.
     New-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -Direction Inbound `
-        -Protocol TCP -LocalPort 9107 -Action Allow -Profile Private | Out-Null
+        -Protocol TCP -LocalPort 9107 -Action Allow -Profile Any | Out-Null
 }
 $agentAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\boot-agent.ps1`""
