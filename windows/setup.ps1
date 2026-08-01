@@ -12,7 +12,7 @@
 
 $ErrorActionPreference = 'Stop'
 $adapterName = 'Ethernet'   # Intel I226-V, MAC AA-BB-CC-DD-EE-FF, 192.168.1.50
-$dest = 'C:\ProgramData\jarvis-boot'
+$dest = 'C:\ProgramData\dualboot'
 # Pre-extraction home; the token is migrated from here so the Pi's copy
 # stays valid across the move.
 $legacyDest = 'C:\ProgramData\jobcontext'

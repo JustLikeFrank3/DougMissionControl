@@ -52,7 +52,7 @@ fi
 
 cat > /usr/local/bin/boot-to-windows <<EOF
 #!/bin/bash
-# Installed by jarvis-boot's linux/setup.sh — one-shot reboot into
+# Installed by this project's linux/setup.sh — one-shot reboot into
 # Windows, invoked by the Pi's forced-command ssh key.
 set -e
 grub-reboot "$WIN_ENTRY"
@@ -100,7 +100,7 @@ sudo -u "$REAL_USER" python3 -m pip install --user --quiet --break-system-packag
 
 cat > /usr/local/bin/workstation-greeting <<'EOF'
 #!/bin/bash
-# Installed by jarvis-boot's linux/setup.sh — spoken boot confirmation
+# Installed by this project's linux/setup.sh — spoken boot confirmation
 # + VS Code at Linux logon. Neural voice via edge-tts when network/pip
 # allow, espeak-ng as the offline fallback.
 sleep 6

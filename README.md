@@ -1,4 +1,4 @@
-# jarvis-boot
+# dualbootautomationproject
 
 Voice-controlled boot orchestration for a dual-boot workstation. Say
 *"Alexa, flight sim bootup"* and the machine wakes from off, or reboots
@@ -97,7 +97,7 @@ Most values live in `/etc/flightsim/boot.env` on the Pi (created by
 | `WS_MAC` | that NIC's MAC, the WOL target |
 | `WS_BROADCAST` | subnet broadcast address for the magic packet |
 | `LINUX_SSH` | user@host for the Linux boot (a direct-link IP is fine) |
-| `WIN_AGENT_TOKEN` | must match `C:\ProgramData\jarvis-boot\boot-agent.token` |
+| `WIN_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\boot-agent.token` |
 | `POLL_SECS` | how long to keep watching a boot (default 300) |
 
 Hardcoded elsewhere and worth knowing about: the Pi's address in
@@ -116,7 +116,7 @@ redeploy both sides, re-run Alexa discovery, and add a routine.
 The orchestrator probes two Prometheus exporters that belong to a
 separate project (a Grafana wallboard): `:9105` answering means Linux,
 `:9106` means Windows. This repo does not install them — if you run
-jarvis-boot without that stack, repoint `WIN_PORT`/`LINUX_PORT` at
+this without that stack, repoint `WIN_PORT`/`LINUX_PORT` at
 anything that answers HTTP only under the OS in question. The boot
 agent's own `:9107/status` is a natural Windows-up signal and is more
 reliable than the exporter (which has died on its own more than once).

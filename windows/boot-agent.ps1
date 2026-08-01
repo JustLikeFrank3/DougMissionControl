@@ -9,7 +9,7 @@
 #                                   user's session (greeting + sim when
 #                                   the recorded intent is "sim")
 #
-# Token: first line of C:\ProgramData\jarvis-boot\boot-agent.token
+# Token: first line of C:\ProgramData\dualboot\boot-agent.token
 # (created by windows/setup.ps1, mirrored into /etc/flightsim/boot.env on
 # the Pi). Raw TcpListener rather than HttpListener: the latter needs a
 # urlacl reservation for non-localhost prefixes, a hand-rolled HTTP/1.1
@@ -17,7 +17,7 @@
 # task) so a reboot works even before anyone logs on.
 
 $ErrorActionPreference = 'SilentlyContinue'
-$token = (Get-Content 'C:\ProgramData\jarvis-boot\boot-agent.token' -TotalCount 1)
+$token = (Get-Content 'C:\ProgramData\dualboot\boot-agent.token' -TotalCount 1)
 if ($token) { $token = $token.Trim() }
 
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 9107)

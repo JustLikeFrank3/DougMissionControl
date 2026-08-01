@@ -1,5 +1,5 @@
 # jarvis-greeting.ps1 — spoken Jarvis-style welcome at Windows logon.
-# Installed to C:\ProgramData\jarvis-boot\ by windows/setup.ps1 and
+# Installed to C:\ProgramData\dualboot\ by windows/setup.ps1 and
 # registered as the JarvisGreeting logon task.
 #
 # Voice: Microsoft neural TTS via edge-tts (pip install edge-tts) — the
@@ -15,7 +15,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $Voice = 'en-GB-RyanNeural'   # try en-GB-ThomasNeural / en-US-GuyNeural
 $Rate  = '-5%'
-$CacheDir = Join-Path $env:ProgramData 'jarvis-boot\jarvis'
+$CacheDir = Join-Path $env:ProgramData 'dualboot\jarvis'
 $PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 
 # Launch profiles, keyed by the boot intent each fauxmo device records on

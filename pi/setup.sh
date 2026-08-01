@@ -43,7 +43,7 @@ if [ ! -f /etc/flightsim/boot.env ]; then
 #WS_BROADCAST=192.168.1.255
 #LINUX_SSH=user@192.168.100.1
 # Required for the "boot into Linux" device — the token printed by
-# windows/setup.ps1 (C:\ProgramData\jarvis-boot\boot-agent.token):
+# windows/setup.ps1 (C:\ProgramData\dualboot\boot-agent.token):
 #WIN_AGENT_TOKEN=
 #WIN_AGENT_PORT=9107
 ENV
