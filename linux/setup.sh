@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# linux-setup.sh — one-time prep on the workstation's LINUX boot so the Pi
+# linux/setup.sh — one-time prep on the workstation's LINUX boot so the Pi
 # can steer the next boot into Windows. Run with sudo, passing the Pi's
-# public key (printed by pi-setup.sh):
+# public key (printed by pi/setup.sh):
 #
-#   sudo ./scripts/flightsim/linux-setup.sh 'ssh-ed25519 AAAA... flightsim-boot@pi'
+#   sudo ./linux/setup.sh 'ssh-ed25519 AAAA... flightsim-boot@pi'
 #
 # Installs:
 #   * GRUB_DEFAULT=saved (grub-reboot needs it; saved default is pinned to
@@ -52,7 +52,7 @@ fi
 
 cat > /usr/local/bin/boot-to-windows <<EOF
 #!/bin/bash
-# Installed by scripts/flightsim/linux-setup.sh — one-shot reboot into
+# Installed by jarvis-boot's linux/setup.sh — one-shot reboot into
 # Windows, invoked by the Pi's forced-command ssh key.
 set -e
 grub-reboot "$WIN_ENTRY"
@@ -100,7 +100,7 @@ sudo -u "$REAL_USER" python3 -m pip install --user --quiet --break-system-packag
 
 cat > /usr/local/bin/workstation-greeting <<'EOF'
 #!/bin/bash
-# Installed by scripts/flightsim/linux-setup.sh — spoken boot confirmation
+# Installed by jarvis-boot's linux/setup.sh — spoken boot confirmation
 # + VS Code at Linux logon. Neural voice via edge-tts when network/pip
 # allow, espeak-ng as the offline fallback.
 sleep 6

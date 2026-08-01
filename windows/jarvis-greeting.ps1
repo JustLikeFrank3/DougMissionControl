@@ -1,21 +1,22 @@
 # jarvis-greeting.ps1 — spoken Jarvis-style welcome at Windows logon.
-# Installed to C:\ProgramData\jobcontext\ by windows-setup.ps1 alongside
-# gpu-exporter.ps1, registered as the JarvisGreeting logon task.
+# Installed to C:\ProgramData\jarvis-boot\ by windows/setup.ps1 and
+# registered as the JarvisGreeting logon task.
 #
 # Voice: Microsoft neural TTS via edge-tts (pip install edge-tts) — the
 # built-in SAPI voices are unlistenable. Renders fresh each logon (keeps
 # the live GPU line), caches the mp3 for offline boots, SAPI only as the
 # last resort.
 #
-# Whether the sim launches after the greeting is decided by the boot
-# intent recorded on the Pi ("flight sim bootup" = sim, "boot into
-# Windows" = plain); manual boots follow $SimOnManualBoot.
+# What launches after the greeting is decided by the boot intent recorded
+# on the Pi by whichever voice trigger fired; manual boots follow
+# $ManualBootProfile.
 
 $ErrorActionPreference = 'SilentlyContinue'
 
 $Voice = 'en-GB-RyanNeural'   # try en-GB-ThomasNeural / en-US-GuyNeural
 $Rate  = '-5%'
-$CacheDir = Join-Path $env:ProgramData 'jobcontext\jarvis'
+$CacheDir = Join-Path $env:ProgramData 'jarvis-boot\jarvis'
+$PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 
 # Launch profiles, keyed by the boot intent each fauxmo device records on
 # the Pi. "plain" (or anything unknown) greets without launching.
@@ -36,7 +37,7 @@ $ManualBootProfile = ''   # profile for power-button boots with no voice intent 
 # records "<intent> <epoch>". Stale/absent (manual boot, Pi down) falls
 # back to $ManualBootProfile.
 $bootProfile = $ManualBootProfile
-$intentRaw = & ssh -o BatchMode=yes -o ConnectTimeout=4 user@192.168.1.51 'cat /tmp/flightsim-intent 2>/dev/null'
+$intentRaw = & ssh -o BatchMode=yes -o ConnectTimeout=4 $PiHost 'cat /tmp/flightsim-intent 2>/dev/null'
 if ($intentRaw -match '^(\w+) (\d+)$') {
     $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$Matches[2]
     if ($age -lt 1800) { $bootProfile = $Matches[1] }

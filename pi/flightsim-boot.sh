@@ -1,15 +1,18 @@
 #!/bin/bash
 # flightsim-boot.sh — bring the dual-boot workstation up in a requested OS
 # from whatever state it is in. Runs ON THE PI (installed to
-# /usr/local/bin by scripts/flightsim/pi-setup.sh), fired by the fauxmo
-# devices when an Alexa routine turns one on:
+# /usr/local/bin by pi/setup.sh), fired by the fauxmo devices when an
+# Alexa routine turns one on:
 #
 #   flightsim-boot.sh [windows|linux] [bg|run]     (default: windows)
 #
-# State detection reuses the wallboard's exporters (only one OS runs at a
-# time — see k8s/monitoring/pi/prometheus-pi.yaml):
-#   :9106 answers -> Windows is up (gpu-exporter.ps1)
-#   :9105 answers -> Linux is up (ollama-exporter.py)
+# State detection borrows two Prometheus exporters that a separate
+# project (a Grafana wallboard) installs on the workstation — only one OS
+# runs at a time, so exactly one of them answers:
+#   :9106 answers -> Windows is up (that project's gpu-exporter.ps1)
+#   :9105 answers -> Linux is up (its ollama-exporter.py)
+# Without that stack, point WIN_PORT/LINUX_PORT at anything that answers
+# HTTP under one OS only — e.g. the boot agent's own :9107/status.
 #
 # target windows: Linux up -> ssh forced-command key (grub-reboot + reboot);
 #   off -> WOL, chaining through the ssh path if GRUB lands in Linux.
@@ -83,7 +86,7 @@ boot_to_windows() {
 }
 
 boot_to_linux() {
-    # Windows boot-agent (scripts/flightsim/boot-agent.ps1): plain reboot,
+    # Windows boot-agent (windows/boot-agent.ps1): plain reboot,
     # which lands in the GRUB saved default = Linux.
     [ -n "$WIN_AGENT_TOKEN" ] || { log "WARN: WIN_AGENT_TOKEN unset in $CONF"; return 1; }
     curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/reboot?token=${WIN_AGENT_TOKEN}" >/dev/null

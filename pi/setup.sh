@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# pi-setup.sh — install the "flight sim bootup" trigger stack on the Pi:
-#   * fauxmo (Wemo emulator) in a venv at /opt/fauxmo, exposing a virtual
-#     smart device named "flight sim" that the Echo discovers on the LAN
+# pi/setup.sh — install the voice-trigger stack on the Pi:
+#   * fauxmo (Wemo emulator) in a venv at /opt/fauxmo, exposing the
+#     virtual smart devices the Echo discovers on the LAN
 #   * a minimal command plugin (fauxmo v3 ships no CommandLinePlugin —
 #     writing our own ~20 lines beats vendoring fauxmo-plugins)
 #   * flightsim-boot.sh -> /usr/local/bin (the orchestrator fauxmo fires)
 #   * /etc/flightsim/boot.env with the workstation's addresses
 #   * a dedicated ssh keypair the workstation's Linux boot will trust with
-#     a forced command (see linux-setup.sh) — printed at the end
+#     a forced command (see linux/setup.sh) — printed at the end
 #
-# Run from the workstation (either boot), same conventions as pi-deploy.sh:
-#   ./scripts/flightsim/pi-setup.sh
-#   PI_HOST=user@192.168.1.51 ./scripts/flightsim/pi-setup.sh   # from Windows
+# Run from the workstation (either boot):
+#   ./pi/setup.sh
+#   PI_HOST=user@192.168.1.51 ./pi/setup.sh   # from Windows
 set -euo pipefail
 
 PI="${PI_HOST:-pi-node1}"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The fauxmo device must answer on the LAN the Echo lives on, not the
 # direct link.
 PI_LAN_IP="${PI_LAN_IP:-192.168.1.51}"
 DEVICE_NAME="${DEVICE_NAME:-flight sim}"
 DEVICE_PORT=49915
 
-scp -q "${ROOT}/flightsim/flightsim-boot.sh" "${PI}:/tmp/flightsim-boot.sh"
+scp -q "${HERE}/flightsim-boot.sh" "${PI}:/tmp/flightsim-boot.sh"
 
 ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='${DEVICE_PORT}' bash -s" <<'REMOTE'
 set -euo pipefail
@@ -43,7 +43,7 @@ if [ ! -f /etc/flightsim/boot.env ]; then
 #WS_BROADCAST=192.168.1.255
 #LINUX_SSH=user@192.168.100.1
 # Required for the "boot into Linux" device — the token printed by
-# windows-setup.ps1 (C:\ProgramData\jobcontext\boot-agent.token):
+# windows/setup.ps1 (C:\ProgramData\jarvis-boot\boot-agent.token):
 #WIN_AGENT_TOKEN=
 #WIN_AGENT_PORT=9107
 ENV
@@ -162,6 +162,6 @@ REMOTE
 
 echo
 echo "Next:"
-echo "  1. On the workstation's Linux boot:  sudo ./scripts/flightsim/linux-setup.sh '<pubkey printed above>'"
+echo "  1. On the workstation's Linux boot:  sudo ./linux/setup.sh '<pubkey printed above>'"
 echo "  2. Say: \"Alexa, discover devices\"  (finds '${DEVICE_NAME}')"
 echo "  3. Alexa app -> Routines -> phrase \"flight sim bootup\" -> Alexa Speaks + turn on '${DEVICE_NAME}'"

@@ -1,121 +1,190 @@
-# Flight sim bootup — "Alexa, flight sim bootup"
+# jarvis-boot
 
-Voice-triggered boot of the dual-boot workstation into Windows, from any
-state, with a Jarvis-style welcome. Rides the same plumbing the Pi
-wallboard already uses to tell which OS is booted.
+Voice-controlled boot orchestration for a dual-boot workstation. Say
+*"Alexa, flight sim bootup"* and the machine wakes from off, or reboots
+out of Linux, lands in Windows, greets you in a neural British voice, and
+launches the sim — no keyboard.
+
+The Alexa side needs no cloud account, no skill, and no subscription: a
+Raspberry Pi pretends to be a handful of Wemo smart plugs, and Alexa
+routines "turn them on."
 
 ```
 "Alexa, flight sim bootup"
         │
         ├─ Alexa Speaks (routine): "Right away, sir. Bringing the flight deck online."
         └─ turns on virtual device "flight sim"
-                │  (fauxmo Wemo emulator on the Pi, 192.168.1.51)
+                │  (fauxmo Wemo emulator on the Pi)
                 ▼
-        flightsim-boot.sh on the Pi probes the workstation (192.168.1.50):
+        flightsim-boot.sh on the Pi probes the workstation:
                 │
-                ├─ :9106 answers (gpu-exporter)    → Windows already up. Done.
-                ├─ :9105 answers (ollama-exporter) → ssh forced-command key →
-                │                                    grub-reboot "Windows…" + reboot
-                └─ no ping                         → WOL magic packet to
-                                                     AA-BB-CC-DD-EE-FF; if GRUB
-                                                     default boots Linux first,
-                                                     chains through the ssh path
+                ├─ Windows up   → fire greeting + launch via boot-agent /launch
+                ├─ Linux up     → ssh forced-command key → grub-reboot + reboot
+                └─ no answer    → WOL magic packet; if GRUB lands in Linux,
+                                  chains through the ssh path
                 ▼
-        Windows logs on → JarvisGreeting task speaks the welcome
-        (+ optionally launches MSFS) and gpu-exporter comes up on :9106,
-        which also flips the wallboard to the gaming playlist.
+        Windows logs on → JarvisGreeting task reads the recorded intent,
+        speaks the welcome, launches the matching game.
 ```
 
-## Plain Windows boot: "Alexa, boot into Windows"
+## The voice commands
 
-A third device, **pc** (port 49917), boots Windows with the greeting but
-WITHOUT launching anything. How: each Windows trigger records its intent
-on the Pi (`/tmp/flightsim-intent`: `<intent> <epoch>`);
-jarvis-greeting.ps1 reads it back over ssh at logon and launches the
-matching entry in its `$LaunchProfiles` table (`sim` → MSFS 2024,
-`squadrons` → STAR WARS Squadrons via the **squadrons** device on
-port 49918; `plain`/unknown → greeting only). Manual power-button boots
-follow `$ManualBootProfile` (default: none). Any non-plain intent while
-Windows is already up fires the greeting + launch remotely via the
-boot-agent's `/launch` endpoint instead of no-opping. To add a game:
-new device in pi-setup.sh with `FLIGHT_INTENT=<key>`, matching entry in
-`$LaunchProfiles`, redeploy both sides, re-discover, new routine.
+| Phrase (yours to choose) | Virtual device | Port | Result |
+|---|---|---|---|
+| "flight sim bootup" | flight sim | 49915 | Windows + MSFS 2024 |
+| "boot into Windows" | pc | 49917 | Windows, greeting only |
+| "squadron bootup" | squadrons | 49918 | Windows + STAR WARS Squadrons |
+| "workstation bootup" | workstation | 49916 | Linux + VS Code |
 
-## The reverse direction: "Alexa, workstation bootup" → Linux
+Each Windows device records *why* it booted (`FLIGHT_INTENT`) to
+`/tmp/flightsim-intent` on the Pi. At logon, `jarvis-greeting.ps1` reads
+that back over ssh and runs the matching entry in its `$LaunchProfiles`
+table — so one greeting script serves every launch profile, and a
+power-button boot (no intent recorded, or one older than 30 minutes)
+launches nothing.
 
-A second fauxmo device, **workstation** (port 49916), boots the machine
-into Linux the same way: Linux up → no-op; powered off → WOL (GRUB's
-saved default already boots Linux); Windows up → the Pi calls the
-token-guarded **boot-agent** (boot-agent.ps1, :9107, SYSTEM startup task)
-which plain-reboots Windows into the GRUB default. At Linux logon an
-autostart entry speaks a boot confirmation (same neural voice) and opens
-VS Code. Alexa routine: phrase "workstation bootup" → Alexa Speaks → turn
-on **workstation**. Caveat: if you ever flip the GRUB saved default to
-Windows for faster cold sim starts, the Windows→Linux leg stops working
-(a plain reboot would land back in Windows).
+## Layout
+
+```
+pi/setup.sh              installs fauxmo + the orchestrator on the Pi, mints the ssh key
+pi/flightsim-boot.sh     the orchestrator itself (→ /usr/local/bin on the Pi)
+windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, token
+windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
+windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
+linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting
+```
 
 ## One-time setup (in this order)
 
 1. **Windows boot** (elevated PowerShell):
-   `powershell -ExecutionPolicy Bypass -File scripts\flightsim\windows-setup.ps1`
-   — arms NIC WOL, keeps Fast Startup off, installs the JarvisGreeting
-   logon task. Then do the printed BIOS + auto-logon checklist.
-2. **Pi** (from either boot; `PI_HOST=user@192.168.1.51` from Windows):
-   `./scripts/flightsim/pi-setup.sh`
-   — installs fauxmo + the boot orchestrator, prints the Pi's public key.
+   `powershell -ExecutionPolicy Bypass -File windows\setup.ps1`
+   — arms NIC WOL, disables Fast Startup, installs the JarvisGreeting
+   logon task and the boot agent, prints the agent token and a BIOS +
+   auto-logon checklist.
+2. **Pi** (from either boot; set `PI_HOST` when the direct-link ssh alias
+   isn't available): `PI_HOST=user@pi-ip ./pi/setup.sh`
+   — installs fauxmo and the orchestrator, prints the Pi's public key.
+   Put the token from step 1 into `/etc/flightsim/boot.env` as
+   `WIN_AGENT_TOKEN=`.
 3. **Linux boot** (sudo, with the key from step 2):
-   `sudo ./scripts/flightsim/linux-setup.sh 'ssh-ed25519 AAAA… flightsim-boot@pi'`
-   — GRUB_DEFAULT=saved, `boot-to-windows` helper, forced-command
-   authorized_keys entry, persistent `ethtool wol g`.
-4. **Alexa app**:
-   - "Alexa, discover devices" → finds **flight sim**.
-   - Routines → **+** → When: *Voice* → "flight sim bootup".
-   - Action 1: *Alexa Speaks* → e.g. "Right away, sir. Spinning up the
-     flight deck. Systems will be online shortly."
-   - Action 2: *Smart Home* → **flight sim** → On.
+   `sudo ./linux/setup.sh 'ssh-ed25519 AAAA… flightsim-boot@pi'`
+   — GRUB_DEFAULT=saved, the `boot-to-windows` helper, the forced-command
+   authorized_keys entry, persistent `ethtool wol g`, and the Linux logon
+   greeting + VS Code autostart.
+4. **BIOS**: enable "Resume by PCI-E/PME" (Wake on LAN) and **disable**
+   ErP/EuP deep-off, or the NIC loses standby power at S5 and cold-boot
+   wake silently fails.
+5. **Auto sign-in** (needed for a truly hands-free cold boot — the
+   greeting and launches are logon-triggered): `netplwiz` → uncheck
+   "Users must enter a user name and password". On Windows 11 that
+   checkbox is hidden until you set
+   `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device`
+   → `DevicePasswordLessBuildVersion` = 0. Sysinternals Autologon also
+   works and ignores the whole dance.
+6. **Alexa app**: "Alexa, discover devices" finds the virtual plugs
+   (they appear under Plugs). Then More → Routines → **+** → When:
+   *Voice* → your phrase → Action 1 *Alexa Says* (your Jarvis line) →
+   Action 2 *Smart Home* → the device → **On**.
+
+## Configuration
+
+Most values live in `/etc/flightsim/boot.env` on the Pi (created by
+`pi/setup.sh`, never overwritten):
+
+| Variable | Meaning |
+|---|---|
+| `WS_LAN` | workstation's LAN IP — must be the same under both OSes (DHCP reservation by MAC) |
+| `WS_MAC` | that NIC's MAC, the WOL target |
+| `WS_BROADCAST` | subnet broadcast address for the magic packet |
+| `LINUX_SSH` | user@host for the Linux boot (a direct-link IP is fine) |
+| `WIN_AGENT_TOKEN` | must match `C:\ProgramData\jarvis-boot\boot-agent.token` |
+| `POLL_SECS` | how long to keep watching a boot (default 300) |
+
+Hardcoded elsewhere and worth knowing about: the Pi's address in
+`jarvis-greeting.ps1` (for the intent read-back), the device names and
+ports in `pi/setup.sh`, and the launch commands in `$LaunchProfiles`.
+
+### Adding a game
+
+Three edits: a new device block in `pi/setup.sh` with
+`FLIGHT_INTENT=<key>`, a matching entry in `$LaunchProfiles` in
+`windows/jarvis-greeting.ps1` (command plus the Jarvis closing line), then
+redeploy both sides, re-run Alexa discovery, and add a routine.
+
+## How "is it up?" is decided
+
+The orchestrator probes two Prometheus exporters that belong to a
+separate project (a Grafana wallboard): `:9105` answering means Linux,
+`:9106` means Windows. This repo does not install them — if you run
+jarvis-boot without that stack, repoint `WIN_PORT`/`LINUX_PORT` at
+anything that answers HTTP only under the OS in question. The boot
+agent's own `:9107/status` is a natural Windows-up signal and is more
+reliable than the exporter (which has died on its own more than once).
 
 ## Test matrix
 
 | Starting state | Expect |
 |---|---|
-| Windows up | Alexa ack only; Pi logs "already up" (`journalctl -t flightsim-boot`) |
-| Linux up | reboots into Windows in ~30 s, greeting on logon |
-| Powered off | WOL powers on; direct to Windows if it's the GRUB default, else one chained Linux→Windows reboot (~2 min) |
+| Target OS already up | greeting + launch fire immediately, no reboot |
+| Other OS up | reboot into the target in ~30 s, greeting on logon |
+| Powered off | WOL powers on; straight to the GRUB default, else one chained reboot (~2 min) |
 
-Cold-boot speed note: WOL cannot pick a GRUB menu entry. If you want
-off→Windows without the chained double boot, make Windows the saved
-default on the Linux boot (`sudo grub-set-default 'Windows Boot Manager…'`
-— exact title in `boot-to-windows`); Linux then becomes the
-pick-at-the-menu OS. Everything works either way, Windows-default is just
-faster.
+WOL cannot pick a GRUB menu entry, so from full-off the machine always
+lands in the saved default first. Keep Linux as the default (needed for
+the Windows→Linux leg to work at all) or flip it to Windows for faster
+cold sim starts — not both.
 
 ## Troubleshooting
 
-- **Echo won't discover "flight sim"**: fauxmo must answer on the Echo's
-  subnet — `systemctl status fauxmo` on the Pi; re-discover. Some newer
-  Echo firmwares are picky about Wemo emulation; retry discovery from the
-  Alexa app (*Add device → Other → Wemo*).
-- **WOL does nothing from full off**: BIOS "Resume by PCI-E/PME" off, or
-  ErP deep-off enabled (kills NIC standby power), or the last shutdown was
-  from Linux without `flightsim-wol.service` armed. Link LED on the NIC
-  while off = standby power present.
-- **Machine wakes but greeting/exporter never appear**: nobody logged on —
-  both are logon tasks; enable auto sign-in (checklist in
-  windows-setup.ps1).
-- **Pi can't ssh the Linux boot**: only valid while Linux is up (the
-  direct link 192.168.100.1 is Linux-only config). Test:
-  `ssh -i ~/.ssh/flightsim_ed25519 user@192.168.100.1 boot` — that reboots
-  the workstation into Windows on the spot.
-- Orchestrator log: `journalctl -t flightsim-boot` on the Pi (also
-  `~/flightsim-boot.log` for the detached run's stdout).
+- **Alexa: "device isn't responding" / nothing reaches the Pi.** Check the
+  Echo is on the same subnet as the Pi — a roaming Echo that rejoined a
+  different SSID is the usual cause. `journalctl -u fauxmo` shows whether
+  any probe arrived at all.
+- **Alexa: "encountered a hardware malfunction".** Alexa polls device
+  state right after turning it on; a boot takes minutes. The `state_cmd`
+  therefore also reports ON while the boot lock is held.
+- **Echo won't discover the devices.** fauxmo must answer on the Echo's
+  subnet; retry discovery, and note newer Echo firmware can be picky about
+  Wemo emulation. There is no "Wemo" entry under *Add device → Other* on
+  current app versions — plain "discover devices" is the reliable path.
+- **`cannot execute: required file not found` on the Pi.** A CRLF checkout
+  broke the shebang. `.gitattributes` pins `*.sh` to LF and `pi/setup.sh`
+  strips CR on install; if you hit it anyway, `sed -i 's/\r$//'`.
+- **The Pi can't reach `:9107`.** The firewall rule must cover the profile
+  Windows assigns your LAN — it is often *Public*, not *Private*, and a
+  Private-only rule fails silently.
+- **WOL does nothing from full off.** BIOS PME disabled, ErP deep-off
+  enabled, or the last shutdown was from Linux without
+  `flightsim-wol.service` armed. A lit link LED while off means standby
+  power is present.
+- **Machine wakes but nothing is spoken.** Nobody logged on — the greeting
+  is a logon task. See auto sign-in above.
+- Logs: `journalctl -t flightsim-boot` on the Pi (plus
+  `~/flightsim-boot.log` for detached runs).
 
 ## Security notes
 
-- The Pi holds no workstation credentials: its key is bound in
+- The Pi holds no workstation credentials. Its ssh key is bound in
   `authorized_keys` to `command="sudo /usr/local/bin/boot-to-windows"`
-  with `restrict`, and the sudoers rule covers exactly that script — the
-  key can reboot the box into Windows and nothing else.
-- fauxmo is LAN-only (UPnP discovery + one TCP port on 192.168.1.51);
-  "off" is a no-op, `state_cmd` just probes :9106.
-- Secrets: none. WOL packets and exporter probes are unauthenticated by
-  nature and stay on the LAN.
+  with `restrict`, and the sudoers rule covers exactly that one script —
+  the key can reboot the box into Windows and nothing else.
+- The boot agent runs as SYSTEM (it must reboot before anyone logs on) and
+  is guarded by a shared token; a wrong token gets a 403. It is a
+  hand-rolled HTTP listener on a LAN port — fine behind a home router,
+  not something to expose to the internet.
+- fauxmo is LAN-only, "off" is a deliberate no-op, and the state probe is
+  a read.
+- No secrets in the repo. The agent token is generated at install time.
+
+## Origin
+
+Extracted from a job-search project's `scripts/flightsim/` directory,
+where it was living for no better reason than that's where it got
+written. History preserved via `git subtree split`. Internal identifiers
+keep the `flightsim` prefix (`/etc/flightsim`, `flightsim-boot.sh`, the
+`FlightSimBootAgent` task) because renaming them would mean reinstalling
+every deployed piece.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,19 +1,21 @@
-# windows-setup.ps1 — one-time prep on the workstation's WINDOWS boot.
+# windows/setup.ps1 — one-time prep on the workstation's WINDOWS boot.
 # Run from an elevated PowerShell in the repo root:
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\flightsim\windows-setup.ps1
+#   powershell -ExecutionPolicy Bypass -File windows\setup.ps1
 #
 # Does:
 #   * arms Wake-on-Magic-Packet on the wired NIC (driver + OS wake grant)
 #   * keeps Fast Startup off (hybrid shutdown breaks WOL from S5)
-#   * installs jarvis-greeting.ps1 to C:\ProgramData\jobcontext\ and
-#     registers the JarvisGreeting logon task (same home + pattern as
-#     gpu-exporter.ps1)
+#   * installs jarvis-greeting.ps1 + boot-agent.ps1 to $dest and registers
+#     their scheduled tasks (logon / startup)
 # Then prints the manual checklist (BIOS, auto-logon).
 
 $ErrorActionPreference = 'Stop'
 $adapterName = 'Ethernet'   # Intel I226-V, MAC AA-BB-CC-DD-EE-FF, 192.168.1.50
-$dest = 'C:\ProgramData\jobcontext'
+$dest = 'C:\ProgramData\jarvis-boot'
+# Pre-extraction home; the token is migrated from here so the Pi's copy
+# stays valid across the move.
+$legacyDest = 'C:\ProgramData\jobcontext'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -57,7 +59,13 @@ Write-Host 'JarvisGreeting logon task registered'
 # token goes into /etc/flightsim/boot.env on the Pi.
 $tokenFile = "$dest\boot-agent.token"
 if (-not (Test-Path $tokenFile)) {
-    [guid]::NewGuid().ToString('N') | Set-Content $tokenFile -Encoding ascii
+    $legacyToken = "$legacyDest\boot-agent.token"
+    if (Test-Path $legacyToken) {
+        Copy-Item $legacyToken $tokenFile
+        Write-Host "Migrated the existing boot-agent token from $legacyDest"
+    } else {
+        [guid]::NewGuid().ToString('N') | Set-Content $tokenFile -Encoding ascii
+    }
 }
 if (-not (Get-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -ErrorAction SilentlyContinue)) {
     # Profile Any: this LAN shows as Public in Windows' eyes, and the
