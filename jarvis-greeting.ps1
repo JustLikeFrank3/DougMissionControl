@@ -16,11 +16,11 @@ $Voice = 'en-GB-RyanNeural'   # try en-GB-ThomasNeural / en-US-GuyNeural
 $Rate  = '-5%'
 $CacheDir = Join-Path $env:ProgramData 'jobcontext\jarvis'
 
-$LaunchSim = $false
+$LaunchSim = $true
 # MSFS 2020 (Store):  explorer.exe shell:AppsFolder\Microsoft.FlightSimulator_8wekyb3d8bbwe!App
 # MSFS 2024 (Store):  explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App
 # MSFS (Steam):       Start-Process "steam://rungameid/1250410"
-$SimCommand = { explorer.exe shell:AppsFolder\Microsoft.FlightSimulator_8wekyb3d8bbwe!App }
+$SimCommand = { explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App }
 
 # Let the audio stack finish coming up before speaking.
 Start-Sleep -Seconds 8
