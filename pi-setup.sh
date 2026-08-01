@@ -112,6 +112,13 @@ cat > /opt/fauxmo/config.json <<CONF
           "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
+          "name": "squadrons",
+          "port": 49918,
+          "on_cmd": "FLIGHT_INTENT=squadrons /usr/local/bin/flightsim-boot.sh windows bg",
+          "off_cmd": "true",
+          "state_cmd": "curl -sf --max-time 2 http://192.168.1.50:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+        },
+        {
           "name": "workstation",
           "port": 49916,
           "on_cmd": "/usr/local/bin/flightsim-boot.sh linux bg",

@@ -105,10 +105,10 @@ log "trigger received — probing workstation state"
 [ "$TARGET" = windows ] && echo "$FLIGHT_INTENT $(date +%s)" > "$INTENT_FILE"
 
 if target_up; then
-    if [ "$TARGET" = windows ] && [ "$FLIGHT_INTENT" = sim ] && [ -n "$WIN_AGENT_TOKEN" ]; then
-        # Already in Windows but the flight deck was asked for — fire the
-        # greeting + sim launch remotely instead of doing nothing.
-        log "windows already up — launching flight deck via boot-agent"
+    if [ "$TARGET" = windows ] && [ "$FLIGHT_INTENT" != plain ] && [ -n "$WIN_AGENT_TOKEN" ]; then
+        # Already in Windows but a launch profile was asked for — fire the
+        # greeting + launch remotely instead of doing nothing.
+        log "windows already up — launching '$FLIGHT_INTENT' via boot-agent"
         curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/launch?token=${WIN_AGENT_TOKEN}" >/dev/null \
             || log "WARN: launch request failed"
     else

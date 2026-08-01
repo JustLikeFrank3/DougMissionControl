@@ -29,13 +29,17 @@ wallboard already uses to tell which OS is booted.
 ## Plain Windows boot: "Alexa, boot into Windows"
 
 A third device, **pc** (port 49917), boots Windows with the greeting but
-WITHOUT launching the sim. How: each Windows trigger records its intent
-on the Pi (`/tmp/flightsim-intent`: `sim`/`plain` + timestamp);
-jarvis-greeting.ps1 reads it back over ssh at logon and launches MSFS
-only for a fresh `sim` intent. Manual power-button boots follow
-`$SimOnManualBoot` (default off). Saying "flight sim bootup" while
-Windows is already up now fires the greeting + sim remotely via the
-boot-agent's `/launch` endpoint instead of no-opping.
+WITHOUT launching anything. How: each Windows trigger records its intent
+on the Pi (`/tmp/flightsim-intent`: `<intent> <epoch>`);
+jarvis-greeting.ps1 reads it back over ssh at logon and launches the
+matching entry in its `$LaunchProfiles` table (`sim` → MSFS 2024,
+`squadrons` → STAR WARS Squadrons via the **squadrons** device on
+port 49918; `plain`/unknown → greeting only). Manual power-button boots
+follow `$ManualBootProfile` (default: none). Any non-plain intent while
+Windows is already up fires the greeting + launch remotely via the
+boot-agent's `/launch` endpoint instead of no-opping. To add a game:
+new device in pi-setup.sh with `FLIGHT_INTENT=<key>`, matching entry in
+`$LaunchProfiles`, redeploy both sides, re-discover, new routine.
 
 ## The reverse direction: "Alexa, workstation bootup" → Linux
 
