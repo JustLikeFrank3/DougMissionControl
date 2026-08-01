@@ -156,7 +156,7 @@ sleep 2
 systemctl is-active fauxmo.service
 
 echo
-echo "Pi-side public key — pass to linux-setup.sh on the workstation's Linux boot:"
+echo "Pi-side public key — pass to linux/setup.sh on the workstation's Linux boot:"
 cat "$HOME/.ssh/flightsim_ed25519.pub"
 REMOTE
 
