@@ -39,9 +39,48 @@ foreach ($prop in 'Wake on Magic Packet', 'Wake from S0ix on Magic Packet') {
         Write-Host "NIC: '$prop' enabled"
     } catch { Write-Host "NIC: '$prop' not offered by this driver - skipped" }
 }
-# OS-level wake grant (Device Manager > Power Management checkbox).
+# OS-level wake grant (Device Manager > Power Management checkbox), but only
+# when Windows actually lists this NIC as wake-programmable. On a box that
+# only offers Modern Standby (S0 low power idle, no firmware S3) the wired
+# NIC can be absent from that list entirely, and powercfg then answers
+#   "You do not have permission to enable or disable device wake."
+# even from an elevated shell. That message is a capability refusal wearing
+# a privilege refusal's clothes: no amount of elevation, driver setting, or
+# Device Manager checkbox will make the grant stick. Say so plainly here
+# rather than let a re-run print an error that sends the next debugging
+# session after the wrong problem.
 $pnpId = (Get-NetAdapter -Name $adapterName).PnPDeviceID
-powercfg /deviceenablewake ((Get-PnpDevice -InstanceId $pnpId).FriendlyName)
+$nicName = (Get-PnpDevice -InstanceId $pnpId).FriendlyName
+if ((powercfg -devicequery wake_programmable) -contains $nicName) {
+    powercfg /deviceenablewake $nicName
+    Write-Host "NIC: OS wake grant enabled for '$nicName'"
+} else {
+    Write-Host "NIC: '$nicName' is NOT wake-programmable on this system -"
+    Write-Host '     skipping the OS wake grant (powercfg would only fail).'
+    Write-Host '     Wake-on-LAN from FULL POWER OFF (S5) is unaffected and'
+    Write-Host '     still works; it is wake from SLEEP that cannot be armed.'
+}
+
+# Modern Standby is the usual reason for the above, and it also decides
+# whether a scheduled WOL can ever land: under S0 low power idle the magic
+# packet is ignored while the machine sleeps, so an idle timeout silently
+# turns a working WOL setup into a dead one at 4am.
+$sleepStates = (powercfg /a) -join "`n"
+if ($sleepStates -match 'Standby \(S0 Low Power Idle\)') {
+    Write-Host ''
+    Write-Host 'POWER: this system reports Modern Standby (S0 Low Power Idle).'
+    # Only look at the block BEFORE "not available" - S3 is named in both
+    # halves of powercfg's output, so a whole-text match always "finds" it.
+    $available = ($sleepStates -split 'The following sleep states are not available')[0]
+    if ($available -match 'Standby \(S3\)') {
+        Write-Host '       S3 is also available - preferring it in the BIOS makes'
+        Write-Host '       wake-from-sleep reliable.'
+    } else {
+        Write-Host '       S3 is NOT available, so wake-from-sleep is unreliable by'
+        Write-Host '       design. To keep a scheduled WOL working, stop the machine'
+        Write-Host '       sleeping:  powercfg /change standby-timeout-ac 0'
+    }
+}
 
 # --- Fast Startup stays off ------------------------------------------------
 Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' `
