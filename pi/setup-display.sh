@@ -68,22 +68,47 @@ if running 'chromium.*(grafana|:3000|playlist)'; then
     EXISTING="${EXISTING}a chromium instance is showing Grafana right now\n"
 fi
 
+# A kiosk need not be a systemd unit at all. On Raspberry Pi OS it is
+# typically lightdm -> autologin -> a wlroots compositor (labwc) -> an
+# autostart .desktop. cage cannot start under that; it would fight the
+# running compositor for seat0.
+for comp in labwc wayfire weston sway mutter gnome-shell kwin_wayland Xorg; do
+    if running "^[^ ]*${comp}"; then
+        EXISTING="${EXISTING}${comp} is already compositing this seat\n"
+        break
+    fi
+done
+for dir in "$HOME/.config/autostart" "/home/${KIOSK_USER}/.config/autostart"; do
+    [ -d "$dir" ] || continue
+    hits="$(grep -rliE 'kiosk|wallboard|grafana|chromium' "$dir" 2>/dev/null | head -3)"
+    if [ -n "$hits" ]; then
+        for h in $hits; do
+            EXISTING="${EXISTING}autostart entry ${h}\n"
+        done
+        break
+    fi
+done
+
 if [ -n "$EXISTING" ] && [ "$ADOPT" -eq 0 ]; then
     printf '\n\033[31mRefusing to continue.\033[0m An existing kiosk owns this display:\n\n'
     printf "  $EXISTING"
     cat <<'STOP'
 
-That is the jobContext wallboard, and this script would start a second
-compositor on tty1 and change the default systemd target underneath it.
+This script installs cage and starts it on tty1. Where a compositor is
+already running — on Raspberry Pi OS that is lightdm -> labwc, with the
+wallboard's chromium as one of its Wayland clients — cage cannot start
+alongside it, and trying takes the wallboard down.
 
-Do this first:
+On such a host, Flight Deck belongs *inside* the existing session as another
+client, launched from ~/.config/autostart, not as a second compositor.
+See docs/pi-wallboard-findings.md.
+
+Survey the host first if you have not:
 
   ./pi/inspect-wallboard.sh      # read-only; writes docs/pi-wallboard-survey.md
 
-Commit the survey, decide from it how Flight Deck should host the existing
-playlist, and only then re-run with:
-
-  sudo ./pi/setup-display.sh --adopt-kiosk
+--adopt-kiosk exists for a bare host with a stale kiosk unit and no live
+compositor. It is NOT the way onto a working labwc wallboard.
 
 STOP
     exit 2
