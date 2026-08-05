@@ -315,27 +315,11 @@
     $('auto-sub').textContent = e.mode ? e.mode + ' playlist' : 'playlist';
   }
 
-  /* The sub-nav overlays the board, so it must get out of the way. Reveal is
-     always via the strip's own jobContext button — taps inside the iframe are
-     cross-origin and invisible to this page, so there is no way to catch a
-     touch on the board itself. */
-  var subnavTimer = null;
-  var SUBNAV_MS = 6000;
-
-  function showSubnav() {
-    $('evals-nav').classList.remove('away');
-    if (subnavTimer) clearTimeout(subnavTimer);
-    subnavTimer = setTimeout(function () {
-      $('evals-nav').classList.add('away');
-    }, SUBNAV_MS);
-  }
-
   function pickView(view) {
     if (state && state.evals) {
       state.evals.view = view;          // optimistic, so a tap feels instant
       renderEvalsNav(state.evals);
     }
-    showSubnav();                        // keep it up while you are choosing
     post('/api/evals/view', { view: view });
   }
 
@@ -555,15 +539,11 @@
   [].forEach.call(document.querySelectorAll('[data-surface]'), function (btn) {
     btn.addEventListener('click', function () {
       var name = btn.dataset.surface;
-      var already = state && state.surface && state.surface.active === name;
       if (state && state.surface) {
         state.surface.active = name;
         renderSurface(state);
       }
-      // Entering EVALS shows the board picker; tapping jobContext again while
-      // already there brings it back. This is the reveal path.
-      if (name === 'evals') showSubnav();
-      if (!already) post('/api/surface', { surface: name });
+      post('/api/surface', { surface: name });
     });
   });
 
@@ -612,6 +592,5 @@
 
   buildTrack();
   fit();
-  showSubnav();   // visible on load, then it gets out of the board's way
   connect();
 })();

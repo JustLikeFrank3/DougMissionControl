@@ -96,7 +96,7 @@ html, body {
 .surface { position: absolute; inset: 0; display: none; }
 .surface.on { display: grid; }
 .body-deck  { grid-template-columns: 600px 1100px 860px; }
-.body-evals { grid-template-columns: 1fr; }
+.body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
 .body-plain { grid-template-columns: 1fr; place-items: center; }
 
 .rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
@@ -108,18 +108,11 @@ html, body {
 /* ── EVALS ─────────────────────────────────────────────────────────────── */
 
 /* Second-level nav, built at runtime from Grafana's own dashboard list.
-   It OVERLAYS the board rather than taking a grid row: at 720 px tall,
-   permanently spending 56 px on navigation is what pushes the bottom row of
-   panels off the screen. It hides itself after a few seconds and comes back
-   when you tap jobContext in the strip — which is outside the iframe, and so
-   is the only reveal target the parent page can reliably see. */
-.subnav {
-  position: absolute; top: 0; left: 0; right: 0; height: 56px; z-index: 5;
-  display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
-  background: rgba(14, 20, 29, .97); overflow: hidden;
-  transition: transform .18s ease, opacity .18s ease;
-}
-.subnav.away { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+   In flow and always visible: the board scrolls inside its own frame, so the
+   56 px this costs is not lost content. An overlay was tried and reverted —
+   permanently covering the top of the dashboard is worse than shortening it. */
+.subnav { display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
+          background: #0e141d; overflow: hidden; }
 .subb {
   flex: 1; min-width: 0; border: 0; border-right: 1px solid var(--ln);
   background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
