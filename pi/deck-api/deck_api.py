@@ -132,6 +132,14 @@ POLL_BUSY = float(cfg("DECK_POLL_BUSY", "2"))
 GRAFANA_URL = cfg("GRAFANA_URL", "http://127.0.0.1:3000").rstrip("/")
 PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
 
+try:
+    _src = Path(__file__).resolve()
+    BUILD = {"file": str(_src),
+             "mtime": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                    time.localtime(_src.stat().st_mtime))}
+except OSError:
+    BUILD = {"file": __file__, "mtime": "unknown"}
+
 SURFACES = ("deck", "evals", "media", "sim")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
@@ -166,6 +174,10 @@ class Deck:
                    "uptime": None, "cpu_pct": None},
             # Latest sample only — no history is kept anywhere on the Pi.
             "telemetry": {"ts": None, "source": None, "ws": {}, "pi": {}},
+            # Which copy of this file is actually running. `git pull` updates
+            # the checkout; only setup-deck.sh updates /opt/flightdeck, and
+            # confusing the two costs an afternoon.
+            "version": BUILD,
             "surface": {"active": DEFAULT_SURFACE, "default": DEFAULT_SURFACE,
                         "previous": None, "episode": None,
                         "manual_in_episode": False, "all": list(SURFACES)},
@@ -953,7 +965,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
 
-    DECK.event("deck-api", f"listening on :{LISTEN_PORT}")
+    DECK.event("deck-api",
+               f"listening on :{LISTEN_PORT} — {BUILD['file']} ({BUILD['mtime']})")
     server.serve_forever()
 
 
