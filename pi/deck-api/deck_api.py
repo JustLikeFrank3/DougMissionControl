@@ -104,8 +104,17 @@ def cfg(key: str, default: str) -> str:
 
 
 WS_LAN = cfg("WS_LAN", "192.168.1.50")
+# Liveness probes — "does anything answer HTTP under this OS". These may point
+# at something with no metrics at all; on this deployment :9108 simply returns
+# the string "linux".
 WIN_PORT = int(cfg("WIN_PORT", "9106"))
 LINUX_PORT = int(cfg("LINUX_PORT", "9105"))
+
+# Metrics endpoints — a different thing, and often a different address. The
+# Linux exporter answers over the point-to-point link rather than the LAN, and
+# exporters serve exposition format at /metrics, not at /.
+WIN_METRICS_URL = cfg("WIN_METRICS_URL", f"http://{WS_LAN}:9106/metrics")
+LINUX_METRICS_URL = cfg("LINUX_METRICS_URL", f"http://{WS_LAN}:9105/metrics")
 AGENT_PORT = int(cfg("WIN_AGENT_PORT", "9107"))
 AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 DECK_TOKEN = cfg("DECK_TOKEN", "")
@@ -117,7 +126,10 @@ POLL_BUSY = float(cfg("DECK_POLL_BUSY", "2"))
 # none of it — no dashboards are provisioned, no metrics are stored, and the
 # playlist selection below reproduces wallboard-kiosk.sh's semantics rather
 # than inventing new ones. See docs/pi-wallboard-findings.md.
-GRAFANA_URL = cfg("GRAFANA_URL", "http://localhost:3000").rstrip("/")
+# 127.0.0.1, not "localhost": on Debian localhost resolves to ::1 first, and
+# k3s's ServiceLB publishes Grafana's hostPort on IPv4 only — so urllib
+# connected to ::1 and got nothing while curl's happy-eyeballs fell back.
+GRAFANA_URL = cfg("GRAFANA_URL", "http://127.0.0.1:3000").rstrip("/")
 PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
 
 SURFACES = ("deck", "evals", "media", "sim")
@@ -425,20 +437,47 @@ def canonicalise(raw: dict) -> dict:
     return found
 
 
+_bad_metrics: set[str] = set()
+
+
 def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
-    """One scrape of the exporter belonging to whichever OS is up."""
+    """One scrape of the exporter belonging to whichever OS is up.
+
+    The METRICS endpoint is not the liveness probe. WIN_PORT / LINUX_PORT are
+    what the orchestrator pings to decide which OS is running, and they may be
+    anything that answers HTTP under one OS only — on this deployment :9108
+    just returns the string "linux". Metrics live at /metrics, and possibly on
+    a different address entirely: the Linux exporter is reachable over the
+    point-to-point link rather than the LAN. Hence separate configuration.
+    """
     if os_now == "windows":
-        url, src = f"http://{WS_LAN}:{WIN_PORT}/", f"windows :{WIN_PORT}"
+        url, src = WIN_METRICS_URL, "windows"
     elif os_now == "linux":
-        url, src = f"http://{WS_LAN}:{LINUX_PORT}/", f"linux :{LINUX_PORT}"
+        url, src = LINUX_METRICS_URL, "linux"
     else:
         return {}, None  # no OS up: a real gap, and the panel shows it as one
+    if not url:
+        return {}, None
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
             body = r.read(512_000).decode("utf-8", "replace")
     except (urllib.error.URLError, OSError, ValueError):
         return {}, None
-    return canonicalise(parse_prom_text(body)), src
+
+    # A directory listing or an error page is not exposition format. Say so
+    # once rather than silently reporting an empty scrape forever.
+    if body.lstrip()[:1] == "<":
+        if url not in _bad_metrics:
+            _bad_metrics.add(url)
+            DECK.event("deck-api", f"{url} returned HTML, not Prometheus text", "warn")
+        return {}, None
+
+    values = canonicalise(parse_prom_text(body))
+    if not values and url not in _bad_metrics:
+        _bad_metrics.add(url)
+        DECK.event("deck-api", f"{url} exposes no GPU metrics this panel recognises",
+                   "warn")
+    return values, f"{src} {url}"
 
 
 _prev_cpu: tuple[int, int] | None = None
