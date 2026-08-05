@@ -59,6 +59,10 @@ html, body {
   height: 72px; flex: none; display: flex; align-items: stretch;
   background: #0e141d; border-bottom: 1px solid var(--ln);
 }
+.mark { display: flex; align-items: center; padding: 0 26px;
+        border-right: 1px solid var(--ln); flex: none; }
+.mark b { font-size: 20px; letter-spacing: .26em; font-weight: 600; white-space: nowrap; }
+
 .nav { display: flex; align-items: stretch; }
 .navb {
   width: 196px;                       /* ~27 mm at this panel's ~180 ppi */
