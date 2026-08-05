@@ -25,6 +25,13 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* The UA stylesheet's `[hidden] { display: none }` is beaten by ANY author
+   rule that sets display — and .overlay sets `display: grid`, .abort sets
+   `display: flex`. Without this the EVALS "unreachable" overlay sits on top
+   of a perfectly good wallboard forever, and ABORT is always on screen.
+   Author-level and !important so nothing can lose to it again. */
+[hidden] { display: none !important; }
+
 html, body {
   width: 100%; height: 100%; overflow: hidden;
   background: var(--bg); color: var(--fg);
