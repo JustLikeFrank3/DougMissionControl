@@ -2,7 +2,7 @@
 # reverse leg of flightsim-boot.sh: lets the Pi reboot Windows so GRUB's
 # saved default lands the workstation in Linux.
 #
-#   GET /status                  -> 200 "windows"
+#   GET /status  (and GET /)     -> 200 "windows"
 #   GET /reboot?token=<token>    -> 200 "rebooting", reboot in 5 s
 #   GET /launch?token=<token>    -> 200 "launching", runs the
 #                                   JarvisGreeting task in the logged-on
@@ -35,7 +35,10 @@ while ($true) {
         while (($line = $reader.ReadLine()) -and $line -ne '') { }  # drain headers
 
         $status = '404 Not Found'; $body = 'not found'
-        if ($request -match '^GET /status') {
+        # "/" answers as well as "/status": the Pi's win_up() probe hits the
+        # root path, so WIN_PORT can point here instead of at the exporter.
+        # Mirrors linux/boot-agent.py. Both are reads, so both stay open.
+        if ($request -match '^GET /(status)?(\s|\?)') {
             $status = '200 OK'; $body = 'windows'
         } elseif ($request -match '^GET /(reboot|launch)\?token=([^ ]+)') {
             if ($token -and ($Matches[2] -ceq $token)) {

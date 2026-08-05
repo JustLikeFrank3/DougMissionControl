@@ -141,11 +141,14 @@ The orchestrator probes two Prometheus exporters that belong to a
 separate project (a Grafana wallboard): `:9105` answering means Linux,
 `:9106` means Windows. This repo does not install them — if you run
 this without that stack, repoint `WIN_PORT`/`LINUX_PORT` at
-anything that answers HTTP only under the OS in question. The two boot
-agents are the natural candidates — `:9107/status` for Windows and
-`:9108/status` for Linux. Both are unauthenticated reads, both ship with
-this repo, and both are more reliable than the exporters (which have died
-on their own more than once).
+anything that answers HTTP only under the OS in question.
+
+The two boot agents are the better answer, and need no code change to use:
+the probe hits the root path, and both agents answer `/` as well as
+`/status`, so `WIN_PORT=9107` and `LINUX_PORT=9108` in `boot.env` are all
+it takes. Both ship with this repo, both run from startup rather than at
+logon, and both are more reliable than the exporters — which belong to
+another project and have died on their own more than once.
 
 Note what a failed probe does *not* distinguish: a machine that is off,
 a machine asleep ignoring magic packets, and a machine that is up with a
