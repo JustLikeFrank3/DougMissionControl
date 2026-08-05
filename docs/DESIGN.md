@@ -1,43 +1,43 @@
 # Flight Deck — design notes
 
-Proposal for a Corsair Xeneon Edge touch panel that fronts the boot
-orchestration in this repo, plus a Prometheus/Grafana metrics plane
-covering the workstation (both OSes), a Mac mini, and the Pi itself.
+A Corsair XENEON Edge touch panel that fronts the boot orchestration in this
+repo, driven by the Raspberry Pi 4B.
 
-The rendered sketch, with the panel mockup and the architecture diagrams,
-is [`dashboard-sketch.html`](dashboard-sketch.html).
+**Flight Deck is a real-time control and status surface, not a historical
+observability platform.** Everything numeric on it is the latest reading;
+the traces are a rolling hour held in the browser's memory and they die with
+the page. Nothing is scraped on a schedule, nothing is retained, and nothing
+is written to the Pi's thumb drive.
 
-> ## What v0.1 actually builds
->
-> **Built and in this repo** — see [Flight Deck v0.1](#flight-deck-v01-built)
-> below and the `pi/` directory:
->
-> 1. `pi/display-check.sh` + `pi/setup-display.sh` — prove and then serve the
->    XENEON Edge (cage + chromium kiosk), with a touch self-test page.
-> 2. `pi/deck-api/deck_api.py` — wraps the existing orchestrator. It does not
->    modify `flightsim-boot.sh`; it shells out to it exactly as fauxmo does
->    and follows its journald output to derive boot phases.
-> 3. `pi/deck-ui/` — the boot-state UI.
->
-> **Deliberately not built**, on a Pi 4B / 4 GB / thumb-drive target:
-> Prometheus, Grafana, Loki, any new exporter, NVMe, a Pi 5 migration, Mac
-> mini telemetry, SMART monitoring, and PresentMon. Dropping the TSDB is what
-> makes the thumb drive a non-issue — nothing in v0.1 writes to it in a loop.
-> The metrics plane described further down remains a proposal.
->
-> **Revised by that hardware:** the panel does *not* embed Grafana. On a Pi 4B
-> the browser is the most expensive process on the box, and rendering Grafana
-> panels in it costs ~700 MB more than serving numbers from `deck-api` and
-> drawing them inline. Grafana, if it ever arrives, is the desk-and-phone
-> surface.
+The rendered design, with the panel drawn at true proportion, is
+[`dashboard-sketch.html`](dashboard-sketch.html).
 
-## Flight Deck v0.1 (built)
+## Target hardware
 
-Target: the existing Pi 4B, 4 GB RAM, booting off a 64 GB USB thumb drive.
+The Pi that already exists: **Raspberry Pi 4B, 4 GB, 64 GB USB thumb drive,
+fan and heatsinks fitted.** No NVMe, no Pi 5.
 
-### Install order
+| Link | Part | Note |
+|---|---|---|
+| Pi → Edge (video) | micro-HDMI → HDMI | HDMI0, nearest the USB-C jack. 2560 × 720 is 1.84M pixels — fewer than 1080p — so it is comfortable on a 4B |
+| Pi → Edge (touch) | USB-A → USB-C | A **black** USB 2.0 port; HID needs no bandwidth and this keeps both blue ports free |
+| Edge power | its own USB-C PD supply | The 4B supplies 1.2 A total across all four ports |
+| Pi storage | the existing thumb drive | Fine, because nothing writes in a loop |
 
-Each step is provable on its own, and each one de-risks the next.
+## Why the panel hangs off the Pi
+
+The workstation is the subject of every control on the screen. A panel driven
+by the workstation goes black exactly when you reboot it, which is the one
+thing it cannot do. The Pi already holds the boot logic, the ssh key, and the
+lock file.
+
+The Edge accepts HDMI 2.0 alongside USB-C DP-alt, and its touch panel is a
+standard USB HID digitizer, so a Pi 4B drives it with no vendor software in
+the path.
+
+## Install order
+
+Each step is provable on its own, and each de-risks the next.
 
 ```
 # 1. prove video + touch before anything is built on top
@@ -54,264 +54,165 @@ sudo ./pi/setup-deck.sh                   # deck-api :8088, repoints fauxmo,
 reverts if the edit would have added a second line — a two-line
 `cmdline.txt` is an unbootable Pi.
 
-### How deck-api learns what the orchestrator is doing
+## deck-api
 
-`flightsim-boot.sh` is **unmodified**. deck-api triggers it the same way
-fauxmo always has — `FLIGHT_INTENT=<intent> flightsim-boot.sh <target> bg` —
-and then reads phases out of the script's own journald output
-(`journalctl -t flightsim-boot -f`), mapping its existing log lines:
+`flightsim-boot.sh` is **not modified**. deck-api is a wrapper: it triggers
+the orchestrator the same way fauxmo always has —
+`FLIGHT_INTENT=<intent> flightsim-boot.sh <target> bg` — and learns what that
+script is doing by following its journald output.
 
-| Log line the orchestrator already emits | Phase |
+| Endpoint | Does |
 |---|---|
-| *(POST arrives at deck-api)* | 1 TRIGGER |
-| `trigger received — probing workstation state` | 2 PROBE |
-| `no response — sending WOL to …` / `requesting reboot into …` | 3 KICK |
-| `host answers ping but no exporter yet` | 4 PING |
-| `<target> is up — deck online` | 5 OS UP |
-| `gave up after …s` | run marked failed |
+| `GET /api/state` | Everything the panel renders |
+| `GET /api/events` | The same, streamed over SSE on every change |
+| `POST /api/boot` | `{"target":"windows\|linux","intent":"sim\|squadrons\|plain\|code"}` |
+| `POST /api/launch` | Target already up — fire greeting + profile via the boot agent |
+| `POST /api/abort` | Kill an in-flight run |
+| `POST /api/hook/greeting` | Windows reports the greeting spoke — not wired yet |
 
-Phases 6 (LOGON) and 7 (LAUNCHED) need `jarvis-greeting.ps1` to call back
-and are **not wired in v0.1** — no Windows file is touched. The route
-`POST /api/hook/greeting` exists and works, so adding the callback later
-lights them up with no API change. The UI shows them greyed, and the state
-carries `boot.observable_max` so the panel never implies it can see further
-than it can.
+Trust model is unchanged from `boot-agent.ps1`: the kiosk reaches deck-api
+over loopback and needs no token; anything else needs `DECK_TOKEN` from
+`/etc/flightsim/boot.env`, minted at install. LAN-only.
 
-A boot started any other way — fauxmo not yet repointed, or the script run
-by hand — is **adopted** when its first log line appears, so the panel stays
-honest about boots it did not start.
+## Boot phases
 
-`pi/deck-api/test_phases.py` drives that mapping against the exact strings
-the orchestrator emits. Run it anywhere, no Pi needed.
+| # | Phase | Signal |
+|---|---|---|
+| 1 | TRIGGER | `deck-api` takes the flock |
+| 2 | PROBE | `trigger received — probing workstation state` |
+| 3 | KICK | `sending WOL to …` / `requesting reboot into …` |
+| 4 | PING | `host answers ping but no exporter yet` |
+| 5 | OS UP | `<target> is up — deck online` |
+| 6 | LOGON | greeting task fires — **not wired** |
+| 7 | LAUNCHED | hook POST from Windows — **not wired** |
 
-### Live state, without new exporters
+Phases 1–5 come free from the orchestrator's existing log lines. Phases 6–7
+need `jarvis-greeting.ps1` to gain a callback; nothing on the Windows side is
+touched today. `POST /api/hook/greeting` exists and works, the UI greys those
+nodes out, and the state carries `boot.observable_max` so the panel never
+implies it can see further than it can.
 
-Only the probes the orchestrator already depends on:
+A boot started any other way — fauxmo not yet repointed, or the script run by
+hand — is **adopted** when its first log line appears.
+
+Warm reboot ≈ 30 s · cold boot ≈ 2 min · chained double boot ≈ 3 min.
+
+**Unchanged dead end:** WOL cannot select a GRUB entry, so from full off the
+machine always lands in the saved default.
+
+## Live telemetry
+
+Sampled from the exporters that **already exist** — this project installs
+none of its own:
 
 | Probe | Means |
 |---|---|
 | `:9107` TCP | Windows, and more reliable than `:9106` |
-| `:9106` HTTP | Windows |
-| `:9105` HTTP | Linux |
-| ICMP | the NIC has power, nothing more |
+| `:9106` HTTP | Windows — also the GPU metric source under Windows |
+| `:9105` HTTP | Linux — also the GPU metric source under Linux |
+| ICMP | The NIC has power, nothing more |
+| `/proc`, `/sys` | The Pi's own CPU, temp, memory, uptime |
 
-Pi vitals come from `/proc` and `/sys` directly — no exporter, nothing
-scraped, nothing stored. If `ping` is missing the poller degrades rather
-than dying, and says so on the panel: *"off" and "booting" cannot be told
-apart*.
+deck-api parses the Prometheus text format those exporters already emit and
+keeps **only the latest value**. It stores no series and writes no history.
 
-### Thumb-drive posture
+The two exporters use different metric names — `gpu_temperature_celsius` on
+one, `gpu_temp_c` on the other — and have changed before, so names are
+matched on shape rather than pinned:
 
-- `deck-api` writes state only to `/run/flightdeck/` (tmpfs), rewritten on
-  every change and never persisted.
+| Panel key | Matched against |
+|---|---|
+| `gpu_temp_c` | `gpu.*temp`, `temp.*gpu` |
+| `gpu_util_pct` | `gpu.*util`, `util.*gpu` |
+| `vram_used_bytes` / `vram_total_bytes` | `gpu_memory_used`, `gpu_memory_total`, `vram.*used/total` |
+| `vram_pct` | derived from the two above |
+
+A metric the exporter doesn't publish simply doesn't appear, rather than
+reading zero.
+
+### The rolling window lives in the browser
+
+`deck-ui` keeps a ring buffer per trace — 60 minutes, capped at 1200 points,
+roughly 720 samples per series at a 5 s poll. A few tens of kilobytes of
+floats. It is the only history that exists anywhere in the system, and it
+dies with the page.
+
+Traces redraw only when a genuinely new sample lands, not on the 1 Hz clock
+tick, because the browser is the most expensive process on a 4B.
+
+### Gaps are information
+
+When neither OS answers, deck-api records nothing rather than a zero and the
+trace breaks. On a dual-boot machine that gap *is* the reboot — the same
+event the phase track is narrating. Interpolating across it, or carrying the
+last value forward, would erase the most interesting thing the panel has to
+show.
+
+## UI notes
+
+2560 × 720 at ~180 ppi means a 44 px target is 6 mm. Every touch target is
+≥ 158 px.
+
+- Three fixed columns — **act** (600 px) / **boot then machine** (1100 px) /
+  **fleet** (860 px). The boot controls are never behind a tab; reaching them
+  is what you do while the machine is unusable.
+- Destructive verbs arm on a 1.5 s hold with a fill sweep, not a confirm
+  dialog — a modal on a 720 px-tall ribbon eats the whole screen.
+- State is carried by word and shape as well as hue, so it survives
+  colourblindness and a dim panel.
+- One hue (cyan) for every trace; identity comes from the tile's title.
+  Green/amber/red stay reserved for status. Magenta is the boot affordance
+  and nothing else.
+- Runs under `cage`, not a desktop: one fullscreen surface, no panels,
+  nothing to blank the screen.
+
+## Thumb-drive posture
+
+- deck-api writes state only to `/run/flightdeck/` (tmpfs).
 - `setup-display.sh` enables `tmp.mount`, moving `/tmp` to tmpfs — the
   orchestrator's `/tmp/flightsim-intent` and `/tmp/flightsim-boot.lock` are
   small, frequent writes that have no business on flash with no real wear
   levelling.
 - No TSDB, so nothing writes in a loop.
 
-### Trust model
+## Deliberately absent
 
-Unchanged from `boot-agent.ps1`: the kiosk reaches deck-api over loopback
-and needs no token; anything else needs `DECK_TOKEN` from
-`/etc/flightsim/boot.env`, minted at install. LAN-only, fine behind a home
-router, not something to expose.
+- **Prometheus, Grafana, Loki, long-term retention, historical dashboards.**
+  A TSDB on flash with no real wear levelling corrupts before it dies.
+- **Grafana panels embedded in the kiosk.** On a 4B that costs roughly
+  700 MB more than serving numbers from deck-api and drawing them inline.
+- **New exporters, SMART trend storage, PresentMon, Mac mini telemetry.**
+- **NVMe, and any Pi 5 migration.**
 
-### Known limits in v0.1
+## Layout
+
+```
+pi/display-check.sh          read-only: is the Edge's video + touch sound?
+pi/setup-display.sh          cage + chromium kiosk, mode pinning, /tmp on tmpfs
+pi/setup-deck.sh             installs deck-api, repoints fauxmo at it
+pi/deck-api/deck_api.py      triggers, state, SSE, telemetry sampling
+pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
+pi/deck-api/test_telemetry.py  exporter parsing, both naming schemes, gaps
+pi/deck-ui/                  index.html · deck.css · deck.js · selftest.html
+```
+
+Both test files run anywhere — no Pi and no exporter needed.
+
+## Known limits
 
 - **Abort cannot recall a WOL packet already on the wire.** It kills the
   orchestrator and says so on the panel rather than pretending otherwise.
 - Phases 6–7 are dark until the Windows callback is added.
 - One boot at a time — the orchestrator's own flock still arbitrates, and a
   second trigger is rejected rather than queued.
-
-## Why the panel hangs off the Pi
-
-The workstation is the subject of every control on the screen. A panel
-driven by the workstation goes black exactly when you reboot it, which is
-the one thing it cannot do. The Pi already holds the boot logic, the ssh
-key, and the lock file — it is the only always-on node in the system.
-
-The Edge accepts HDMI 2.0 alongside USB-C DP-alt, and its touch panel is a
-standard USB HID digitizer, so a Pi 5 drives it with micro-HDMI for video
-and USB-A for touch. No vendor software in the path.
-
-## The one refactor everything else rests on
-
-Today `fauxmo` calls `flightsim-boot.sh` directly, so a voice-triggered
-boot is invisible to anything that didn't start it. Insert **`deck-api`**
-on the Pi as the single entry point; `fauxmo`'s `on_cmd` becomes a curl to
-it. The orchestrator script itself is unchanged.
-
-| Endpoint | Does |
-|---|---|
-| `GET /api/state` | Workstation OS, uptime, boot-in-flight phase, per-host rollups |
-| `GET /api/events` | SSE stream of state deltas — phase changes push, no polling lag |
-| `POST /api/boot` | `{target: windows\|linux, intent: sim\|squadrons\|plain\|code}` — takes the flock, records intent, execs the orchestrator |
-| `POST /api/launch` | Target already up: fire greeting + profile via the boot agent's `/launch` |
-| `POST /api/abort` | Release the flock, mark the run abandoned (cannot un-send a WOL packet) |
-| `POST /api/power` | Shut down / sleep a host — needs a `/shutdown` verb in `boot-agent.ps1`, `pmset` over ssh for the Mac |
-| `POST /api/hook/greeting` | Windows reports the greeting spoke and the profile launched |
-
-Same trust model as `boot-agent.ps1`: LAN-bound, shared-token guarded, no
-stored credentials. The kiosk browser reaches it over loopback and needs
-no token.
-
-## Boot phases
-
-The panel renders a seven-phase track. Each phase has something that
-actually reports it:
-
-| # | Phase | Signal |
-|---|---|---|
-| 1 | TRIGGER | `deck-api` takes the flock |
-| 2 | PROBE | `:9105` / `:9106` — which OS answers |
-| 3 | KICK | WOL sent · ssh forced-command · agent reboot |
-| 4 | PING | ICMP — the NIC has power |
-| 5 | OS UP | target exporter answers |
-| 6 | LOGON | greeting task fires |
-| 7 | LAUNCHED | hook POST from Windows |
-
-Phases 1–5 are already observable from the existing script. 6 and 7 are
-why `jarvis-greeting.ps1` gains a two-line callback — without it the panel
-claims "Windows is up" a good minute before the sim is flyable.
-
-Warm reboot ≈ 30 s · cold boot ≈ 2 min · chained double boot ≈ 3 min.
-
-**Unchanged dead end:** WOL cannot select a GRUB entry, so from full off
-the machine always lands in the saved default. The tile should show
-"+1 reboot" rather than implying both targets are equally fast.
-
-## UI notes
-
-2560 × 720 at ~180 ppi means a 44 px target is 6 mm. Every touch target in
-the sketch is ≥ 158 px.
-
-- Three fixed columns — **act** (600 px) / **context** (1100 px) / **fleet**
-  (860 px). The boot controls are never behind a tab; reaching them is what
-  you do while the machine is unusable.
-- Destructive verbs arm on a 1.5 s hold with a fill sweep, not a confirm
-  dialog — a modal on a 720 px-tall ribbon eats the whole screen.
-- State is carried by word and shape as well as hue, so it survives
-  colorblindness and a dim panel.
-- One hue (cyan) for every telemetry trace; identity comes from the card
-  title. Green/amber/red stay reserved for status. Magenta is the boot
-  affordance and nothing else.
-- Run under `cage` (Wayland kiosk compositor), not a desktop. Force the
-  mode with `video=HDMI-A-1:2560x720@60` in `cmdline.txt` if EDID doesn't
-  offer it. Brightness over DDC/CI with `ddcutil` for an evening dim,
-  wake-on-touch.
-
-## Metrics plane
-
-Prometheus, Loki, and Grafana all run **on the Pi**. Hosting the collector
-on the workstation would delete the metrics for every event worth
-measuring — reboots, crashes, thermal shutdowns.
-
-This requires an NVMe HAT or USB SSD on the Pi before anything else in this
-section gets built. A 15 s scrape across six targets kills a microSD card
-in months.
-
-### Exporters
-
-| Host | Port | Exporter | Gives |
-|---|---|---|---|
-| Windows | `:9182` | `windows_exporter` | CPU, memory, logical_disk, net, service, thermalzone, process, os |
-| Windows | `:9835` | `nvidia_gpu_exporter` | Clocks, utilisation, VRAM, power, temp, fan |
-| Windows | `:9106` | *existing* `gpu-exporter.ps1` | **Leave in place** — the "Windows is up" probe |
-| Windows | `:9110` | PresentMon shim (phase 4) | Frametime, 1 % lows during a sim session |
-| Linux | `:9100` | `node_exporter` | CPU, load, memory, filesystem, net, hwmon |
-| Linux | `:9835` | `nvidia_gpu_exporter` or DCGM | Same GPU series as Windows, so one dashboard spans both |
-| Linux | `:9105` | *existing* `ollama-exporter.py` | **Leave in place** — the "Linux is up" probe |
-| Mac mini | `:9100` | `node_exporter` (darwin) | CPU, memory, disk, net — nothing Apple-Silicon-specific |
-| Mac mini | `:9101` | `macmon` → textfile shim | P/E cluster freq, GPU & ANE, package power, thermal pressure |
-| Pi | `:9100` | `node_exporter` + textfile | SoC temp, `vcgencmd` throttle flags, NVMe wear |
-| Pi | `:9115` | `blackbox_exporter` | ICMP + HTTP probes of every host and the WAN |
-| All | `:9633` | `smartctl_exporter` | Drive health, reallocated sectors, SSD life |
-
-The two existing exporters on `:9105`/`:9106` are load-bearing for boot
-detection. Add alongside them; do not migrate the probes.
-
-### Two things dual-boot breaks
-
-**Label so the timeline survives.** Scrape Windows and Linux with the same
-`instance="workstation"` and a distinguishing `os` label, not as two
-unrelated hosts. One CPU panel then reads continuously across a reboot.
-Set *Connect null values: never* so the gap where neither OS was up stays
-visible — that gap is real information.
-
-**Don't alert on a normal reboot.** `up{job="windows"} == 0` fires every
-time you boot into Linux. The meaningful condition is *neither* OS
-answering for longer than a boot takes: alert on `absent()` over the union
-of both jobs with a 10 minute `for:`, and let `deck-api` publish a
-`flightdeck_boot_in_flight` gauge to suppress it outright.
-
-### Dashboards
-
-Provisioned as JSON under `observability/grafana/dashboards/` via file
-provisioning, so rebuilding the Pi restores them. `deck-api` feeds Grafana
-annotations — every boot, launch and shutdown lands as a vertical line,
-which is what makes the sim-session graphs readable.
-
-| Dashboard | Question | Phase |
-|---|---|---|
-| Flight Deck Overview | Is everything alive, what is the workstation doing? Laid out for 2560 × 720 as a kiosk panel | 3 |
-| Workstation — Windows | CPU/GPU/VRAM/thermals/disk/net under load | 3 |
-| Workstation — Linux | Same shape, plus containers / Ollama / builds | 3 |
-| Mac mini | P vs E cluster residency, GPU & ANE, package watts, thermal pressure | 4 |
-| Boot Orchestration | Boot durations, which trigger fired, success rate, where failures stall | 4 |
-| Network & Reachability | Who is up, inter-host RTT, WAN latency and loss | 3 |
-| Storage & SMART | Fullness and drive health everywhere, including the Pi's NVMe | 4 |
-| Sim Session | Per-flight frametime, 1 % lows, GPU curve, session length | 5 |
-| Pi Health | SoC temp, throttle flags, NVMe wear, service uptime | 3 |
-
-## Proposed layout
-
-```
-pi/deck-api/                    boot triggers, state, SSE
-pi/deck-ui/                     the kiosk web app (no build step)
-pi/setup-display.sh             Edge mode, touch, cage + kiosk
-pi/setup-observability.sh       prometheus + grafana + loki on the Pi
-observability/prometheus/       prometheus.yml, alert rules
-observability/grafana/          provisioning + dashboards/*.json
-observability/exporters/        per-OS installers
-windows/, linux/                existing, plus the greeting callback
-```
-
-## Build order
-
-1. **Bring the panel up.** Edge on the Pi at native resolution, touch
-   calibrated, `cage` + browser on a placeholder. De-risks the only real
-   unknown and depends on nothing else.
-2. **`deck-api` and UI v1.** Service, state file, SSE, four boot tiles,
-   live phase tracking. Repoint `fauxmo`. The screen now fully replaces
-   the voice trigger.
-3. **Prometheus, Grafana, core dashboards.** Pi on NVMe, exporters on
-   Windows/Linux/Pi, blackbox probes, five dashboards.
-4. **Mac mini, boot telemetry, greeting hook.** Apple-Silicon exporters,
-   boot events as metrics and annotations, phase 7 made real, Loki.
-5. **Polish.** Frametime capture and the sim-session dashboard, phone
-   alerts, scheduled dimming, hold-to-confirm, shutdown path.
-
-## Open questions
-
-- **Mac mini — Apple Silicon or Intel?** Changes the exporter set
-  completely.
-- **Pi model and storage.** A Pi 4 on microSD drives the screen but should
-  not host Prometheus.
-- **Where does the Edge physically live** — magnet-mounted in the case, or
-  on the desk? Decides whether the Pi moves into the case and how far the
-  two cables run.
-- **Keep GRUB's default as Linux?** Keeping it preserves the
-  Windows → Linux leg; flipping it makes cold sim starts faster and breaks
-  that leg. Only one can be true.
-- **Alerts to the phone?** Worth it mainly for "the Pi itself is unhappy",
-  since it becomes the single point of failure.
+- If `ping` is missing the poller degrades rather than dying, and says so:
+  *"off" and "booting" cannot be told apart*.
 
 ## Verify on arrival
 
-- Edge power draw — give it its own USB-C PD supply rather than pulling
-  from the Pi, which is already budgeting for NVMe.
+- Edge power draw — give it its own USB-C PD supply.
 - That the Pi's EDID read offers 2560 × 720 @ 60 without a forced mode.
-- That the digitizer's coordinate mapping is correct without calibration
-  when the panel is the only output.
+- That the digitizer's coordinate mapping is correct without calibration when
+  the panel is the only output (`selftest.html` reports worst corner offset).
+- Which metric names your `:9105` / `:9106` exporters actually publish —
+  `test_telemetry.py` covers two shapes, but yours are the ones that matter.

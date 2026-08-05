@@ -71,22 +71,44 @@
       <footer class="foot" id="foot">hold to arm · voice triggers land here too</footer>
     </section>
 
-    <!-- ══ centre — what the boot is doing ══ -->
+    <!-- ══ centre — the boot, then the machine ══ -->
     <section class="mid">
       <div class="lbl" id="track-lbl">NO BOOT IN FLIGHT</div>
 
       <div class="track" id="track"><!-- built by deck.js --></div>
 
       <div class="note" id="phase-note">
-        Phases 6–7 need <code>jarvis-greeting.ps1</code> to call back; that is
-        not wired in v0.1, so a run completes at <b>OS UP</b>.
+        Phases 6–7 need <code>jarvis-greeting.ps1</code> to call back; not wired
+        yet, so a run completes at <b>OS UP</b>.
+      </div>
+
+      <div class="stats">
+        <div class="stat" data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12">
+          <div class="k">GPU TEMP</div><div class="v">—</div>
+          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="stat" data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100">
+          <div class="k">GPU UTIL</div><div class="v">—</div>
+          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="stat" data-key="ws.vram_pct" data-unit="%" data-lo="0" data-hi="100">
+          <div class="k">VRAM</div><div class="v">—</div>
+          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="chart">
+        <div class="lbl" id="chart-lbl">GPU TEMPERATURE · °C</div>
+        <svg id="chart" class="spark wide" viewBox="0 0 1020 132"
+             preserveAspectRatio="none"
+             data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12"></svg>
       </div>
 
       <div class="lbl">EVENTS</div>
       <div class="log" id="log"></div>
     </section>
 
-    <!-- ══ right — the two hosts we can see without exporters ══ -->
+    <!-- ══ right — live status for what we can actually see ══ -->
     <section class="right">
       <div class="lbl">FLEET</div>
 
@@ -96,6 +118,8 @@
           <span class="h-pill" id="ws-pill">—</span>
         </div>
         <div class="h-rows" id="ws-rows"></div>
+        <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
+             data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
       </div>
 
       <div class="host" id="host-pi">
@@ -104,11 +128,13 @@
           <span class="h-pill ok">ONLINE</span>
         </div>
         <div class="h-rows" id="pi-rows"></div>
+        <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
+             data-key="pi.cpu_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
       </div>
 
       <div class="bar">
         <span id="conn">connecting…</span>
-        <span>v0.1 · no metrics stack</span>
+        <span id="win">60 min · in memory</span>
       </div>
     </section>
 

@@ -138,14 +138,28 @@ or by hand all show up the same way.
 
 Loopback needs no token; anything else needs `DECK_TOKEN` from
 `/etc/flightsim/boot.env`. Phases 6–7 (LOGON, LAUNCHED) stay dark until
-`jarvis-greeting.ps1` gains a callback — v0.1 touches no Windows file, so a
-run completes at **OS UP**.
+`jarvis-greeting.ps1` gains a callback — nothing on the Windows side is
+touched, so a run completes at **OS UP**.
 
-There is deliberately no Prometheus, Grafana, Loki, or new exporter: this
-targets a Pi 4B with 4 GB and a USB thumb drive, and a TSDB on flash with no
-real wear levelling corrupts before it dies. State lives in tmpfs. See
-[docs/DESIGN.md](docs/DESIGN.md) for the full picture and what a later
-metrics plane would look like.
+### Live telemetry, and only live
+
+GPU temperature, utilisation and VRAM come from the exporters that already
+answer on `:9105` / `:9106` — this project installs none of its own. deck-api
+parses what they emit and keeps **only the latest value**; the rolling
+60-minute window behind the sparklines lives in the browser's memory and dies
+with the page.
+
+There is deliberately no Prometheus, Grafana, Loki, or long-term retention.
+This targets the existing Pi 4B with 4 GB and a USB thumb drive, and a TSDB
+on flash with no real wear levelling corrupts before it dies. deck-api state
+lives in tmpfs and `/tmp` is moved there too, so nothing writes in a loop.
+
+When neither OS answers, the trace breaks rather than reading zero — on a
+dual-boot machine that gap *is* the reboot.
+
+Both `pi/deck-api/test_phases.py` and `test_telemetry.py` run anywhere, with
+no Pi and no exporter needed. See [docs/DESIGN.md](docs/DESIGN.md) for the
+full picture.
 
 ## Configuration
 

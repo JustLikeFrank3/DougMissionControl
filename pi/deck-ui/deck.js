@@ -111,6 +111,164 @@
     });
   }
 
+  /* ── rolling window ───────────────────────────────────────────────────────
+     Lives here and nowhere else. deck-api sends the latest reading and keeps
+     no history; this buffer is the only history that exists, and it dies with
+     the page. Nothing is written to the Pi's thumb drive. */
+
+  var WINDOW_S = 3600;          // 60 min
+  var MAX_PTS = 1200;           // hard cap regardless of sample rate
+  var series = Object.create(null);
+  var lastSampleTs = 0;
+
+  // Which traces the page actually shows, read off the DOM once.
+  var TRACKED = [].map.call(document.querySelectorAll('[data-key]'), function (el) {
+    return el.dataset.key;
+  }).filter(function (v, i, a) { return a.indexOf(v) === i; });
+
+  function record(key, t, v) {
+    var a = series[key] || (series[key] = []);
+    a.push({ t: t, v: (typeof v === 'number' && isFinite(v)) ? v : null });
+    var cut = t - WINDOW_S;
+    var drop = 0;
+    while (drop < a.length && a[drop].t < cut) drop++;
+    if (drop) a.splice(0, drop);
+    if (a.length > MAX_PTS) a.splice(0, a.length - MAX_PTS);
+  }
+
+  function pushSamples(s) {
+    var tel = s.telemetry || {};
+    if (!tel.ts || tel.ts === lastSampleTs) return false;
+    lastSampleTs = tel.ts;
+    TRACKED.forEach(function (key) {
+      var parts = key.split('.');
+      var src = tel[parts[0]] || {};
+      // A key that is absent this cycle is a genuine gap — the machine was
+      // off or mid-reboot — not a zero and not a carried-forward value.
+      record(key, tel.ts, parts[1] in src ? src[parts[1]] : null);
+    });
+    return true;
+  }
+
+  function latest(key) {
+    var a = series[key];
+    if (!a) return null;
+    for (var i = a.length - 1; i >= 0; i--) if (a[i].v !== null) return a[i];
+    return null;
+  }
+
+  /* ── sparkline ────────────────────────────────────────────────────────── */
+
+  function drawSpark(svg) {
+    var key = svg.dataset.key;
+    var data = series[key] || [];
+    var vb = svg.viewBox.baseVal;
+    var W = vb.width, H = vb.height;
+    var wide = svg.classList.contains('wide');
+    var padL = wide ? 34 : 0, padT = wide ? 16 : 4, padB = wide ? 6 : 4;
+    var padR = wide ? 62 : 4;
+
+    var pts = data.filter(function (p) { return p.v !== null; });
+    if (!pts.length) {
+      svg.innerHTML = '<text x="' + (W / 2) + '" y="' + (H / 2 + 4) +
+        '" text-anchor="middle">no data — exporter not answering</text>';
+      return;
+    }
+
+    // x always spans the full window, so a gap reads as a gap rather than
+    // the remaining data stretching to fill the box.
+    var now = Date.now() / 1000;
+    var t0 = now - WINDOW_S;
+
+    var lo = svg.dataset.lo !== undefined ? Number(svg.dataset.lo) : null;
+    var hi = svg.dataset.hi !== undefined ? Number(svg.dataset.hi) : null;
+    if (lo === null || hi === null) {
+      var vs = pts.map(function (p) { return p.v; });
+      lo = Math.min.apply(null, vs);
+      hi = Math.max.apply(null, vs);
+      var span = Number(svg.dataset.minSpan || 1);
+      if (hi - lo < span) {                    // don't dramatise flat data
+        var mid = (hi + lo) / 2;
+        lo = mid - span / 2; hi = mid + span / 2;
+      }
+      var pad = (hi - lo) * 0.12;
+      lo -= pad; hi += pad;
+    }
+
+    var X = function (t) { return padL + (W - padL - padR) * Math.max(0, Math.min(1, (t - t0) / WINDOW_S)); };
+    var Y = function (v) { return padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1)); };
+
+    // Split into contiguous runs so gaps break the line.
+    var runs = [], cur = [];
+    data.forEach(function (p) {
+      if (p.v === null) { if (cur.length) { runs.push(cur); cur = []; } }
+      else cur.push(p);
+    });
+    if (cur.length) runs.push(cur);
+
+    var out = [];
+    if (wide) {
+      [0.5, 0].forEach(function (f) {
+        var y = padT + (H - padT - padB) * f;
+        out.push('<path class="sk-g" d="M' + padL + ' ' + y.toFixed(1) +
+                 'H' + (W - padR) + '"/>');
+      });
+      out.push('<text x="0" y="' + (padT + 10) + '">' + Math.round(hi) + '</text>');
+      out.push('<text x="0" y="' + (H - padB) + '">' + Math.round(lo) + '</text>');
+    }
+
+    runs.forEach(function (run) {
+      var d = run.map(function (p, i) {
+        return (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p.v).toFixed(1);
+      }).join('');
+      if (run.length > 1) {
+        var base = (H - padB).toFixed(1);
+        out.push('<path class="sk-a" d="' + d +
+                 'L' + X(run[run.length - 1].t).toFixed(1) + ' ' + base +
+                 'L' + X(run[0].t).toFixed(1) + ' ' + base + 'Z"/>');
+      }
+      out.push('<path class="sk-l" d="' + d + '"/>');
+    });
+
+    var last = pts[pts.length - 1];
+    var fresh = (now - last.t) < 30;
+    if (fresh) {
+      out.push('<circle class="sk-d" cx="' + X(last.t).toFixed(1) +
+               '" cy="' + Y(last.v).toFixed(1) + '" r="' + (wide ? 4 : 3) + '"/>');
+    }
+    if (wide) {
+      out.push('<text class="now" x="' + (W - padR + 8) + '" y="' +
+               Y(last.v).toFixed(1) + '" dy="6">' +
+               fmtVal(last.v, svg.dataset.unit) + '</text>');
+    }
+
+    svg.innerHTML = out.join('');
+  }
+
+  function fmtVal(v, unit) {
+    if (v === null || v === undefined) return '—';
+    var s = Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
+    return s + (unit ? ' ' + unit : '');
+  }
+
+  function drawAllSparks() {
+    [].forEach.call(document.querySelectorAll('svg.spark'), drawSpark);
+
+    [].forEach.call(document.querySelectorAll('.stat'), function (el) {
+      var p = latest(el.dataset.key);
+      var v = el.querySelector('.v');
+      var stale = !p || (Date.now() / 1000 - p.t) > 30;
+      v.className = 'v' + (stale ? ' stale' : '');
+      v.innerHTML = p
+        ? (Math.abs(p.v) >= 100 ? Math.round(p.v) : Math.round(p.v * 10) / 10) +
+          '<span class="u">' + (el.dataset.unit || '') + '</span>'
+        : '—';
+    });
+
+    var mins = Math.round(WINDOW_S / 60);
+    $('win').textContent = mins + ' min · in memory';
+  }
+
   /* ── render ───────────────────────────────────────────────────────────── */
   var OS_LOOK = {
     windows: { pill: 'ONLINE',  cls: 'ok',   os: 'WINDOWS' },
@@ -123,6 +281,14 @@
   function render(s) {
     state = s;
     observableMax = (s.boot && s.boot.observable_max) || 5;
+
+    // Traces redraw only when a genuinely new sample lands, not on the 1 Hz
+    // clock tick — the Pi 4B has better things to do with its CPU.
+    if (pushSamples(s)) drawAllSparks();
+
+    var src = (s.telemetry && s.telemetry.source) || null;
+    $('chart-lbl').textContent = 'GPU TEMPERATURE · °C' +
+      (src ? '  ·  ' + src : '  ·  no exporter answering');
 
     var ws = s.workstation || {};
     var boot = s.boot || {};
@@ -172,8 +338,8 @@
 
     var pi = s.pi || {};
     rows($('pi-rows'), [
+      ['cpu', pi.cpu_pct != null ? pi.cpu_pct + ' %' : '—'],
       ['soc temp', pi.temp_c != null ? pi.temp_c + ' °C' : '—'],
-      ['load', pi.load != null ? pi.load.toFixed(2) : '—'],
       ['memory', pi.mem_pct != null ? pi.mem_pct + ' %' : '—'],
       ['uptime', pi.uptime != null ? fmtAgo(Date.now() / 1000 - pi.uptime) : '—']
     ]);

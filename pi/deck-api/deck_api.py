@@ -138,7 +138,10 @@ class Deck:
                      "phase": 0, "phase_name": "IDLE", "started": None,
                      "elapsed": 0, "result": None, "observable_max": PHASE_MAX_V01},
             "last_boot": None,
-            "pi": {"temp_c": None, "load": None, "mem_pct": None, "uptime": None},
+            "pi": {"temp_c": None, "load": None, "mem_pct": None,
+                   "uptime": None, "cpu_pct": None},
+            # Latest sample only — no history is kept anywhere on the Pi.
+            "telemetry": {"ts": None, "source": None, "ws": {}, "pi": {}},
             "events": [],
             "profiles": PROFILES,
             "server_time": time.time(),
@@ -283,9 +286,111 @@ def boot_lock_held() -> bool:
         return False
 
 
+# ── live telemetry ────────────────────────────────────────────────────────
+#
+# Sampled from the exporters that ALREADY exist (:9105 under Linux, :9106
+# under Windows) — this project installs none of its own. Values are passed
+# through to the panel as the latest reading and nothing more: deck-api keeps
+# no history, writes no series, and stores nothing on disk. The rolling
+# window behind the sparklines lives in the browser's memory and dies with
+# the page. Flight Deck is a control surface, not an observability platform.
+
+PROM_LINE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+0-9.eE]+|NaN)$")
+
+# Exporter metric names differ between the two exporters and have changed
+# before, so match on shape rather than pinning exact names.
+TELEMETRY_KEYS = [
+    ("gpu_temp_c",       [r"gpu.*temp", r"temp.*gpu"]),
+    ("gpu_util_pct",     [r"gpu.*util", r"util.*gpu"]),
+    ("vram_used_bytes",  [r"gpu_memory_used", r"vram.*used"]),
+    ("vram_total_bytes", [r"gpu_memory_total", r"vram.*total"]),
+    ("cpu_pct",          [r"cpu.*(util|percent|pct)"]),
+    ("mem_pct",          [r"mem.*(percent|pct)"]),
+]
+
+
+def parse_prom_text(text: str) -> dict:
+    """Prometheus exposition format -> {metric_name: value}.
+
+    Labels are dropped and the first sample of a name wins. That is lossy in
+    general and exactly right here: the panel wants one live number per box,
+    not a series.
+    """
+    out = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = PROM_LINE.match(line)
+        if not m:
+            continue
+        name, _labels, val = m.groups()
+        if name in out:
+            continue
+        try:
+            out[name] = float(val)
+        except ValueError:
+            pass
+    return out
+
+
+def canonicalise(raw: dict) -> dict:
+    """Map whatever the exporter called things onto the panel's few keys."""
+    found = {}
+    for key, patterns in TELEMETRY_KEYS:
+        for pat in patterns:
+            hit = next((n for n in raw if re.search(pat, n, re.I)), None)
+            if hit is not None:
+                found[key] = raw[hit]
+                break
+    used, total = found.get("vram_used_bytes"), found.get("vram_total_bytes")
+    if used is not None and total:
+        found["vram_pct"] = round(100 * used / total, 1)
+    return found
+
+
+def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
+    """One scrape of the exporter belonging to whichever OS is up."""
+    if os_now == "windows":
+        url, src = f"http://{WS_LAN}:{WIN_PORT}/", f"windows :{WIN_PORT}"
+    elif os_now == "linux":
+        url, src = f"http://{WS_LAN}:{LINUX_PORT}/", f"linux :{LINUX_PORT}"
+    else:
+        return {}, None  # no OS up: a real gap, and the panel shows it as one
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            body = r.read(512_000).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return {}, None
+    return canonicalise(parse_prom_text(body)), src
+
+
+_prev_cpu: tuple[int, int] | None = None
+
+
+def pi_cpu_pct() -> float | None:
+    """Busy percentage since the previous call, from /proc/stat deltas."""
+    global _prev_cpu
+    try:
+        fields = Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
+        vals = [int(x) for x in fields]
+    except (OSError, ValueError, IndexError):
+        return None
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+    total = sum(vals)
+    prev, _prev_cpu = _prev_cpu, (total, idle)
+    if not prev:
+        return None
+    d_total, d_idle = total - prev[0], idle - prev[1]
+    if d_total <= 0:
+        return None
+    return round(100 * (1 - d_idle / d_total), 1)
+
+
 def read_pi_metrics() -> dict:
     """Local /proc reads. Not an exporter, and nothing is scraped or stored."""
-    m = {"temp_c": None, "load": None, "mem_pct": None, "uptime": None}
+    m = {"temp_c": None, "load": None, "mem_pct": None, "uptime": None,
+         "cpu_pct": pi_cpu_pct()}
     try:
         m["temp_c"] = round(
             int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000, 1)
@@ -340,6 +445,7 @@ def poll_once(prev_os):
         os_now = "off"
 
     changed = os_now != prev_os
+    ws_telemetry, source = fetch_telemetry(os_now)
 
     def apply(s):
         w = s["workstation"]
@@ -348,6 +454,9 @@ def poll_once(prev_os):
         w["os"] = os_now
         w["agent"] = agent
         s["pi"] = read_pi_metrics()
+        # Latest reading only. The browser holds the rolling window.
+        s["telemetry"] = {"ts": time.time(), "source": source,
+                          "ws": ws_telemetry, "pi": s["pi"]}
 
     DECK.mutate(apply)
 
