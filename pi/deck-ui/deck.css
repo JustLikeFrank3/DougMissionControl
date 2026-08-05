@@ -1,0 +1,170 @@
+/* Flight Deck v0.1 — 2560 x 720 on the XENEON Edge.
+   Authored at true panel pixels; #fit scales it down on a laptop so the
+   layout can be checked without the hardware.
+
+   Palette is avionics EFIS, which is the vernacular this thing lives in:
+   magenta is the target the system is flying toward and marks every boot
+   affordance; cyan is reference data; green/amber/red stay reserved for
+   state and are never used decoratively. */
+
+:root {
+  --bg:   #0b0f15;
+  --pan:  #131a24;
+  --pan2: #18202c;
+  --ln:   #232e3e;
+  --fg:   #e2e9f2;
+  --mut:  #7f8da2;
+  --acc:  #d95bb8;
+  --cy:   #56cfe1;
+  --gr:   #4fc48a;
+  --am:   #e6a339;
+  --rd:   #e2564d;
+
+  --mono: ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#fit { width: 100vw; height: 100vh; overflow: hidden; }
+
+#deck {
+  width: 2560px; height: 720px;
+  transform-origin: 0 0;
+  display: grid; grid-template-columns: 600px 1100px 860px;
+}
+
+.rail  { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.mid   { padding: 20px 24px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 14px; }
+.right { padding: 20px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 12px; }
+
+/* ── left rail ─────────────────────────────────────────────────────────── */
+
+.eyebrow { display: flex; justify-content: space-between; align-items: baseline; }
+.eyebrow b { font-size: 19px; font-weight: 600; letter-spacing: .3em; }
+.eyebrow span { font-size: 26px; color: var(--mut); }
+
+.state { background: var(--pan); border: 1px solid var(--ln); padding: 18px 20px; }
+.pill {
+  display: inline-block; font-size: 15px; letter-spacing: .18em;
+  padding: 4px 10px; border: 1px solid currentColor; color: var(--mut);
+}
+.pill.ok    { color: var(--gr); }
+.pill.busy  { color: var(--am); }
+.pill.off   { color: var(--mut); }
+.pill.bad   { color: var(--rd); }
+.state .os   { font-size: 52px; line-height: 1; margin-top: 12px; letter-spacing: -.02em; }
+.state .meta { font-size: 17px; color: var(--mut); margin-top: 12px; }
+
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.tile, .abort {
+  position: relative; overflow: hidden;
+  background: var(--pan); border: 1px solid var(--ln); color: var(--fg);
+  font-family: inherit; text-align: left; padding: 16px 18px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;
+  cursor: pointer;
+}
+.tile { height: 158px; }                 /* ~22 mm at this panel's ~180 ppi */
+.abort { height: 96px; border-color: var(--rd); color: var(--rd); }
+
+.tile .glyph {
+  position: absolute; top: 14px; right: 14px; width: 34px; height: 34px;
+  fill: none; stroke-width: 1.6; stroke-linejoin: round;
+}
+.tile[data-accent="acc"] .glyph { stroke: var(--acc); }
+.tile[data-accent="cy"]  .glyph { stroke: var(--cy); }
+.tile[data-accent="mut"] .glyph { stroke: var(--mut); }
+
+.t-name { font-size: 26px; letter-spacing: .02em; }
+.t-sub  { font-size: 16px; color: var(--mut); }
+
+.tile.arming { border-color: var(--acc); }
+.abort.arming { border-color: var(--rd); }
+
+/* the fill sweep that replaces a confirm dialog — a modal on a 720px-tall
+   ribbon would eat the whole screen */
+.hold {
+  position: absolute; left: 0; bottom: 0; height: 5px; width: 0;
+  background: var(--acc); transition: width 60ms linear;
+}
+.abort .hold { background: var(--rd); }
+
+.tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
+
+.foot { font-size: 15px; color: var(--mut); margin-top: auto; }
+
+/* ── centre ────────────────────────────────────────────────────────────── */
+
+.lbl { font-size: 14px; letter-spacing: .16em; color: var(--mut); }
+
+.track { display: flex; align-items: flex-start; }
+
+.node { flex: 1; display: flex; flex-direction: column; align-items: center;
+        position: relative; }
+.node::before {
+  content: ""; position: absolute; top: 7px; left: -50%; width: 100%; height: 2px;
+  background: var(--ln);
+}
+.node:first-child::before { display: none; }
+.node.done::before, .node.now::before { background: var(--acc); }
+
+.node .dot {
+  width: 16px; height: 16px; border-radius: 50%; position: relative; z-index: 1;
+  background: var(--bg); border: 2px solid var(--ln);
+}
+.node.done .dot { background: var(--acc); border-color: var(--acc); }
+.node.now  .dot { border-color: var(--acc); border-width: 3px; }
+.node.fail .dot { background: var(--rd); border-color: var(--rd); }
+
+.node .n { font-size: 13px; margin-top: 10px; letter-spacing: .06em; }
+.node .s { font-size: 12px; color: var(--mut); margin-top: 3px; text-align: center; }
+.node.pending .n, .node.pending .s { opacity: .45; }
+
+.note { font-size: 13px; color: var(--mut); line-height: 1.6; }
+.note code { color: var(--cy); }
+.note b { color: var(--fg); font-weight: 400; }
+
+.log { font-size: 14px; line-height: 1.8; color: var(--mut); overflow: hidden; flex: 1; }
+.log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .t { color: var(--fg); }
+.log .src { color: var(--cy); }
+.log .warn .src { color: var(--am); }
+.log .ok .src { color: var(--gr); }
+
+/* ── right ─────────────────────────────────────────────────────────────── */
+
+.host {
+  background: var(--pan); border: 1px solid var(--ln); padding: 14px 16px; flex: 1;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.h-top { display: flex; justify-content: space-between; align-items: center; }
+.h-name { font-size: 21px; letter-spacing: .04em; }
+.h-pill { font-size: 13px; letter-spacing: .14em; padding: 3px 8px;
+          border: 1px solid currentColor; color: var(--mut); }
+.h-pill.ok   { color: var(--gr); }
+.h-pill.busy { color: var(--am); }
+.h-pill.off  { color: var(--mut); }
+
+.h-rows { display: flex; flex-direction: column; gap: 6px; font-size: 16px; }
+.h-rows .row { display: flex; justify-content: space-between; }
+.h-rows .k { color: var(--mut); }
+.h-rows .v { color: var(--fg); }
+
+.bar { display: flex; justify-content: space-between; font-size: 14px; color: var(--mut); }
+.bar .live { color: var(--gr); }
+.bar .dead { color: var(--rd); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hold { transition: none; }
+}

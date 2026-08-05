@@ -52,6 +52,14 @@ windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, to
 windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
 windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting
+
+Flight Deck — the touchscreen front-end (v0.1):
+pi/display-check.sh      read-only: is the XENEON Edge's video + touch sound?
+pi/setup-display.sh      cage + chromium kiosk on the Edge, mode pinning
+pi/setup-deck.sh         installs deck-api, repoints fauxmo at it
+pi/deck-api/deck_api.py  one entry point for every trigger; state + SSE
+pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
+pi/deck-ui/              the panel itself (index/deck.css/deck.js) + selftest.html
 ```
 
 ## One-time setup (in this order)
@@ -99,6 +107,45 @@ to the workstation's Linux boot. Substitute your own throughout.
    (they appear under Plugs). Then More → Routines → **+** → When:
    *Voice* → your phrase → Action 1 *Alexa Says* (your Jarvis line) →
    Action 2 *Smart Home* → the device → **On**.
+
+## Flight Deck — the touchscreen (v0.1)
+
+A Corsair XENEON Edge (2560 × 720, HDMI + USB HID touch) on the Pi, giving
+the same four triggers a physical panel — plus the thing voice cannot: a
+live picture of the ninety seconds after you ask. It hangs off the Pi rather
+than the workstation, because the workstation is the subject of every
+control on it.
+
+```
+./pi/display-check.sh          # prove video + touch; fix every ✗ before continuing
+sudo ./pi/setup-display.sh     # cage + chromium kiosk, opens the touch self-test
+sudo ./pi/setup-deck.sh        # deck-api on :8088, repoints fauxmo, real UI
+```
+
+`flightsim-boot.sh` is **not modified**. `deck-api` triggers it exactly as
+fauxmo always has and derives boot phases by following the script's own
+`journalctl -t flightsim-boot` output, so a boot started by voice, by touch,
+or by hand all show up the same way.
+
+| | |
+|---|---|
+| `GET /api/state` | everything the panel renders |
+| `GET /api/events` | the same, streamed over SSE |
+| `POST /api/boot` | `{"intent":"sim\|squadrons\|plain\|code"}` |
+| `POST /api/launch` | target already up — fire greeting + profile |
+| `POST /api/abort` | kill an in-flight run |
+| `POST /api/hook/greeting` | for the Windows callback; not wired in v0.1 |
+
+Loopback needs no token; anything else needs `DECK_TOKEN` from
+`/etc/flightsim/boot.env`. Phases 6–7 (LOGON, LAUNCHED) stay dark until
+`jarvis-greeting.ps1` gains a callback — v0.1 touches no Windows file, so a
+run completes at **OS UP**.
+
+There is deliberately no Prometheus, Grafana, Loki, or new exporter: this
+targets a Pi 4B with 4 GB and a USB thumb drive, and a TSDB on flash with no
+real wear levelling corrupts before it dies. State lives in tmpfs. See
+[docs/DESIGN.md](docs/DESIGN.md) for the full picture and what a later
+metrics plane would look like.
 
 ## Configuration
 

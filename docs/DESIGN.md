@@ -4,8 +4,126 @@ Proposal for a Corsair Xeneon Edge touch panel that fronts the boot
 orchestration in this repo, plus a Prometheus/Grafana metrics plane
 covering the workstation (both OSes), a Mac mini, and the Pi itself.
 
-Nothing here is built. The rendered sketch, with the panel mockup and the
-architecture diagrams, is [`dashboard-sketch.html`](dashboard-sketch.html).
+The rendered sketch, with the panel mockup and the architecture diagrams,
+is [`dashboard-sketch.html`](dashboard-sketch.html).
+
+> ## What v0.1 actually builds
+>
+> **Built and in this repo** — see [Flight Deck v0.1](#flight-deck-v01-built)
+> below and the `pi/` directory:
+>
+> 1. `pi/display-check.sh` + `pi/setup-display.sh` — prove and then serve the
+>    XENEON Edge (cage + chromium kiosk), with a touch self-test page.
+> 2. `pi/deck-api/deck_api.py` — wraps the existing orchestrator. It does not
+>    modify `flightsim-boot.sh`; it shells out to it exactly as fauxmo does
+>    and follows its journald output to derive boot phases.
+> 3. `pi/deck-ui/` — the boot-state UI.
+>
+> **Deliberately not built**, on a Pi 4B / 4 GB / thumb-drive target:
+> Prometheus, Grafana, Loki, any new exporter, NVMe, a Pi 5 migration, Mac
+> mini telemetry, SMART monitoring, and PresentMon. Dropping the TSDB is what
+> makes the thumb drive a non-issue — nothing in v0.1 writes to it in a loop.
+> The metrics plane described further down remains a proposal.
+>
+> **Revised by that hardware:** the panel does *not* embed Grafana. On a Pi 4B
+> the browser is the most expensive process on the box, and rendering Grafana
+> panels in it costs ~700 MB more than serving numbers from `deck-api` and
+> drawing them inline. Grafana, if it ever arrives, is the desk-and-phone
+> surface.
+
+## Flight Deck v0.1 (built)
+
+Target: the existing Pi 4B, 4 GB RAM, booting off a 64 GB USB thumb drive.
+
+### Install order
+
+Each step is provable on its own, and each one de-risks the next.
+
+```
+# 1. prove video + touch before anything is built on top
+./pi/display-check.sh                     # read-only; fix every ✗ first
+sudo ./pi/setup-display.sh                # cage + chromium + kiosk unit
+                                          # touch all four corner marks -> PASS
+# 2. wrap the orchestrator
+sudo ./pi/setup-deck.sh                   # deck-api :8088, repoints fauxmo,
+                                          # repoints the kiosk at the real UI
+```
+
+`setup-display.sh --force-mode` pins `video=HDMI-A-1:2560x720@60` into
+`cmdline.txt` if EDID does not offer the mode. It backs the file up and
+reverts if the edit would have added a second line — a two-line
+`cmdline.txt` is an unbootable Pi.
+
+### How deck-api learns what the orchestrator is doing
+
+`flightsim-boot.sh` is **unmodified**. deck-api triggers it the same way
+fauxmo always has — `FLIGHT_INTENT=<intent> flightsim-boot.sh <target> bg` —
+and then reads phases out of the script's own journald output
+(`journalctl -t flightsim-boot -f`), mapping its existing log lines:
+
+| Log line the orchestrator already emits | Phase |
+|---|---|
+| *(POST arrives at deck-api)* | 1 TRIGGER |
+| `trigger received — probing workstation state` | 2 PROBE |
+| `no response — sending WOL to …` / `requesting reboot into …` | 3 KICK |
+| `host answers ping but no exporter yet` | 4 PING |
+| `<target> is up — deck online` | 5 OS UP |
+| `gave up after …s` | run marked failed |
+
+Phases 6 (LOGON) and 7 (LAUNCHED) need `jarvis-greeting.ps1` to call back
+and are **not wired in v0.1** — no Windows file is touched. The route
+`POST /api/hook/greeting` exists and works, so adding the callback later
+lights them up with no API change. The UI shows them greyed, and the state
+carries `boot.observable_max` so the panel never implies it can see further
+than it can.
+
+A boot started any other way — fauxmo not yet repointed, or the script run
+by hand — is **adopted** when its first log line appears, so the panel stays
+honest about boots it did not start.
+
+`pi/deck-api/test_phases.py` drives that mapping against the exact strings
+the orchestrator emits. Run it anywhere, no Pi needed.
+
+### Live state, without new exporters
+
+Only the probes the orchestrator already depends on:
+
+| Probe | Means |
+|---|---|
+| `:9107` TCP | Windows, and more reliable than `:9106` |
+| `:9106` HTTP | Windows |
+| `:9105` HTTP | Linux |
+| ICMP | the NIC has power, nothing more |
+
+Pi vitals come from `/proc` and `/sys` directly — no exporter, nothing
+scraped, nothing stored. If `ping` is missing the poller degrades rather
+than dying, and says so on the panel: *"off" and "booting" cannot be told
+apart*.
+
+### Thumb-drive posture
+
+- `deck-api` writes state only to `/run/flightdeck/` (tmpfs), rewritten on
+  every change and never persisted.
+- `setup-display.sh` enables `tmp.mount`, moving `/tmp` to tmpfs — the
+  orchestrator's `/tmp/flightsim-intent` and `/tmp/flightsim-boot.lock` are
+  small, frequent writes that have no business on flash with no real wear
+  levelling.
+- No TSDB, so nothing writes in a loop.
+
+### Trust model
+
+Unchanged from `boot-agent.ps1`: the kiosk reaches deck-api over loopback
+and needs no token; anything else needs `DECK_TOKEN` from
+`/etc/flightsim/boot.env`, minted at install. LAN-only, fine behind a home
+router, not something to expose.
+
+### Known limits in v0.1
+
+- **Abort cannot recall a WOL packet already on the wire.** It kills the
+  orchestrator and says so on the panel rather than pretending otherwise.
+- Phases 6–7 are dark until the Windows callback is added.
+- One boot at a time — the orchestrator's own flock still arbitrates, and a
+  second trigger is rejected rather than queued.
 
 ## Why the panel hangs off the Pi
 

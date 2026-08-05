@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Flight Deck — panel self-test</title>
+<style>
+  :root {
+    --bg:#0b0f15; --pan:#131a24; --ln:#232e3e;
+    --fg:#e2e9f2; --mut:#7f8da2;
+    --acc:#d95bb8; --cy:#56cfe1; --gr:#4fc48a; --am:#e6a339; --rd:#e2564d;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--fg);
+    font-family:var(--mono); font-variant-numeric:tabular-nums;
+    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
+    touch-action:none;
+  }
+  #stage { position:relative; width:100vw; height:100vh; }
+
+  /* corner registration targets */
+  .mark {
+    position:absolute; width:150px; height:150px; border:2px solid var(--ln);
+    display:grid; place-items:center; transition:border-color .12s, background .12s;
+  }
+  .mark::before, .mark::after {
+    content:""; position:absolute; background:var(--ln);
+  }
+  .mark::before { width:100%; height:1px; }
+  .mark::after  { width:1px; height:100%; }
+  .mark span { font-size:13px; color:var(--mut); letter-spacing:.14em; z-index:1;
+               background:var(--bg); padding:2px 6px; }
+  .mark.hit { border-color:var(--gr); background:rgba(79,196,138,.10); }
+  .mark.hit span { color:var(--gr); }
+  #m-tl { top:0; left:0; }
+  #m-tr { top:0; right:0; }
+  #m-bl { bottom:0; left:0; }
+  #m-br { bottom:0; right:0; }
+
+  /* readout */
+  #panel {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:940px; background:var(--pan); border:1px solid var(--ln); padding:22px 26px;
+  }
+  h1 { font-size:19px; font-weight:600; letter-spacing:.22em; margin-bottom:4px; }
+  .sub { font-size:13px; color:var(--mut); margin-bottom:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 0; border-bottom:1px solid var(--ln); }
+  td:first-child { color:var(--mut); width:210px; letter-spacing:.06em; }
+  td:last-child { text-align:right; }
+  tr:last-child td { border-bottom:0; }
+  .ok   { color:var(--gr); }
+  .bad  { color:var(--rd); }
+  .wait { color:var(--am); }
+  #verdict {
+    margin-top:16px; padding-top:14px; border-top:1px solid var(--ln);
+    font-size:16px; letter-spacing:.06em;
+  }
+  #hint { font-size:12.5px; color:var(--mut); margin-top:8px; }
+
+  /* live touch dots */
+  .dot {
+    position:absolute; width:74px; height:74px; margin:-37px 0 0 -37px;
+    border:2px solid var(--acc); border-radius:50%; pointer-events:none;
+    display:grid; place-items:center;
+  }
+  .dot i { position:absolute; width:5px; height:5px; background:var(--acc); border-radius:50%; }
+  .dot b { position:absolute; top:78px; font-size:12px; font-weight:400; color:var(--acc); white-space:nowrap; }
+  #trail { position:absolute; inset:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="trail"></canvas>
+
+  <div class="mark" id="m-tl"><span>TL</span></div>
+  <div class="mark" id="m-tr"><span>TR</span></div>
+  <div class="mark" id="m-bl"><span>BL</span></div>
+  <div class="mark" id="m-br"><span>BR</span></div>
+
+  <div id="panel">
+    <h1>PANEL SELF-TEST</h1>
+    <div class="sub">Touch each of the four corner marks. Drag anywhere to check tracking.</div>
+    <table>
+      <tr><td>viewport</td>          <td id="r-view">—</td></tr>
+      <tr><td>screen</td>            <td id="r-screen">—</td></tr>
+      <tr><td>device pixel ratio</td><td id="r-dpr">—</td></tr>
+      <tr><td>input type</td>        <td id="r-type" class="wait">awaiting touch</td></tr>
+      <tr><td>corners registered</td><td id="r-corners" class="wait">0 / 4</td></tr>
+      <tr><td>max simultaneous</td>  <td id="r-multi">0</td></tr>
+      <tr><td>worst corner offset</td><td id="r-offset">—</td></tr>
+    </table>
+    <div id="verdict" class="wait">Waiting for input…</div>
+    <div id="hint">Offset is the distance from your touch to the mark's centre — a
+      consistent offset in one direction means the digitizer is mapped to the wrong
+      output or a stale calibration is in play.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var EXPECT_W = 2560, EXPECT_H = 720;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var stage = $('stage'), trail = $('trail'), ctx = trail.getContext('2d');
+  var corners = { tl: false, tr: false, bl: false, br: false };
+  var maxPointers = 0, worstOffset = 0, sawTouch = false, sawMouse = false;
+  var live = {};
+
+  function sizeCanvas() {
+    trail.width = stage.clientWidth;
+    trail.height = stage.clientHeight;
+  }
+
+  function reportGeometry() {
+    var w = window.innerWidth, h = window.innerHeight;
+    var el = $('r-view');
+    el.textContent = w + ' × ' + h;
+    el.className = (w === EXPECT_W && h === EXPECT_H) ? 'ok' : 'bad';
+    if (w !== EXPECT_W || h !== EXPECT_H) {
+      el.textContent += '  (expected ' + EXPECT_W + ' × ' + EXPECT_H + ')';
+    }
+    $('r-screen').textContent = screen.width + ' × ' + screen.height;
+    $('r-dpr').textContent = String(window.devicePixelRatio || 1);
+  }
+
+  // Which corner mark, if any, does this point land in?
+  function cornerAt(x, y) {
+    var w = stage.clientWidth, h = stage.clientHeight, S = 150;
+    if (x < S && y < S) return 'tl';
+    if (x > w - S && y < S) return 'tr';
+    if (x < S && y > h - S) return 'bl';
+    if (x > w - S && y > h - S) return 'br';
+    return null;
+  }
+
+  function cornerCentre(k) {
+    var w = stage.clientWidth, h = stage.clientHeight, S = 150;
+    return {
+      x: (k === 'tl' || k === 'bl') ? S / 2 : w - S / 2,
+      y: (k === 'tl' || k === 'tr') ? S / 2 : h - S / 2
+    };
+  }
+
+  function refresh() {
+    var hit = Object.keys(corners).filter(function (k) { return corners[k]; }).length;
+    var ce = $('r-corners');
+    ce.textContent = hit + ' / 4';
+    ce.className = hit === 4 ? 'ok' : 'wait';
+
+    $('r-multi').textContent = String(maxPointers);
+
+    var oe = $('r-offset');
+    if (worstOffset > 0) {
+      oe.textContent = Math.round(worstOffset) + ' px';
+      oe.className = worstOffset > 40 ? 'bad' : 'ok';
+    }
+
+    var te = $('r-type');
+    if (sawTouch) { te.textContent = 'touch'; te.className = 'ok'; }
+    else if (sawMouse) { te.textContent = 'mouse / pen — not touch'; te.className = 'bad'; }
+
+    var v = $('verdict');
+    var geomOk = window.innerWidth === EXPECT_W && window.innerHeight === EXPECT_H;
+    if (hit === 4 && sawTouch && geomOk && worstOffset <= 40) {
+      v.textContent = 'PASS — video and touch are sound. Ctrl-C the kiosk and continue.';
+      v.className = 'ok';
+    } else if (hit === 4 && sawTouch) {
+      v.textContent = 'PARTIAL — all corners registered, but check the red rows above.';
+      v.className = 'bad';
+    } else if (sawTouch) {
+      v.textContent = 'Touch the remaining corner marks…';
+      v.className = 'wait';
+    }
+  }
+
+  function drawDot(id, x, y, extra) {
+    var d = live[id];
+    if (!d) {
+      d = document.createElement('div');
+      d.className = 'dot';
+      d.innerHTML = '<i></i><b></b>';
+      stage.appendChild(d);
+      live[id] = d;
+    }
+    d.style.left = x + 'px';
+    d.style.top = y + 'px';
+    d.querySelector('b').textContent = Math.round(x) + ', ' + Math.round(y) + extra;
+  }
+
+  function clearDot(id) {
+    if (live[id]) { live[id].remove(); delete live[id]; }
+  }
+
+  stage.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'touch') sawTouch = true;
+    else sawMouse = true;
+
+    var k = cornerAt(e.clientX, e.clientY);
+    if (k) {
+      corners[k] = true;
+      document.getElementById('m-' + k).classList.add('hit');
+      var c = cornerCentre(k);
+      var d = Math.hypot(e.clientX - c.x, e.clientY - c.y);
+      if (d > worstOffset) worstOffset = d;
+    }
+    refresh();
+  });
+
+  stage.addEventListener('pointermove', function (e) {
+    if (e.buttons === 0 && e.pointerType !== 'touch') return;
+    drawDot(e.pointerId, e.clientX, e.clientY,
+            e.pressure ? '  p' + e.pressure.toFixed(2) : '');
+    ctx.fillStyle = 'rgba(217,91,184,.5)';
+    ctx.fillRect(e.clientX - 1, e.clientY - 1, 2, 2);
+  });
+
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) {
+    stage.addEventListener(t, function (e) { clearDot(e.pointerId); });
+  });
+
+  // Count concurrent contacts — the Edge should reach 5.
+  stage.addEventListener('touchstart', function (e) {
+    if (e.touches.length > maxPointers) maxPointers = e.touches.length;
+    refresh();
+  }, { passive: true });
+
+  window.addEventListener('resize', function () { sizeCanvas(); reportGeometry(); });
+  window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  sizeCanvas();
+  reportGeometry();
+  refresh();
+})();
+</script>
+</body>
+</html>
