@@ -148,6 +148,179 @@ event the phase track is narrating. Interpolating across it, or carrying the
 last value forward, would erase the most interesting thing the panel has to
 show.
 
+## Surfaces (design pass 3 — approved, not yet built)
+
+Flight Deck is one console with four first-class surfaces behind a
+**persistent 72 px strip**: `DECK` · `EVALS` · `MEDIA` · `SIM`, each a
+196 × 72 px button (~27 × 10 mm at ~180 ppi). No hamburger, no nested menus,
+no desktop-sized tabs. The strip also carries host status (OS, GPU, link,
+clock) and a permanent `HOME`, which satisfies "persistent system status in
+SIM mode" on *every* surface rather than only there.
+
+Moving the wordmark and clock into the strip pays for most of its height —
+DECK's left rail drops its own eyebrow row, so the 648 px that remain still
+fit the existing layout.
+
+### Switching
+
+Automatic, but scoped to **episodes** rather than a cooldown timer:
+
+| Trigger | Effect |
+|---|---|
+| idle | `EVALS` is the default; the last manual choice is remembered |
+| a boot begins, *any* origin | opens a boot episode → `DECK` |
+| MSFS reports ready | opens a sim episode → `SIM` |
+| simulator exits | closes the episode → restores the pre-episode surface |
+| **manual tap during an episode** | ends automatic switching **for that episode** |
+
+A fixed cooldown either expires mid-boot and yanks the screen away, or
+outlasts the event and stops working. Episode scoping means "stop switching"
+lasts exactly as long as the thing you told it to stop switching for.
+
+"MSFS ready" comes from the sim-agent reporting a live SimConnect session,
+not from a process list — *running* is a weaker claim than *ready*.
+
+## EVALS — the original reason for the panel
+
+Reclaiming the TV from the jobContext wallboard is the use case that put the
+Edge on the Pi, and it stays.
+
+**Found while researching, and it decides the integration:** the jobContext
+wallboard is *already running on this Pi*. jobContextMCP's README describes
+"a Raspberry Pi running k3s + Prometheus + Grafana, federating the AKS
+cluster", with provisioned kiosk dashboards (`kiosk-evals`,
+`kiosk-provenance`, `kiosk-cloud`, `kiosk-ollama`, `kiosk-gaming`) and a
+`wallboard-kiosk.sh` that probes `up{job=gpu-windows}` to swap playlists by
+booted OS. That script is not in the repo — it lives on the Pi.
+
+So there is **already a Chromium kiosk on this box**. Flight Deck must
+*replace* it, not run beside it: two browsers on a 4 GB Pi is the thing most
+likely to actually break this. The OS-swap logic is absorbed for free —
+deck-api already determines the booted OS from the same probes.
+
+### Integration order
+
+1. **Display the existing playlist directly.** Because Grafana is already on
+   this Pi, `EVALS` is a `?kiosk` playlist URL on localhost. No new backend,
+   no duplicated logic, one browser.
+2. If the 16:9 boards prove too tall at 720 px, add a `kiosk-edge` board
+   **in jobContext** with the *same queries* in a 5:1 layout. Same data, same
+   logic, different geometry — that is not duplication.
+3. Only as a fallback, a thin Flight-Deck-native presentation reading
+   jobContext's existing `/metrics` (Prometheus text, which deck-api already
+   parses). Still presentation; still no business logic moved.
+
+jobContext remains authoritative. Flight Deck stores no eval data, re-derives
+no verdicts, and invents no thresholds. It shows what the boards already
+show: mean judge score and worst entry, hallucination rate, verdict flip
+rate, Layer 1 smoke pass rate, active alerts, per-dimension means, CoV
+instability by entry, time since last suite run, eval pushes by kind, runs
+without a provenance record, and judge ⇄ provenance agreement by bucket.
+
+**Unreachable ≠ zero.** deck-api health-checks Grafana and the jobContext API
+independently of the embedded frame; if either is down, EVALS covers the
+frame with `JOBCONTEXT UNREACHABLE` plus the age of the last good check
+rather than leaving a stale board looking current.
+
+## SIM — bidirectional cockpit control
+
+### The finding that decides the architecture
+
+**SimConnect is Windows-only.** Both common wrappers (Python-SimConnect,
+node-simconnect) require a Windows host with SimConnect installed. The Pi
+cannot talk to MSFS directly, so a Windows-side agent is required — which
+this repo already has a pattern for in `windows/boot-agent.ps1` on :9107.
+
+```
+touch → deck-ui → deck-api → sim adapter → sim-agent :9108 → SimConnect → MSFS 2024
+                     ↑                                                        │
+                     └──────────────── observed state ────────────────────────┘
+```
+
+MSFS-specific names, units and event ids live **only** inside `sim/` and the
+Windows agent. deck-api carries a normalized envelope
+(`{control:"gear", action:"set", value:"up"}`) and knows nothing about
+SimConnect.
+
+`node-simconnect` could in principle let the Pi connect over TCP once
+`SimConnect.xml` is opened to the network. Rejected for v1: unofficial
+protocol implementation whose MSFS 2024 compatibility must be re-proven each
+sim update; a Node runtime on a 4 GB Pi already carrying k3s, Grafana and a
+browser; and it moves failure onto the node that must stay up. The adapter
+boundary keeps it available later.
+
+### Command acknowledgement
+
+**The UI never renders the commanded state.** Only the observed one.
+
+1. UI sends the command with a `cmd_id`.
+2. sim-agent transmits the event, returns `{cmd_id, accepted, seq}` —
+   *accepted* means received, never "it worked".
+3. UI enters `PENDING`, an overlay on the last **observed** state.
+4. The state stream moves: `GEAR TOTAL PCT EXTENDED` leaves 100 → `TRANSIT`;
+   reaches 0 → `UP`.
+5. No state change within the control's timeout → `NO RESPONSE`, falling back
+   to the last observed state, never the commanded one.
+
+That is what makes a command the sim ignored — wrong aircraft, paused sim,
+gear already up — show as a failed command rather than a lie.
+
+### The v1 five, plus three readouts
+
+| Control | State (SimVar) | Command (Event) |
+|---|---|---|
+| Gear | `GEAR HANDLE POSITION`, `GEAR TOTAL PCT EXTENDED` | `GEAR_UP` / `GEAR_DOWN` / `GEAR_TOGGLE` |
+| Flaps | `FLAPS HANDLE INDEX`, `FLAPS NUM HANDLE POSITIONS`, `TRAILING EDGE FLAPS LEFT ANGLE` | `FLAPS_INCR` / `FLAPS_DECR` / `FLAPS_SET` |
+| Parking brake | `BRAKE PARKING POSITION` | `PARKING_BRAKES` |
+| Landing lights | `LIGHT LANDING` | `LANDING_LIGHTS_ON` / `_OFF` (prefer over toggle) |
+| AP master | `AUTOPILOT MASTER` | `AP_MASTER` |
+| Readouts | `AIRSPEED INDICATED`, `INDICATED ALTITUDE`, `PLANE HEADING DEGREES MAGNETIC` | — |
+| Capabilities | `IS GEAR RETRACTABLE`, `FLAPS AVAILABLE`, `FLAPS NUM HANDLE POSITIONS`, `SPOILER AVAILABLE`, `AUTOPILOT AVAILABLE` | — |
+
+Gear is first because `GEAR TOTAL PCT EXTENDED` gives a real `TRANSIT` state
+— it is the control that actually proves the loop.
+
+`BRAKE PARKING POSITION`, `GEAR HANDLE POSITION` and `FLAPS HANDLE INDEX` are
+confirmed against the published SDK reference. **Every name above must still
+be verified with the SDK's SimvarWatcher against the target aircraft before
+code is written** — MSFS DevSupport carries live threads about
+`GEAR POSITION` not matching its own documentation.
+
+Heading arrives in radians; conversion happens in the adapter, not the UI.
+
+### Development target: Beechcraft Baron G58
+
+A default piston twin with retractable gear whose transit is slow enough to
+watch, three flap detents, an autopilot, and no autothrottle — so it
+exercises the capability model in both directions on day one. Unsupported
+controls grey out with a reason; they never sit there silently inert.
+
+### Keyboard emulation
+
+Fallback only. A keystroke cannot be acknowledged, cannot be read back, and
+cannot report whether the sim was even focused. Permitted only where no
+SimConnect path exists, must be labelled *open-loop — state not confirmed*,
+and **none of the v1 five need it**.
+
+### Control pages
+
+`FLIGHT` (v1) · `LIGHTS` · `AUTOPILOT` · `GROUND / START` · `COM / NAV`.
+All five appear in the SIM tab bar from day one, greyed and visibly
+unavailable, so the surface's shape is honest. Only `FLIGHT` is live.
+
+## MEDIA — reserved
+
+First-class in the navigation from day one, showing *reserved* rather than
+pretending to work. Eventually artwork, title, artist, transport, position,
+volume.
+
+One constraint fixed now because it decides the integration: **the Pi is a
+remote control, not the playback device.** Audio comes out of the machine
+being used — the workstation or the Mac mini — and MEDIA commands that
+machine. Making the Pi an AirPlay endpoint would put the music on the wrong
+speakers and add an audio daemon to the node whose job is staying out of the
+way.
+
 ## UI notes
 
 2560 × 720 at ~180 ppi means a 44 px target is 6 mm. Every touch target is
@@ -175,12 +348,29 @@ show.
   levelling.
 - No TSDB, so nothing writes in a loop.
 
+## Who owns what
+
+| Concern | Owner | Flight Deck's role |
+|---|---|---|
+| Eval results, certification, judge, provenance | **jobContext** | Displays its existing Grafana boards. Stores nothing, re-derives nothing |
+| Metric history, Prometheus, Grafana, k3s | **jobContext**, already on this Pi | Adds none of its own; EVALS is a viewport onto software jobContext installed |
+| Aircraft state | **MSFS 2024** | Reads it live via the agent; never caches it as truth, never assumes a command took effect |
+| Flight Deck's own telemetry | Flight Deck | Latest value in deck-api, 60-minute window in the browser, dies with the page |
+| Boot orchestration | `flightsim-boot.sh` | Still unmodified; deck-api wraps it and follows its journald output |
+
 ## Deliberately absent
 
-- **Prometheus, Grafana, Loki, long-term retention, historical dashboards.**
-  A TSDB on flash with no real wear levelling corrupts before it dies.
-- **Grafana panels embedded in the kiosk.** On a 4B that costs roughly
-  700 MB more than serving numbers from deck-api and drawing them inline.
+Flight Deck adds none of these. The Grafana that EVALS *displays* is
+jobContext's, already installed and operated by jobContext — showing it is
+not reintroducing it here.
+
+- **Prometheus, Grafana, Loki, long-term retention, historical dashboards
+  belonging to Flight Deck.** A TSDB on flash with no real wear levelling
+  corrupts before it dies.
+- **Grafana panels embedded in Flight Deck's own DECK/SIM surfaces.** On a 4B
+  that costs roughly 700 MB more than serving numbers from deck-api and
+  drawing them inline. EVALS is the deliberate exception: it *is* the
+  wallboard, and it replaces the browser that was already rendering it.
 - **New exporters, SMART trend storage, PresentMon, Mac mini telemetry.**
 - **NVMe, and any Pi 5 migration.**
 
@@ -197,6 +387,34 @@ pi/deck-ui/                  index.html · deck.css · deck.js · selftest.html
 ```
 
 Both test files run anywhere — no Pi and no exporter needed.
+
+## Build order for pass 3
+
+1. **Console shell.** The 72 px strip, four surfaces, episode-scoped
+   switching, DECK moved under it. UI change plus a little surface state in
+   deck-api — no new backends.
+2. **EVALS.** Point the surface at the existing Grafana playlist on
+   localhost, retire `wallboard-kiosk.sh` so there is one browser, add the
+   reachability overlay. Then a `kiosk-edge` 5:1 board *in jobContext* if the
+   existing layout proves too tall.
+3. **Sim link, before any control.** The Windows sim-agent, a SimConnect
+   session, one read-only value on screen. This is where the SimVar names get
+   verified with SimvarWatcher against the Baron.
+4. **One control, all the way.** Gear only — command, acknowledgement,
+   TRANSIT, settled state, no-response timeout. Everything after is
+   repetition.
+5. **The other four**, then capabilities, then the later pages.
+
+MEDIA stays reserved until the SIM interaction model is proven.
+
+### Open before step 2
+
+Is the Pi running the wallboard the same `pi-node1` the boot orchestrator
+installs onto? Everything above assumes yes — the k3s naming, Grafana on
+:3000, and the OS-swap probe all point that way — but `wallboard-kiosk.sh`
+is not in jobContextMCP and could not be inspected. If they are two different
+Pis, EVALS becomes a remote URL instead of localhost and nothing else
+changes.
 
 ## Known limits
 
