@@ -59,9 +59,6 @@ html, body {
   height: 72px; flex: none; display: flex; align-items: stretch;
   background: #0e141d; border-bottom: 1px solid var(--ln);
 }
-.mark { display: flex; align-items: center; padding: 0 22px; border-right: 1px solid var(--ln); }
-.mark b { font-size: 17px; letter-spacing: .28em; font-weight: 600; }
-
 .nav { display: flex; align-items: stretch; }
 .navb {
   width: 196px;                       /* ~27 mm at this panel's ~180 ppi */
@@ -69,6 +66,7 @@ html, body {
   gap: 2px; border: 0; border-right: 1px solid var(--ln);
   background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
 }
+.navb.wide { width: 260px; }
 .navb .t { font-size: 22px; letter-spacing: .14em; }
 .navb .s { font-size: 11px; letter-spacing: .1em; }
 .navb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--acc); }
@@ -94,7 +92,7 @@ html, body {
 .surface { position: absolute; inset: 0; display: none; }
 .surface.on { display: grid; }
 .body-deck  { grid-template-columns: 600px 1100px 860px; }
-.body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
+.body-evals { grid-template-columns: 1fr; }
 .body-plain { grid-template-columns: 1fr; place-items: center; }
 
 .rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
@@ -106,11 +104,18 @@ html, body {
 /* ── EVALS ─────────────────────────────────────────────────────────────── */
 
 /* Second-level nav, built at runtime from Grafana's own dashboard list.
-   56 px costs the board ~9% of its height, which is the price of not having
-   to wait for a 60 s playlist to come round to the one you want. AUTO puts
-   it back on the rotation the wallboard has always done. */
-.subnav { display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
-          background: #0e141d; overflow: hidden; }
+   It OVERLAYS the board rather than taking a grid row: at 720 px tall,
+   permanently spending 56 px on navigation is what pushes the bottom row of
+   panels off the screen. It hides itself after a few seconds and comes back
+   when you tap jobContext in the strip — which is outside the iframe, and so
+   is the only reveal target the parent page can reliably see. */
+.subnav {
+  position: absolute; top: 0; left: 0; right: 0; height: 56px; z-index: 5;
+  display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
+  background: rgba(14, 20, 29, .97); overflow: hidden;
+  transition: transform .18s ease, opacity .18s ease;
+}
+.subnav.away { transform: translateY(-100%); opacity: 0; pointer-events: none; }
 .subb {
   flex: 1; min-width: 0; border: 0; border-right: 1px solid var(--ln);
   background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;

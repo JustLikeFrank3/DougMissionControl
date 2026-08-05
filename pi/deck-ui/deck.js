@@ -315,11 +315,27 @@
     $('auto-sub').textContent = e.mode ? e.mode + ' playlist' : 'playlist';
   }
 
+  /* The sub-nav overlays the board, so it must get out of the way. Reveal is
+     always via the strip's own jobContext button — taps inside the iframe are
+     cross-origin and invisible to this page, so there is no way to catch a
+     touch on the board itself. */
+  var subnavTimer = null;
+  var SUBNAV_MS = 6000;
+
+  function showSubnav() {
+    $('evals-nav').classList.remove('away');
+    if (subnavTimer) clearTimeout(subnavTimer);
+    subnavTimer = setTimeout(function () {
+      $('evals-nav').classList.add('away');
+    }, SUBNAV_MS);
+  }
+
   function pickView(view) {
     if (state && state.evals) {
       state.evals.view = view;          // optimistic, so a tap feels instant
       renderEvalsNav(state.evals);
     }
+    showSubnav();                        // keep it up while you are choosing
     post('/api/evals/view', { view: view });
   }
 
@@ -352,10 +368,17 @@
     }
 
     var lbl = $('nav-evals');
-    if (down) { lbl.textContent = 'unreachable'; $('nav-evals').parentNode.classList.add('alert'); }
+    if (down) { lbl.textContent = 'unreachable'; lbl.parentNode.classList.add('alert'); }
     else {
-      lbl.textContent = e.mode ? e.mode + ' board' : 'jobContext';
-      $('nav-evals').parentNode.classList.remove('alert');
+      // Which board is on: the pinned one, or the OS playlist AUTO follows.
+      var v = e.view || 'auto';
+      if (v !== 'auto') {
+        var hit = (e.dashboards || []).filter(function (d) { return d.uid === v; })[0];
+        lbl.textContent = hit ? hit.label.toLowerCase() : 'metrics';
+      } else {
+        lbl.textContent = e.mode ? e.mode + ' playlist' : 'metrics';
+      }
+      lbl.parentNode.classList.remove('alert');
     }
   }
 
@@ -532,11 +555,15 @@
   [].forEach.call(document.querySelectorAll('[data-surface]'), function (btn) {
     btn.addEventListener('click', function () {
       var name = btn.dataset.surface;
+      var already = state && state.surface && state.surface.active === name;
       if (state && state.surface) {
         state.surface.active = name;
         renderSurface(state);
       }
-      post('/api/surface', { surface: name });
+      // Entering EVALS shows the board picker; tapping jobContext again while
+      // already there brings it back. This is the reveal path.
+      if (name === 'evals') showSubnav();
+      if (!already) post('/api/surface', { surface: name });
     });
   });
 
@@ -585,5 +612,6 @@
 
   buildTrack();
   fit();
+  showSubnav();   // visible on load, then it gets out of the board's way
   connect();
 })();
