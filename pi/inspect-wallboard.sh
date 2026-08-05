@@ -30,9 +30,18 @@ while [ $# -gt 0 ]; do
 done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/.." && pwd)"
-[ -n "$OUT" ] || OUT="$REPO/docs/pi-wallboard-survey.md"
-KEEP="$REPO/pi/wallboard"
+
+# Works two ways: from inside a checkout, or scp'd on its own to the Pi.
+# Standalone it writes beside itself rather than guessing at a repo layout
+# and failing on a mkdir in someone's /home.
+if [ -d "$HERE/../.git" ]; then
+    REPO="$(cd "$HERE/.." && pwd)"
+    [ -n "$OUT" ] || OUT="$REPO/docs/pi-wallboard-survey.md"
+    KEEP="$REPO/pi/wallboard"
+else
+    [ -n "$OUT" ] || OUT="$HERE/pi-wallboard-survey.md"
+    KEEP="$HERE/wallboard"
+fi
 
 mkdir -p "$(dirname "$OUT")" "$KEEP"
 : > "$OUT"
@@ -164,7 +173,7 @@ run "free -m"
 run "df -h / /tmp 2>/dev/null"
 run "uptime"
 printf '\n### the ten largest resident processes\n\n'
-run "ps -eo rss,comm --sort=-rss 2>/dev/null | head -11 | awk 'NR==1{print \"RSS_KB COMMAND\";next}{printf \"%%8d %%s\\n\", \$1, \$2}'"
+run "ps -eo rss,comm --sort=-rss 2>/dev/null | head -11"
 
 if [ -r /sys/class/thermal/thermal_zone0/temp ]; then
     printf '\nSoC temperature: %s °C\n' "$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))"
@@ -194,9 +203,12 @@ Answer these from the sections above before changing any kiosk behaviour:
    to be the same one.
 ASK
 
-exec 1>&3 3>&-
+# Restore stdout, but keep fd 3 open — note() still writes to it below.
+exec 1>&3
 note ""
-note "Wrote $OUT"
+note "Wrote  $OUT"
+[ -n "$(ls -A "$KEEP" 2>/dev/null)" ] && note "Copied $KEEP/"
 note ""
-note "Nothing was changed. Commit the survey (and pi/wallboard/ if a script was"
-note "copied) before running setup-display.sh on this host."
+note "Nothing was changed. Commit the survey (and any recovered wallboard-kiosk.sh)"
+note "before running setup-display.sh on this host."
+exec 3>&-
