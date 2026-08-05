@@ -31,7 +31,15 @@ FAUXMO_CONF=/opt/fauxmo/config.json
 PORT=8088
 
 REPOINT=1
-[ "${1:-}" = "--no-fauxmo" ] && REPOINT=0
+SWAP_AUTOSTART=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-fauxmo)      REPOINT=0 ;;
+        --swap-autostart) SWAP_AUTOSTART=1 ;;
+        *) echo "unknown argument: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
@@ -166,8 +174,41 @@ else
     echo "KIOSK_URL=http://127.0.0.1:${PORT}/" > "$DECK_CONF"
 fi
 echo "  KIOSK_URL=http://127.0.0.1:${PORT}/"
-systemctl restart flightdeck-kiosk.service 2>/dev/null && echo "  kiosk restarted" \
-    || echo "  (kiosk unit not installed — run pi/setup-display.sh)"
+
+# On a host that already runs a compositor (Raspberry Pi OS: lightdm ->
+# labwc), Flight Deck belongs INSIDE that session as another Wayland client,
+# launched from ~/.config/autostart — not as a second compositor. Swap the
+# autostart entry rather than installing a systemd kiosk unit.
+AUTOSTART="/home/${DECK_USER}/.config/autostart"
+if [ -d "$AUTOSTART" ] && [ "$SWAP_AUTOSTART" -eq 1 ]; then
+    install -m 755 "${HERE}/wallboard/flightdeck-kiosk.sh" /usr/local/bin/flightdeck-kiosk.sh
+    sed -i 's/\r$//' /usr/local/bin/flightdeck-kiosk.sh
+    install -m 644 -o "$DECK_USER" -g "$DECK_USER" \
+        "${HERE}/wallboard/flightdeck.desktop" "${AUTOSTART}/flightdeck.desktop"
+    echo "  installed /usr/local/bin/flightdeck-kiosk.sh + flightdeck.desktop"
+
+    # Disable rather than delete: the original stays one mv away.
+    for old in "${AUTOSTART}"/*.desktop; do
+        [ -e "$old" ] || continue
+        case "$(basename "$old")" in flightdeck.desktop) continue ;; esac
+        if grep -qiE 'wallboard-kiosk|playlists/play' "$old" 2>/dev/null; then
+            mv "$old" "${old}.flightdeck-disabled"
+            echo "  disabled $(basename "$old") -> $(basename "$old").flightdeck-disabled"
+        fi
+    done
+    echo "  log out and back in (or reboot) to pick up the new session entry"
+elif [ -d "$AUTOSTART" ]; then
+    cat <<NOTE
+  autostart directory found at $AUTOSTART but left alone.
+  Re-run with --swap-autostart to have Flight Deck take over the kiosk:
+      sudo ./pi/setup-deck.sh --swap-autostart
+  It installs flightdeck-kiosk.sh, adds flightdeck.desktop, and renames the
+  existing wallboard entry to *.flightdeck-disabled (reversible with mv).
+NOTE
+else
+    systemctl restart flightdeck-kiosk.service 2>/dev/null && echo "  kiosk restarted" \
+        || echo "  (no autostart dir and no kiosk unit — see pi/setup-display.sh)"
+fi
 
 say "Done"
 cat <<NEXT

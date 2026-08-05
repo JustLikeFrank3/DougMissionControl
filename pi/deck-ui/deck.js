@@ -269,6 +269,72 @@
     $('win').textContent = mins + ' min · in memory';
   }
 
+  /* ── surfaces ─────────────────────────────────────────────────────────── */
+
+  var evalsSrc = null;        // only reassign when it CHANGES — see below
+  var lastGrafanaOk = null;
+
+  function renderSurface(s) {
+    var active = (s.surface && s.surface.active) || 'evals';
+    [].forEach.call(document.querySelectorAll('.surface'), function (el) {
+      el.classList.toggle('on', el.dataset.name === active);
+    });
+    [].forEach.call(document.querySelectorAll('.navb'), function (b) {
+      b.classList.toggle('on', b.dataset.surface === active);
+    });
+  }
+
+  function renderEvals(s) {
+    var e = s.evals || {};
+    var frame = $('evals-frame');
+
+    // Assigning .src reloads the frame, which restarts the Grafana playlist
+    // from its first dashboard. Only touch it when the URL actually changes
+    // — an OS flip, or the playlist being recreated with a new uid.
+    if (e.url && e.url !== evalsSrc) {
+      evalsSrc = e.url;
+      frame.src = e.url;
+    }
+
+    if (e.grafana) lastGrafanaOk = e.checked;
+
+    var down = !e.grafana;
+    $('evals-overlay').hidden = !down;
+    if (down) {
+      $('ov-title').textContent = evalsSrc
+        ? 'Grafana stopped answering'
+        : 'Grafana is not answering';
+      $('ov-sub').textContent = lastGrafanaOk
+        ? 'last good check ' + fmtAgo(lastGrafanaOk) + ' ago'
+        : 'no successful check yet';
+    }
+
+    var lbl = $('nav-evals');
+    if (down) { lbl.textContent = 'unreachable'; $('nav-evals').parentNode.classList.add('alert'); }
+    else {
+      lbl.textContent = e.mode ? e.mode + ' board' : 'jobContext';
+      $('nav-evals').parentNode.classList.remove('alert');
+    }
+  }
+
+  function renderStrip(s) {
+    var ws = s.workstation || {};
+    var boot = s.boot || {};
+    var look = OS_LOOK[ws.os] || OS_LOOK.unknown;
+
+    $('st-os').innerHTML = '<span class="' + (ws.os === 'off' ? '' : 'live') + '">●</span> ' +
+      (boot.in_flight ? 'BOOTING' : look.os);
+
+    var t = latest('ws.gpu_temp_c');
+    $('st-gpu').innerHTML = t ? 'GPU <b>' + Math.round(t.v) + '°</b>' : '';
+
+    $('nav-deck').textContent = boot.in_flight
+      ? 'BOOT IN FLIGHT'
+      : (ws.os === 'off' ? 'workstation off' : ws.os + ' up');
+    document.querySelector('[data-surface="deck"]')
+      .classList.toggle('alert', !!boot.in_flight);
+  }
+
   /* ── render ───────────────────────────────────────────────────────────── */
   var OS_LOOK = {
     windows: { pill: 'ONLINE',  cls: 'ok',   os: 'WINDOWS' },
@@ -289,6 +355,10 @@
     var src = (s.telemetry && s.telemetry.source) || null;
     $('chart-lbl').textContent = 'GPU TEMPERATURE · °C' +
       (src ? '  ·  ' + src : '  ·  no exporter answering');
+
+    renderSurface(s);
+    renderEvals(s);
+    renderStrip(s);
 
     var ws = s.workstation || {};
     var boot = s.boot || {};
@@ -404,6 +474,19 @@
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
 
+  // Surface navigation. Applied locally first so a tap feels instant on a
+  // touch panel; the SSE frame confirms it a moment later.
+  [].forEach.call(document.querySelectorAll('[data-surface]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var name = btn.dataset.surface;
+      if (state && state.surface) {
+        state.surface.active = name;
+        renderSurface(state);
+      }
+      post('/api/surface', { surface: name });
+    });
+  });
+
   /* ── live state ───────────────────────────────────────────────────────── */
   var es = null, retry = 1000;
 
@@ -415,6 +498,8 @@
       retry = 1000;
       $('conn').textContent = 'live';
       $('conn').className = 'live';
+      $('st-conn').textContent = 'live';
+      $('st-conn').className = 'live';
     };
 
     es.onmessage = function (ev) {
@@ -424,6 +509,8 @@
     es.onerror = function () {
       $('conn').textContent = 'reconnecting…';
       $('conn').className = 'dead';
+      $('st-conn').textContent = 'reconnecting…';
+      $('st-conn').className = 'dead';
       es.close();
       setTimeout(connect, retry);
       retry = Math.min(retry * 2, 15000);   // deck-api restarting, not a crisis

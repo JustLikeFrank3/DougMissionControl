@@ -113,6 +113,18 @@ LISTEN_PORT = int(cfg("DECK_PORT", "8088"))
 POLL_IDLE = float(cfg("DECK_POLL_IDLE", "5"))
 POLL_BUSY = float(cfg("DECK_POLL_BUSY", "2"))
 
+# The pre-existing jobContext wallboard. Flight Deck displays it and owns
+# none of it — no dashboards are provisioned, no metrics are stored, and the
+# playlist selection below reproduces wallboard-kiosk.sh's semantics rather
+# than inventing new ones. See docs/pi-wallboard-findings.md.
+GRAFANA_URL = cfg("GRAFANA_URL", "http://localhost:3000").rstrip("/")
+PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
+
+SURFACES = ("deck", "evals", "media", "sim")
+DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
+if DEFAULT_SURFACE not in SURFACES:
+    DEFAULT_SURFACE = "evals"
+
 # Launch profiles the UI offers. Keys are the FLIGHT_INTENT values
 # windows/jarvis-greeting.ps1 already understands.
 PROFILES = {
@@ -142,6 +154,12 @@ class Deck:
                    "uptime": None, "cpu_pct": None},
             # Latest sample only — no history is kept anywhere on the Pi.
             "telemetry": {"ts": None, "source": None, "ws": {}, "pi": {}},
+            "surface": {"active": DEFAULT_SURFACE, "default": DEFAULT_SURFACE,
+                        "previous": None, "episode": None,
+                        "manual_in_episode": False, "all": list(SURFACES)},
+            # The wallboard, as Flight Deck sees it from outside.
+            "evals": {"grafana": False, "mode": None, "url": None,
+                      "checked": None, "playlist": None},
             "events": [],
             "profiles": PROFILES,
             "server_time": time.time(),
@@ -204,6 +222,61 @@ class Deck:
         if note:
             self.event("boot", note)
 
+    # -- surfaces -----------------------------------------------------------
+    #
+    # Automatic switching is scoped to an EPISODE (a boot, a sim session),
+    # not to a cooldown timer. A timer either expires mid-boot and yanks the
+    # screen away, or outlives the event and stops working. Episode scoping
+    # makes "stop switching" last exactly as long as the thing it was told to
+    # stop switching for.
+
+    def set_surface(self, name: str, manual: bool) -> None:
+        if name not in SURFACES:
+            return
+
+        def apply(s):
+            sf = s["surface"]
+            if manual:
+                sf["active"] = name
+                if sf["episode"]:
+                    sf["manual_in_episode"] = True
+            elif not (sf["episode"] and sf["manual_in_episode"]):
+                sf["active"] = name
+
+        self.mutate(apply)
+        if manual:
+            self.event("deck", f"surface: {name} (manual)")
+
+    def open_episode(self, kind: str, surface: str) -> None:
+        def apply(s):
+            sf = s["surface"]
+            if sf["episode"] is None:
+                sf["previous"] = sf["active"]
+            sf["episode"] = kind
+            sf["manual_in_episode"] = False
+
+        self.mutate(apply)
+        self.set_surface(surface, manual=False)
+        self.event("deck", f"auto-switched to {surface} ({kind} episode)")
+
+    def close_episode(self, kind: str) -> None:
+        target = None
+
+        def apply(s):
+            nonlocal target
+            sf = s["surface"]
+            if sf["episode"] != kind:
+                return
+            if not sf["manual_in_episode"]:
+                target = sf["previous"] or sf["default"]
+            sf["episode"] = None
+            sf["manual_in_episode"] = False
+            sf["previous"] = None
+
+        self.mutate(apply)
+        if target:
+            self.set_surface(target, manual=False)
+
     def begin(self, target: str, intent: str) -> None:
         def apply(s):
             s["boot"].update({
@@ -230,6 +303,9 @@ class Deck:
 
         self.mutate(apply)
         self.event("boot", note, "ok" if result == "ok" else "warn")
+        # Boot over — back to whatever was showing, unless the operator
+        # chose something during the episode.
+        self.close_episode("boot")
 
 
 DECK = Deck()
@@ -387,6 +463,64 @@ def pi_cpu_pct() -> float | None:
     return round(100 * (1 - d_idle / d_total), 1)
 
 
+# ── the wallboard, observed from outside ──────────────────────────────────
+
+
+def resolve_playlist(mode: str) -> tuple[str | None, str | None]:
+    """Look the playlist up BY NAME and return (url, playlist_name).
+
+    Never bake a uid: wallboard-kiosk.sh's own comment records that Grafana
+    re-mints playlist uids, so a hardcoded one "broke every time the playlist
+    was recreated". That behaviour is reproduced here, not reinvented.
+    """
+    name = f"{PLAYLIST_PREFIX}{mode}"
+    try:
+        with urllib.request.urlopen(f"{GRAFANA_URL}/api/playlists", timeout=5) as r:
+            playlists = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError):
+        return None, name
+    for p in playlists:
+        if p.get("name") == name and p.get("uid"):
+            return f"{GRAFANA_URL}/playlists/play/{p['uid']}?kiosk", name
+    return None, name
+
+
+def playlist_mode(os_now: str, current: str | None) -> str:
+    """Which OS playlist to show.
+
+    wallboard-kiosk.sh treats an unresolvable probe as "unknown" and pointedly
+    does NOT swap on it, so a network blip cannot flap the display. Here the
+    equivalent of unknown is any state that is not definitely one OS or the
+    other — mid-boot, powered off, not yet probed.
+    """
+    if os_now == "windows":
+        return "windows"
+    if os_now == "linux":
+        return "linux"
+    return current or "linux"
+
+
+def refresh_evals(os_now: str) -> None:
+    healthy = http_ok(f"{GRAFANA_URL}/api/health", timeout=4)
+    current = DECK.state["evals"].get("mode")
+    mode = playlist_mode(os_now, current)
+    url, name = (resolve_playlist(mode) if healthy else (None, None))
+
+    def apply(s):
+        e = s["evals"]
+        e["grafana"] = healthy
+        e["checked"] = time.time()
+        if healthy:
+            e["mode"] = mode
+            e["playlist"] = name
+            # Keep the last good URL rather than blanking the iframe on a
+            # single failed lookup.
+            if url:
+                e["url"] = url
+
+    DECK.mutate(apply)
+
+
 def read_pi_metrics() -> dict:
     """Local /proc reads. Not an exporter, and nothing is scraped or stored."""
     m = {"temp_c": None, "load": None, "mem_pct": None, "uptime": None,
@@ -463,6 +597,8 @@ def poll_once(prev_os):
     if changed and prev_os is not None:
         DECK.event("probe", f"workstation: {prev_os} -> {os_now}")
 
+    refresh_evals(os_now)
+
     boot = DECK.state["boot"]
     if boot["in_flight"]:
         target = boot["target"]
@@ -535,6 +671,8 @@ def handle_log_line(line: str) -> None:
     if "trigger received" in msg and not DECK.state["boot"]["in_flight"]:
         DECK.begin(target or "windows", "unknown")
         DECK.event("orchestrator", "adopted a boot we did not start")
+        # Voice, or someone running the script by hand — DECK either way.
+        DECK.open_episode("boot", "deck")
 
     for pattern, phase, note in LOG_PHASES:
         if pattern.search(msg):
@@ -579,6 +717,8 @@ def fire_boot(target: str, intent: str) -> tuple[bool, str]:
 
     DECK.begin(target, intent)
     DECK.event("deck", f"trigger: {intent} -> {target}")
+    # A boot shows DECK regardless of where it came from.
+    DECK.open_episode("boot", "deck")
     return True, "started"
 
 
@@ -693,6 +833,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/abort":
             ok, msg = fire_abort()
             return self._json(200, {"ok": ok, "message": msg})
+
+        if path == "/api/surface":
+            name = str(body.get("surface") or "")
+            if name not in SURFACES:
+                return self._json(400, {"ok": False,
+                                        "message": f"surface must be one of {list(SURFACES)}"})
+            # Manual always wins, and suppresses automatic switching for the
+            # rest of the current episode.
+            DECK.set_surface(name, manual=True)
+            return self._json(200, {"ok": True, "surface": name})
 
         if path == "/api/hook/greeting":
             # Not wired in v0.1 — jarvis-greeting.ps1 is unmodified. The route

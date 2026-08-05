@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Flight Deck
+Comment=Flight Deck console — DECK / EVALS / MEDIA / SIM on the XENEON Edge
+Exec=/usr/local/bin/flightdeck-kiosk.sh
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

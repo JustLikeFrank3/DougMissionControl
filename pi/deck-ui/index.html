@@ -10,134 +10,192 @@
 <div id="fit">
   <div id="deck">
 
-    <!-- ══ left rail — always the boot controls ══ -->
-    <section class="rail">
-      <header class="eyebrow">
-        <b>FLIGHT DECK</b>
+    <!-- ══ persistent strip — every surface, always ══ -->
+    <header class="strip">
+      <div class="mark"><b>FLIGHT DECK</b></div>
+
+      <nav class="nav" id="nav">
+        <button class="navb" data-surface="deck">
+          <span class="t">DECK</span><span class="s" id="nav-deck">—</span>
+        </button>
+        <button class="navb" data-surface="evals">
+          <span class="t">EVALS</span><span class="s" id="nav-evals">jobContext</span>
+        </button>
+        <button class="navb" data-surface="media">
+          <span class="t">MEDIA</span><span class="s" id="nav-media">reserved</span>
+        </button>
+        <button class="navb" data-surface="sim">
+          <span class="t">SIM</span><span class="s" id="nav-sim">no link</span>
+        </button>
+      </nav>
+
+      <div class="status" id="status">
+        <span id="st-os">—</span>
+        <span id="st-gpu"></span>
+        <span id="st-conn">connecting…</span>
         <span id="clock">--:--</span>
-      </header>
-
-      <div class="state" id="state-card">
-        <span class="pill" id="state-pill">CONNECTING</span>
-        <div class="os" id="state-os">—</div>
-        <div class="meta" id="state-meta">waiting for deck-api</div>
       </div>
 
-      <div class="tiles" id="tiles">
-        <button class="tile" data-intent="sim" data-accent="acc">
-          <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M16 3 L27 24 L16 19 L5 24 Z"/>
-          </svg>
-          <span class="t-name">FLIGHT SIM</span>
-          <span class="t-sub">MSFS 2024</span>
-          <span class="hold"></span>
-        </button>
+      <button class="home" data-surface="deck">HOME</button>
+    </header>
 
-        <button class="tile" data-intent="squadrons" data-accent="cy">
-          <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M16 4 L16 28 M6 8 L6 24 M26 8 L26 24 M6 16 L26 16"/>
-          </svg>
-          <span class="t-name">SQUADRONS</span>
-          <span class="t-sub">STAR WARS</span>
-          <span class="hold"></span>
-        </button>
+    <!-- ══ surfaces ══ -->
+    <main class="surfaces">
 
-        <button class="tile" data-intent="plain" data-accent="mut">
-          <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
-            <rect x="5" y="6" width="22" height="20"/>
-            <path d="M5 13 H27 M16 6 V26"/>
-          </svg>
-          <span class="t-name">WINDOWS</span>
-          <span class="t-sub">greeting only</span>
-          <span class="hold"></span>
-        </button>
+      <!-- ─────────── DECK ─────────── -->
+      <section class="surface body-deck" data-name="deck">
+        <div class="rail">
+          <div class="state" id="state-card">
+            <span class="pill" id="state-pill">CONNECTING</span>
+            <div class="os" id="state-os">—</div>
+            <div class="meta" id="state-meta">waiting for deck-api</div>
+          </div>
 
-        <button class="tile" data-intent="code" data-accent="mut">
-          <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M6 26 L16 6 L26 26 Z"/>
-            <path d="M11 26 L16 16 L21 26"/>
-          </svg>
-          <span class="t-name">LINUX</span>
-          <span class="t-sub">VS Code</span>
-          <span class="hold"></span>
-        </button>
-      </div>
+          <div class="tiles" id="tiles">
+            <button class="tile" data-intent="sim" data-accent="acc">
+              <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
+                <path d="M16 3 L27 24 L16 19 L5 24 Z"/></svg>
+              <span class="t-name">FLIGHT SIM</span><span class="t-sub">MSFS 2024</span>
+              <span class="hold"></span>
+            </button>
+            <button class="tile" data-intent="squadrons" data-accent="cy">
+              <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
+                <path d="M16 4 L16 28 M6 8 L6 24 M26 8 L26 24 M6 16 L26 16"/></svg>
+              <span class="t-name">SQUADRONS</span><span class="t-sub">STAR WARS</span>
+              <span class="hold"></span>
+            </button>
+            <button class="tile" data-intent="plain" data-accent="mut">
+              <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
+                <rect x="5" y="6" width="22" height="20"/><path d="M5 13 H27 M16 6 V26"/></svg>
+              <span class="t-name">WINDOWS</span><span class="t-sub">greeting only</span>
+              <span class="hold"></span>
+            </button>
+            <button class="tile" data-intent="code" data-accent="mut">
+              <svg class="glyph" viewBox="0 0 32 32" aria-hidden="true">
+                <path d="M6 26 L16 6 L26 26 Z"/><path d="M11 26 L16 16 L21 26"/></svg>
+              <span class="t-name">LINUX</span><span class="t-sub">VS Code</span>
+              <span class="hold"></span>
+            </button>
+          </div>
 
-      <button class="abort" id="abort" hidden>
-        <span class="t-name">ABORT</span>
-        <span class="hold"></span>
-      </button>
+          <button class="abort" id="abort" hidden>
+            <span class="t-name">ABORT</span><span class="hold"></span>
+          </button>
 
-      <footer class="foot" id="foot">hold to arm · voice triggers land here too</footer>
-    </section>
-
-    <!-- ══ centre — the boot, then the machine ══ -->
-    <section class="mid">
-      <div class="lbl" id="track-lbl">NO BOOT IN FLIGHT</div>
-
-      <div class="track" id="track"><!-- built by deck.js --></div>
-
-      <div class="note" id="phase-note">
-        Phases 6–7 need <code>jarvis-greeting.ps1</code> to call back; not wired
-        yet, so a run completes at <b>OS UP</b>.
-      </div>
-
-      <div class="stats">
-        <div class="stat" data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12">
-          <div class="k">GPU TEMP</div><div class="v">—</div>
-          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+          <footer class="foot" id="foot">hold to arm · voice triggers land here too</footer>
         </div>
-        <div class="stat" data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100">
-          <div class="k">GPU UTIL</div><div class="v">—</div>
-          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+
+        <div class="mid">
+          <div class="lbl" id="track-lbl">NO BOOT IN FLIGHT</div>
+          <div class="track" id="track"></div>
+          <div class="note">
+            Phases 6–7 need <code>jarvis-greeting.ps1</code> to call back; not wired
+            yet, so a run completes at <b>OS UP</b>.
+          </div>
+
+          <div class="stats">
+            <div class="stat" data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12">
+              <div class="k">GPU TEMP</div><div class="v">—</div>
+              <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="stat" data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100">
+              <div class="k">GPU UTIL</div><div class="v">—</div>
+              <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="stat" data-key="ws.vram_pct" data-unit="%" data-lo="0" data-hi="100">
+              <div class="k">VRAM</div><div class="v">—</div>
+              <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+            </div>
+          </div>
+
+          <div class="chart">
+            <div class="lbl" id="chart-lbl">GPU TEMPERATURE · °C</div>
+            <svg id="chart" class="spark wide" viewBox="0 0 1020 118"
+                 preserveAspectRatio="none"
+                 data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12"></svg>
+          </div>
+
+          <div class="lbl">EVENTS</div>
+          <div class="log" id="log"></div>
         </div>
-        <div class="stat" data-key="ws.vram_pct" data-unit="%" data-lo="0" data-hi="100">
-          <div class="k">VRAM</div><div class="v">—</div>
-          <svg class="spark" viewBox="0 0 320 40" preserveAspectRatio="none"></svg>
+
+        <div class="right">
+          <div class="lbl">FLEET</div>
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">WORKSTATION</span>
+              <span class="h-pill" id="ws-pill">—</span>
+            </div>
+            <div class="h-rows" id="ws-rows"></div>
+            <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
+                 data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
+          </div>
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">RASPBERRY PI</span>
+              <span class="h-pill ok">ONLINE</span>
+            </div>
+            <div class="h-rows" id="pi-rows"></div>
+            <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
+                 data-key="pi.cpu_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
+          </div>
+          <div class="bar">
+            <span id="conn">connecting…</span>
+            <span id="win">60 min · in memory</span>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div class="chart">
-        <div class="lbl" id="chart-lbl">GPU TEMPERATURE · °C</div>
-        <svg id="chart" class="spark wide" viewBox="0 0 1020 132"
-             preserveAspectRatio="none"
-             data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12"></svg>
-      </div>
-
-      <div class="lbl">EVENTS</div>
-      <div class="log" id="log"></div>
-    </section>
-
-    <!-- ══ right — live status for what we can actually see ══ -->
-    <section class="right">
-      <div class="lbl">FLEET</div>
-
-      <div class="host" id="host-ws">
-        <div class="h-top">
-          <span class="h-name">WORKSTATION</span>
-          <span class="h-pill" id="ws-pill">—</span>
+      <!-- ─────────── EVALS ───────────
+           The pre-existing jobContext wallboard, displayed as-is. Flight Deck
+           provisions no dashboards and stores no eval data; this is a frame
+           around software jobContext installed and operates. -->
+      <section class="surface body-evals" data-name="evals">
+        <iframe id="evals-frame" title="jobContext wallboard"
+                referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin"></iframe>
+        <div class="overlay" id="evals-overlay" hidden>
+          <div class="ov-box">
+            <div class="ov-pill">JOBCONTEXT UNREACHABLE</div>
+            <div class="ov-t" id="ov-title">Grafana is not answering</div>
+            <div class="ov-s" id="ov-sub">—</div>
+            <div class="ov-n">
+              Showing this rather than leaving a stale board looking current.
+              The wallboard is jobContext's; Flight Deck only displays it.
+            </div>
+          </div>
         </div>
-        <div class="h-rows" id="ws-rows"></div>
-        <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
-             data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
-      </div>
+      </section>
 
-      <div class="host" id="host-pi">
-        <div class="h-top">
-          <span class="h-name">RASPBERRY PI</span>
-          <span class="h-pill ok">ONLINE</span>
+      <!-- ─────────── MEDIA ─────────── -->
+      <section class="surface body-plain" data-name="media">
+        <div class="placeholder">
+          <div class="ph-pill">RESERVED</div>
+          <div class="ph-t">MEDIA</div>
+          <div class="ph-s">
+            Artwork, track, artist, transport, position, volume — controlling the
+            machine that is actually producing audio.
+          </div>
+          <div class="ph-n">The Pi is the remote, never the playback device.</div>
         </div>
-        <div class="h-rows" id="pi-rows"></div>
-        <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
-             data-key="pi.cpu_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
-      </div>
+      </section>
 
-      <div class="bar">
-        <span id="conn">connecting…</span>
-        <span id="win">60 min · in memory</span>
-      </div>
-    </section>
+      <!-- ─────────── SIM ─────────── -->
+      <section class="surface body-plain" data-name="sim">
+        <div class="placeholder">
+          <div class="ph-pill" id="sim-pill">NO LINK</div>
+          <div class="ph-t">SIM</div>
+          <div class="ph-s">
+            Waiting for <code>flightdeck-sim-agent</code> on the workstation.
+            SimConnect is Windows-only, so the agent owns it and this panel
+            renders only what the simulator reports.
+          </div>
+          <div class="ph-n">
+            Agent absent is normal — it lives and dies with Windows.
+          </div>
+        </div>
+      </section>
 
+    </main>
   </div>
 </div>
 <script src="deck.js"></script>

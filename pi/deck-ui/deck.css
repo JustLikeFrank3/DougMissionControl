@@ -39,14 +39,85 @@ html, body {
 #deck {
   width: 2560px; height: 720px;
   transform-origin: 0 0;
-  display: grid; grid-template-columns: 600px 1100px 860px;
+  display: flex; flex-direction: column;
 }
 
-.rail  { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-.mid   { padding: 20px 24px; border-left: 1px solid var(--ln);
-         display: flex; flex-direction: column; gap: 14px; }
-.right { padding: 20px; border-left: 1px solid var(--ln);
-         display: flex; flex-direction: column; gap: 12px; }
+/* ── persistent strip ──────────────────────────────────────────────────────
+   72 px, on every surface. Carries navigation, the host status that SIM mode
+   must keep, and a permanent HOME — so "persistent system status in SIM" is
+   satisfied everywhere rather than only there. Moving the wordmark and clock
+   up here is what pays for the height: DECK's rail loses its own eyebrow. */
+
+.strip {
+  height: 72px; flex: none; display: flex; align-items: stretch;
+  background: #0e141d; border-bottom: 1px solid var(--ln);
+}
+.mark { display: flex; align-items: center; padding: 0 22px; border-right: 1px solid var(--ln); }
+.mark b { font-size: 17px; letter-spacing: .28em; font-weight: 600; }
+
+.nav { display: flex; align-items: stretch; }
+.navb {
+  width: 196px;                       /* ~27 mm at this panel's ~180 ppi */
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; border: 0; border-right: 1px solid var(--ln);
+  background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
+}
+.navb .t { font-size: 22px; letter-spacing: .14em; }
+.navb .s { font-size: 11px; letter-spacing: .1em; }
+.navb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--acc); }
+.navb.alert .s { color: var(--am); }
+
+.status { margin-left: auto; display: flex; align-items: center; gap: 26px;
+          padding: 0 22px; font-size: 16px; color: var(--mut); }
+.status b { color: var(--fg); font-weight: 400; }
+.status .live { color: var(--gr); }
+.status .dead { color: var(--rd); }
+
+.home {
+  width: 150px; border: 0; border-left: 1px solid var(--ln); background: transparent;
+  color: var(--fg); font-family: inherit; font-size: 17px; letter-spacing: .14em;
+  cursor: pointer;
+}
+
+/* ── surfaces ─────────────────────────────────────────────────────────────
+   All four stay in the DOM. The EVALS iframe in particular must not be
+   unmounted — reloading it would restart the Grafana playlist every time you
+   glance at DECK. */
+.surfaces { flex: 1; position: relative; min-height: 0; }
+.surface { position: absolute; inset: 0; display: none; }
+.surface.on { display: grid; }
+.body-deck  { grid-template-columns: 600px 1100px 860px; }
+.body-evals { grid-template-columns: 1fr; }
+.body-plain { grid-template-columns: 1fr; place-items: center; }
+
+.rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.mid   { padding: 16px 22px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 11px; }
+.right { padding: 16px 20px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 10px; }
+
+/* ── EVALS ─────────────────────────────────────────────────────────────── */
+#evals-frame { width: 100%; height: 100%; border: 0; background: var(--bg); }
+
+.overlay {
+  position: absolute; inset: 0; background: rgba(11, 15, 21, .93);
+  display: grid; place-items: center;
+}
+.ov-box { max-width: 900px; padding: 0 40px; text-align: center; }
+.ov-pill { display: inline-block; font-size: 15px; letter-spacing: .2em;
+           padding: 5px 12px; border: 1px solid var(--rd); color: var(--rd); }
+.ov-t { font-size: 44px; margin-top: 18px; letter-spacing: -.01em; }
+.ov-s { font-size: 19px; color: var(--mut); margin-top: 12px; }
+.ov-n { font-size: 15px; color: var(--mut); margin-top: 22px; line-height: 1.6; opacity: .8; }
+
+/* ── MEDIA / SIM placeholders ──────────────────────────────────────────── */
+.placeholder { max-width: 1100px; text-align: center; padding: 0 40px; }
+.ph-pill { display: inline-block; font-size: 15px; letter-spacing: .2em;
+           padding: 5px 12px; border: 1px solid var(--mut); color: var(--mut); }
+.ph-t { font-size: 72px; letter-spacing: .1em; margin-top: 18px; line-height: 1; }
+.ph-s { font-size: 20px; color: var(--mut); margin-top: 20px; line-height: 1.6; }
+.ph-s code { color: var(--cy); }
+.ph-n { font-size: 15px; color: var(--mut); margin-top: 20px; opacity: .75; }
 
 /* ── left rail ─────────────────────────────────────────────────────────── */
 
