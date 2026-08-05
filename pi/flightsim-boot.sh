@@ -34,9 +34,11 @@ WS_MAC="${WS_MAC:-AA:BB:CC:DD:EE:FF}"      # that NIC's MAC (WOL target)
 WS_BROADCAST="${WS_BROADCAST:-192.168.1.255}"
 WIN_PORT="${WIN_PORT:-9106}"
 LINUX_PORT="${LINUX_PORT:-9105}"
-# Direct-link address is Linux-only config on the workstation, but we ssh
-# only when :9105 says Linux is up, so it is always valid when used.
+# The point-to-point link only exists under the workstation's Linux boot,
+# which makes it a self-contained "Linux is up" signal — no exporter
+# needed. Derived from LINUX_SSH unless set explicitly.
 LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
+LINUX_PROBE_IP="${LINUX_PROBE_IP:-${LINUX_SSH#*@}}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/flightsim_ed25519}"
 WIN_AGENT_PORT="${WIN_AGENT_PORT:-9107}"
 WIN_AGENT_TOKEN="${WIN_AGENT_TOKEN:-}"     # set in boot.env; see boot-agent.ps1
@@ -59,13 +61,40 @@ if [ "${1:-}" = "bg" ]; then
     exit 0
 fi
 
-# One run at a time — a second trigger while a boot is in flight must not
-# fire a second WOL/reboot volley.
+# One boot at a time, but a request for the OTHER OS must win: a watcher
+# that is still waiting out a boot it can no longer influence used to
+# swallow every later trigger as a "duplicate", so asking to come back
+# from Linux did nothing for five minutes (2026-08-01 incident).
+STATE_FILE=/tmp/flightsim-boot.state
 exec 9>/tmp/flightsim-boot.lock
-flock -n 9 || { log "already running — ignoring duplicate trigger"; exit 0; }
+if ! flock -n 9; then
+    old_target=""; old_pid=""
+    [ -f "$STATE_FILE" ] && read -r old_target old_pid < "$STATE_FILE"
+    if [ "$old_target" = "$TARGET" ]; then
+        log "already booting to $TARGET — ignoring duplicate trigger"
+        exit 0
+    fi
+    log "preempting in-flight '$old_target' boot (pid ${old_pid:-?})"
+    [ -n "$old_pid" ] && kill "$old_pid" 2>/dev/null
+    flock -w 15 9 || { log "could not take the lock — giving up"; exit 1; }
+fi
+printf '%s %s\n' "$TARGET" "$$" > "$STATE_FILE"
+trap 'rm -f "$STATE_FILE"' EXIT
 
-win_up()   { curl -sf --max-time 3 "http://${WS_LAN}:${WIN_PORT}/"   >/dev/null; }
-linux_up() { curl -sf --max-time 3 "http://${WS_LAN}:${LINUX_PORT}/" >/dev/null; }
+# Each OS gets a probe this project owns, plus the optional Prometheus
+# exporter as a second opinion — either answering counts. The exporters
+# alone proved too flaky to gate a voice command on (both died mid-session
+# on 2026-07-31, blinding every trigger).
+tcp_open() { timeout 2 bash -c "echo > /dev/tcp/$1/$2" 2>/dev/null; }
+win_up() {
+    curl -sf --max-time 3 "http://${WS_LAN}:${WIN_AGENT_PORT}/status" >/dev/null && return 0
+    curl -sf --max-time 3 "http://${WS_LAN}:${WIN_PORT}/" >/dev/null
+}
+linux_up() {
+    ping -c1 -W1 "$LINUX_PROBE_IP" >/dev/null 2>&1 && return 0
+    tcp_open "$LINUX_PROBE_IP" 22 && return 0
+    curl -sf --max-time 3 "http://${WS_LAN}:${LINUX_PORT}/" >/dev/null
+}
 pingable() { ping -c1 -W1 "$WS_LAN" >/dev/null 2>&1; }
 
 send_wol() {
@@ -139,12 +168,17 @@ elif pingable; then
     log "host answers ping but no exporter yet (mid-boot?) — watching"
 else
     log "no response — sending WOL to ${WS_MAC}"
-    send_wol; sleep 2; send_wol
+    send_wol; sleep 2 9>&-; send_wol
 fi
 
 deadline=$(( $(date +%s) + POLL_SECS ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    sleep 10
+    # 9>&- keeps the lock fd out of this child. Without it a preempting
+    # trigger kills this script but the inherited fd keeps the lock held
+    # for the remainder of the sleep — measured at 7s of dead time before
+    # the new boot could start, and an outright failure ("could not take
+    # the lock") the moment this interval exceeds the 15s flock wait.
+    sleep 10 9>&-
     if target_up; then
         log "$TARGET is up — deck online"
         exit 0
