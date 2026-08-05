@@ -79,8 +79,12 @@ PY
 }
 
 boot_to_windows() {
-    # The key is command=-restricted on the workstation to
-    # `sudo /usr/local/bin/boot-to-windows` — whatever we exec, that runs.
+    # Prefer the Linux-side HTTP endpoint when available; it avoids the
+    # SSH key dependency entirely. Fall back to the original ssh path if
+    # the endpoint is unavailable.
+    if curl -sf --max-time 3 "http://${WS_LAN}:9108/reboot" >/dev/null 2>&1; then
+        return 0
+    fi
     ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 \
         -o StrictHostKeyChecking=accept-new "$LINUX_SSH" boot
 }
