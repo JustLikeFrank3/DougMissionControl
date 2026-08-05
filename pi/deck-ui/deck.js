@@ -386,9 +386,20 @@
     unknown: { pill: 'UNKNOWN', cls: 'off',  os: '—' }
   };
 
+  var uiStamp = null;
+
   function render(s) {
     state = s;
     observableMax = (s.boot && s.boot.observable_max) || 5;
+
+    // The kiosk browser survives a deck-api restart, so newly installed
+    // HTML/CSS/JS would otherwise sit on disk doing nothing until someone
+    // restarted lightdm. Notice and reload instead.
+    var v = s.version && s.version.ui;
+    if (v && v !== 'unknown') {
+      if (uiStamp === null) uiStamp = v;
+      else if (v !== uiStamp) { location.reload(); return; }
+    }
 
     // Traces redraw only when a genuinely new sample lands, not on the 1 Hz
     // clock tick — the Pi 4B has better things to do with its CPU.

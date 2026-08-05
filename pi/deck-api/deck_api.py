@@ -135,13 +135,32 @@ PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
 EVALS_DASH_PREFIX = cfg("EVALS_DASH_PREFIX", "kiosk-")
 DASH_CACHE_SECS = float(cfg("EVALS_DASH_CACHE", "60"))
 
+def _stamp(path) -> str:
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(path.stat().st_mtime))
+    except OSError:
+        return "unknown"
+
+
+def _ui_stamp() -> str:
+    """Newest mtime across the UI bundle.
+
+    The kiosk browser keeps running across a deck-api restart, so installing
+    new HTML/CSS/JS changes nothing on screen until the page is reloaded.
+    Publishing this lets the page notice and reload itself.
+    """
+    try:
+        newest = max(p.stat().st_mtime for p in UI_DIR.iterdir() if p.is_file())
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(newest))
+    except (OSError, ValueError):
+        return "unknown"
+
+
 try:
     _src = Path(__file__).resolve()
-    BUILD = {"file": str(_src),
-             "mtime": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                    time.localtime(_src.stat().st_mtime))}
+    BUILD = {"file": str(_src), "mtime": _stamp(_src), "ui": _ui_stamp()}
 except OSError:
-    BUILD = {"file": __file__, "mtime": "unknown"}
+    BUILD = {"file": __file__, "mtime": "unknown", "ui": "unknown"}
 
 SURFACES = ("deck", "evals", "media", "sim")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
