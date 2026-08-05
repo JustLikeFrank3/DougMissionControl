@@ -94,7 +94,7 @@ html, body {
 .surface { position: absolute; inset: 0; display: none; }
 .surface.on { display: grid; }
 .body-deck  { grid-template-columns: 600px 1100px 860px; }
-.body-evals { grid-template-columns: 1fr; }
+.body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
 .body-plain { grid-template-columns: 1fr; place-items: center; }
 
 .rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
@@ -104,6 +104,25 @@ html, body {
          display: flex; flex-direction: column; gap: 10px; }
 
 /* ── EVALS ─────────────────────────────────────────────────────────────── */
+
+/* Second-level nav, built at runtime from Grafana's own dashboard list.
+   56 px costs the board ~9% of its height, which is the price of not having
+   to wait for a 60 s playlist to come round to the one you want. AUTO puts
+   it back on the rotation the wallboard has always done. */
+.subnav { display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
+          background: #0e141d; overflow: hidden; }
+.subb {
+  flex: 1; min-width: 0; border: 0; border-right: 1px solid var(--ln);
+  background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; padding: 0 8px;
+}
+.subb .t { font-size: 17px; letter-spacing: .1em; white-space: nowrap;
+           overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.subb .s { font-size: 10px; letter-spacing: .08em; opacity: .8; }
+.subb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--cy); }
+.subb[data-view="auto"].on { box-shadow: inset 0 -3px 0 var(--acc); }
+
 #evals-frame { width: 100%; height: 100%; border: 0; background: var(--bg); }
 
 .overlay {

@@ -131,6 +131,9 @@ POLL_BUSY = float(cfg("DECK_POLL_BUSY", "2"))
 # connected to ::1 and got nothing while curl's happy-eyeballs fell back.
 GRAFANA_URL = cfg("GRAFANA_URL", "http://127.0.0.1:3000").rstrip("/")
 PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
+# Only boards meant for a kiosk get a nav button. Set to "" to list them all.
+EVALS_DASH_PREFIX = cfg("EVALS_DASH_PREFIX", "kiosk-")
+DASH_CACHE_SECS = float(cfg("EVALS_DASH_CACHE", "60"))
 
 try:
     _src = Path(__file__).resolve()
@@ -182,8 +185,11 @@ class Deck:
                         "previous": None, "episode": None,
                         "manual_in_episode": False, "all": list(SURFACES)},
             # The wallboard, as Flight Deck sees it from outside.
+            # `view` is "auto" (the rotating playlist, as the wallboard has
+            # always behaved) or a dashboard uid the operator pinned.
             "evals": {"grafana": False, "mode": None, "url": None,
-                      "checked": None, "playlist": None},
+                      "checked": None, "playlist": None,
+                      "view": "auto", "view_url": None, "dashboards": []},
             "events": [],
             "profiles": PROFILES,
             "server_time": time.time(),
@@ -551,23 +557,69 @@ def playlist_mode(os_now: str, current: str | None) -> str:
     return current or "linux"
 
 
+_dash_cache: tuple[float, list] = (0.0, [])
+
+
+def list_dashboards() -> list:
+    """The boards Grafana currently has, for the EVALS sub-navigation.
+
+    Resolved at runtime by uid, for the same reason playlists are: these are
+    jobContext's dashboards and it may add, rename or recreate them at any
+    time. Flight Deck provisions none of them and hardcodes none of them.
+    """
+    global _dash_cache
+    age, cached = _dash_cache
+    if cached and (time.time() - age) < DASH_CACHE_SECS:
+        return cached
+    try:
+        with urllib.request.urlopen(
+                f"{GRAFANA_URL}/api/search?type=dash-db&limit=100", timeout=5) as r:
+            items = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError):
+        return cached  # keep the last good list rather than emptying the nav
+
+    out = []
+    for it in items:
+        uid, title = it.get("uid"), it.get("title") or ""
+        if not uid or (EVALS_DASH_PREFIX and not uid.startswith(EVALS_DASH_PREFIX)):
+            continue
+        # "kiosk-provenance" -> "PROVENANCE". The real titles are far too long
+        # for a nav button ("Provenance — Generation Truth Gate").
+        label = uid[len(EVALS_DASH_PREFIX):].replace("-", " ").strip().upper() or uid.upper()
+        out.append({"uid": uid, "title": title, "label": label})
+    out.sort(key=lambda d: d["label"])
+    _dash_cache = (time.time(), out)
+    return out
+
+
 def refresh_evals(os_now: str) -> None:
     healthy = http_ok(f"{GRAFANA_URL}/api/health", timeout=4)
     current = DECK.state["evals"].get("mode")
     mode = playlist_mode(os_now, current)
     url, name = (resolve_playlist(mode) if healthy else (None, None))
+    boards = list_dashboards() if healthy else None
 
     def apply(s):
         e = s["evals"]
         e["grafana"] = healthy
         e["checked"] = time.time()
-        if healthy:
-            e["mode"] = mode
-            e["playlist"] = name
-            # Keep the last good URL rather than blanking the iframe on a
-            # single failed lookup.
-            if url:
-                e["url"] = url
+        if not healthy:
+            return
+        e["mode"] = mode
+        e["playlist"] = name
+        # Keep the last good URL rather than blanking the iframe on a
+        # single failed lookup.
+        if url:
+            e["url"] = url
+        if boards is not None:
+            e["dashboards"] = boards
+
+        # A pinned board stays pinned across an OS flip — same "manual wins"
+        # rule the surfaces use. Only AUTO follows the playlist.
+        if e["view"] == "auto":
+            e["view_url"] = e["url"]
+        else:
+            e["view_url"] = f"{GRAFANA_URL}/d/{e['view']}?kiosk"
 
     DECK.mutate(apply)
 
@@ -884,6 +936,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/abort":
             ok, msg = fire_abort()
             return self._json(200, {"ok": ok, "message": msg})
+
+        if path == "/api/evals/view":
+            view = str(body.get("view") or "auto")
+            known = {d["uid"] for d in DECK.state["evals"].get("dashboards", [])}
+            if view != "auto" and view not in known:
+                return self._json(400, {"ok": False,
+                                        "message": f"unknown dashboard {view!r}"})
+
+            def apply(s, _v=view):
+                e = s["evals"]
+                e["view"] = _v
+                e["view_url"] = (e["url"] if _v == "auto"
+                                 else f"{GRAFANA_URL}/d/{_v}?kiosk")
+
+            DECK.mutate(apply)
+            DECK.event("deck", f"evals view: {view}")
+            return self._json(200, {"ok": True, "view": view,
+                                    "url": DECK.state["evals"]["view_url"]})
 
         if path == "/api/surface":
             name = str(body.get("surface") or "")

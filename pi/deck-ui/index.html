@@ -151,6 +151,12 @@
            provisions no dashboards and stores no eval data; this is a frame
            around software jobContext installed and operates. -->
       <section class="surface body-evals" data-name="evals">
+        <nav class="subnav" id="evals-nav">
+          <button class="subb on" data-view="auto">
+            <span class="t">AUTO</span><span class="s" id="auto-sub">playlist</span>
+          </button>
+          <!-- the rest are built from Grafana's own dashboard list -->
+        </nav>
         <iframe id="evals-frame" title="jobContext wallboard"
                 referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin"></iframe>
         <div class="overlay" id="evals-overlay" hidden>

@@ -284,16 +284,58 @@
     });
   }
 
+  var navSig = null;
+
+  function renderEvalsNav(e) {
+    // Rebuild only when the board list actually changes — Grafana's list is
+    // polled, and replacing these nodes every frame would fight your finger.
+    var boards = e.dashboards || [];
+    var sig = boards.map(function (d) { return d.uid; }).join(',');
+    var nav = $('evals-nav');
+    if (sig !== navSig) {
+      navSig = sig;
+      [].forEach.call(nav.querySelectorAll('[data-view]:not([data-view="auto"])'),
+        function (n) { n.remove(); });
+      boards.forEach(function (d) {
+        var b = document.createElement('button');
+        b.className = 'subb';
+        b.dataset.view = d.uid;
+        b.innerHTML = '<span class="t"></span><span class="s"></span>';
+        b.querySelector('.t').textContent = d.label;
+        b.querySelector('.s').textContent = 'board';
+        b.title = d.title;
+        b.addEventListener('click', function () { pickView(d.uid); });
+        nav.appendChild(b);
+      });
+    }
+    var view = e.view || 'auto';
+    [].forEach.call(nav.querySelectorAll('[data-view]'), function (b) {
+      b.classList.toggle('on', b.dataset.view === view);
+    });
+    $('auto-sub').textContent = e.mode ? e.mode + ' playlist' : 'playlist';
+  }
+
+  function pickView(view) {
+    if (state && state.evals) {
+      state.evals.view = view;          // optimistic, so a tap feels instant
+      renderEvalsNav(state.evals);
+    }
+    post('/api/evals/view', { view: view });
+  }
+
   function renderEvals(s) {
     var e = s.evals || {};
     var frame = $('evals-frame');
 
-    // Assigning .src reloads the frame, which restarts the Grafana playlist
-    // from its first dashboard. Only touch it when the URL actually changes
-    // — an OS flip, or the playlist being recreated with a new uid.
-    if (e.url && e.url !== evalsSrc) {
-      evalsSrc = e.url;
-      frame.src = e.url;
+    renderEvalsNav(e);
+
+    // Assigning .src reloads the frame, which restarts a playlist from its
+    // first dashboard. Only touch it when the URL actually changes — a view
+    // being picked, an OS flip while on AUTO, or a uid being re-minted.
+    var want = e.view_url || e.url;
+    if (want && want !== evalsSrc) {
+      evalsSrc = want;
+      frame.src = want;
     }
 
     if (e.grafana) lastGrafanaOk = e.checked;
