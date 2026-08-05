@@ -185,24 +185,53 @@ not from a process list — *running* is a weaker claim than *ready*.
 Reclaiming the TV from the jobContext wallboard is the use case that put the
 Edge on the Pi, and it stays.
 
-**Found while researching, and it decides the integration:** the jobContext
-wallboard is *already running on this Pi*. jobContextMCP's README describes
-"a Raspberry Pi running k3s + Prometheus + Grafana, federating the AKS
-cluster", with provisioned kiosk dashboards (`kiosk-evals`,
+### The Grafana stack is pre-existing infrastructure, not Flight Deck scope
+
+The jobContext wallboard *already runs on this Pi*. jobContextMCP's README
+describes "a Raspberry Pi running k3s + Prometheus + Grafana, federating the
+AKS cluster", with provisioned kiosk dashboards (`kiosk-evals`,
 `kiosk-provenance`, `kiosk-cloud`, `kiosk-ollama`, `kiosk-gaming`) and a
 `wallboard-kiosk.sh` that probes `up{job=gpu-windows}` to swap playlists by
-booted OS. That script is not in the repo — it lives on the Pi.
+booted OS. That script is not in this repo — it lives on the Pi.
 
-So there is **already a Chromium kiosk on this box**. Flight Deck must
-*replace* it, not run beside it: two browsers on a 4 GB Pi is the thing most
-likely to actually break this. The OS-swap logic is absorbed for free —
-deck-api already determines the booted OS from the same probes.
+**Preserve all of it.** The earlier "no Prometheus, no Grafana" rule was
+about Flight Deck not *introducing* a metrics stack. It was never a licence
+to remove one that already exists and serves the original use case. Treat
+k3s, Prometheus, Grafana, the five kiosk dashboards, and the playlist logic
+as an **external, pre-existing dependency**.
+
+Flight Deck therefore **integrates with the existing kiosk rather than
+replacing it**. What changes is only which component sits at the top:
+
+- The **playlist behaviour is preserved**, including the OS-aware swap.
+- The **dashboards are untouched** — Flight Deck provisions none and edits
+  none.
+- Flight Deck becomes the single **display-state controller**, so that two
+  things are not independently deciding what is on screen.
+
+There is one hard constraint underneath that: two compositors cannot share
+one framebuffer. Whichever process hosts the display has to host the other's
+output too. That decision must be made from the live configuration, not from
+this document.
+
+### Inspect before touching anything
+
+`pi/inspect-wallboard.sh` is read-only and writes
+`docs/pi-wallboard-survey.md`: what launches the browser today, whether it
+owns tty1/DRM, the Grafana health/dashboards/playlists, whether anonymous
+viewing is allowed, k3s and Prometheus state, and the memory headroom that is
+actually left. It also copies any `wallboard-kiosk.sh` it finds into
+`pi/wallboard/`, so that now-load-bearing script finally lands in git.
+
+`pi/setup-display.sh` **refuses to run** when it detects an existing kiosk,
+and prints that command instead. Override only after reading the survey, with
+`--adopt-kiosk`. It also no longer changes the default systemd target.
 
 ### Integration order
 
-1. **Display the existing playlist directly.** Because Grafana is already on
-   this Pi, `EVALS` is a `?kiosk` playlist URL on localhost. No new backend,
-   no duplicated logic, one browser.
+1. **Host the existing playlist as-is.** Grafana is already on this Pi, so
+   `EVALS` is a `?kiosk` playlist URL on localhost. No new backend, no
+   duplicated dashboards, and the existing playlist selection preserved.
 2. If the 16:9 boards prove too tall at 720 px, add a `kiosk-edge` board
    **in jobContext** with the *same queries* in a 5:1 layout. Same data, same
    logic, different geometry — that is not duplication.
@@ -216,6 +245,23 @@ show: mean judge score and worst entry, hallucination rate, verdict flip
 rate, Layer 1 smoke pass rate, active alerts, per-dimension means, CoV
 instability by entry, time since last suite run, eval pushes by kind, runs
 without a provenance record, and judge ⇄ provenance agreement by bucket.
+
+### Display-state controller
+
+One component decides what is on screen, and the existing playlist keeps
+running underneath it:
+
+| Condition | Display state |
+|---|---|
+| jobContext normal / idle | **Grafana playlist** (EVALS) — the existing kiosk |
+| boot requested, any origin | **DECK** |
+| Windows gaming online | DECK, or the existing `kiosk-gaming` playlist |
+| sim agent appears | **SIM** |
+| user selects MEDIA | **MEDIA** |
+| MSFS exits | previous / default → back to the playlist |
+
+Manual selection always wins, scoped by episode (below), so the screen never
+changes while it is being used.
 
 **Unreachable ≠ zero.** deck-api health-checks Grafana and the jobContext API
 independently of the embedded frame; if either is down, EVALS covers the
@@ -232,15 +278,46 @@ cannot talk to MSFS directly, so a Windows-side agent is required — which
 this repo already has a pattern for in `windows/boot-agent.ps1` on :9107.
 
 ```
-touch → deck-ui → deck-api → sim adapter → sim-agent :9108 → SimConnect → MSFS 2024
-                     ↑                                                        │
-                     └──────────────── observed state ────────────────────────┘
+RASPBERRY PI                                  WINDOWS WORKSTATION
+┌──────────────────────────┐                 ┌──────────────────────────┐
+│ Flight Deck UI (XENEON)  │                 │ flightdeck-sim-agent     │
+│ deck-api                 │      LAN        │        ↕                 │
+│                          │◄───────────────►│ SimConnect               │
+│ Existing Grafana         │                 │        ↕                 │
+│ Existing Prometheus      │                 │ MSFS 2024                │
+│ Existing kiosk playlist  │                 └──────────────────────────┘
+└──────────────────────────┘
 ```
 
-MSFS-specific names, units and event ids live **only** inside `sim/` and the
-Windows agent. deck-api carries a normalized envelope
-(`{control:"gear", action:"set", value:"up"}`) and knows nothing about
-SimConnect.
+Commands flow XENEON → deck-api → sim agent → SimConnect → MSFS.
+State flows MSFS → SimConnect → sim agent → deck-api → SSE → XENEON.
+
+**The Pi must never attempt to load or speak SimConnect.** The Windows agent
+owns every SimConnect interaction and exposes *normalized Flight Deck state*
+— raw SimConnect concepts do not leak onto the Pi or into the UI. deck-api
+carries an envelope like `{control:"gear", action:"set", value:"up"}` and
+knows nothing about SimVars, event ids or units.
+
+### The agent's contract, deliberately tiny
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | agent alive, SimConnect session state, sim version, current aircraft |
+| `GET /state` | the normalized state block |
+| `POST /command` | `{cmd_id, control, action, value}` → `{cmd_id, accepted, seq}` |
+| push or poll | WebSocket/SSE from Windows → Pi, or short polling, for rapidly changing values |
+
+Initial normalized state covers only the proof controls — gear, flaps
+position/detent, parking brake, landing lights, autopilot master — plus
+altitude, airspeed and heading if they come for free.
+
+### The agent is expected to disappear
+
+It starts with Windows and MSFS and vanishes on every reboot into Linux.
+That is normal operation, not an error: **deck-api treats loss of the sim
+agent as `SIM OFFLINE`, never as a Flight Deck failure.** The SIM surface
+shows *no link* in the navigation strip, and the sim episode closes so the
+display returns to the playlist.
 
 `node-simconnect` could in principle let the Pi connect over TCP once
 `SimConnect.xml` is opened to the network. Rejected for v1: unofficial
@@ -358,19 +435,24 @@ way.
 | Flight Deck's own telemetry | Flight Deck | Latest value in deck-api, 60-minute window in the browser, dies with the page |
 | Boot orchestration | `flightsim-boot.sh` | Still unmodified; deck-api wraps it and follows its journald output |
 
-## Deliberately absent
+## Deliberately absent — and the difference that matters
 
-Flight Deck adds none of these. The Grafana that EVALS *displays* is
-jobContext's, already installed and operated by jobContext — showing it is
-not reintroducing it here.
+The rule is about what Flight Deck **introduces**, never about removing what
+is already there. The Pi's k3s / Prometheus / Grafana stack is sunk
+infrastructure serving the original wallboard use case: it stays, untouched.
+Scope creep would be *rebuilding or expanding* it to support Flight Deck.
 
-- **Prometheus, Grafana, Loki, long-term retention, historical dashboards
-  belonging to Flight Deck.** A TSDB on flash with no real wear levelling
-  corrupts before it dies.
+Flight Deck itself adds none of:
+
+- **Its own Prometheus, Grafana, Loki, retention, or historical dashboards.**
+  A Flight-Deck-owned TSDB on this thumb drive would corrupt before it dies,
+  and the existing stack already answers the historical questions.
+- **New dashboards in the existing Grafana**, beyond at most one `kiosk-edge`
+  board *provisioned by jobContext* if the 5:1 aspect demands it.
 - **Grafana panels embedded in Flight Deck's own DECK/SIM surfaces.** On a 4B
   that costs roughly 700 MB more than serving numbers from deck-api and
-  drawing them inline. EVALS is the deliberate exception: it *is* the
-  wallboard, and it replaces the browser that was already rendering it.
+  drawing them inline. EVALS is the deliberate exception, because there it
+  *is* the wallboard rather than a decoration on top of one.
 - **New exporters, SMART trend storage, PresentMon, Mac mini telemetry.**
 - **NVMe, and any Pi 5 migration.**
 
@@ -390,13 +472,17 @@ Both test files run anywhere — no Pi and no exporter needed.
 
 ## Build order for pass 3
 
+0. **Survey the live Pi.** `./pi/inspect-wallboard.sh`, commit the survey and
+   the recovered `wallboard-kiosk.sh`. Nothing else starts until the five
+   questions at the end of that survey are answered from real output.
 1. **Console shell.** The 72 px strip, four surfaces, episode-scoped
    switching, DECK moved under it. UI change plus a little surface state in
    deck-api — no new backends.
-2. **EVALS.** Point the surface at the existing Grafana playlist on
-   localhost, retire `wallboard-kiosk.sh` so there is one browser, add the
-   reachability overlay. Then a `kiosk-edge` 5:1 board *in jobContext* if the
-   existing layout proves too tall.
+2. **EVALS.** Host the existing Grafana playlist on localhost, preserving its
+   OS-aware selection, and add the reachability overlay. The existing kiosk's
+   playlist logic is adopted, not rewritten; its dashboards are not touched.
+   Then a `kiosk-edge` 5:1 board *in jobContext* if the existing layout proves
+   too tall.
 3. **Sim link, before any control.** The Windows sim-agent, a SimConnect
    session, one read-only value on screen. This is where the SimVar names get
    verified with SimvarWatcher against the Baron.

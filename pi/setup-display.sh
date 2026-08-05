@@ -25,10 +25,12 @@ UI_DST=/opt/flightdeck/deck-ui
 CONF=/etc/flightsim/deck.env
 
 FORCE_MODE=0
+ADOPT=0
 URL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --force-mode) FORCE_MODE=1 ;;
+        --adopt-kiosk) ADOPT=1 ;;
         --url) URL="${2:-}"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -36,6 +38,64 @@ while [ $# -gt 0 ]; do
 done
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+# ── refuse to stomp an existing wallboard ────────────────────────────────
+# This Pi may already run the jobContext wallboard: a Grafana kiosk playlist
+# driven by wallboard-kiosk.sh, owning tty1 and the DRM device. That is
+# pre-existing infrastructure serving a real use case — starting a second
+# compositor would fight it for the display and take the wallboard down.
+# Two kiosks cannot share one framebuffer; the choice of which one hosts the
+# other has to be made deliberately, from the live configuration.
+say "Preflight — is something already driving this display?"
+EXISTING=""
+for u in $(systemctl list-unit-files --no-legend --no-pager 2>/dev/null | awk '{print $1}' \
+           | grep -iE 'kiosk|wallboard' | grep -v '^flightdeck-kiosk'); do
+    state="$(systemctl is-enabled "$u" 2>/dev/null || true)"
+    [ "$state" = enabled ] || [ "$state" = static ] && EXISTING="${EXISTING}${u} (${state})\n"
+done
+# pgrep -f matches against whole command lines, including this script's own
+# shell and anything that merely mentions the pattern — filter our own process
+# tree out or the check reports a kiosk that is really just us looking for one.
+running() {
+    pgrep -af "$1" 2>/dev/null \
+        | awk -v me="$$" -v pp="$PPID" '$1 != me && $1 != pp' \
+        | grep -q .
+}
+if running 'wallboard-kiosk'; then
+    EXISTING="${EXISTING}wallboard-kiosk.sh is running right now\n"
+fi
+if running 'chromium.*(grafana|:3000|playlist)'; then
+    EXISTING="${EXISTING}a chromium instance is showing Grafana right now\n"
+fi
+
+if [ -n "$EXISTING" ] && [ "$ADOPT" -eq 0 ]; then
+    printf '\n\033[31mRefusing to continue.\033[0m An existing kiosk owns this display:\n\n'
+    printf "  $EXISTING"
+    cat <<'STOP'
+
+That is the jobContext wallboard, and this script would start a second
+compositor on tty1 and change the default systemd target underneath it.
+
+Do this first:
+
+  ./pi/inspect-wallboard.sh      # read-only; writes docs/pi-wallboard-survey.md
+
+Commit the survey, decide from it how Flight Deck should host the existing
+playlist, and only then re-run with:
+
+  sudo ./pi/setup-display.sh --adopt-kiosk
+
+STOP
+    exit 2
+fi
+if [ -n "$EXISTING" ]; then
+    printf '  proceeding with --adopt-kiosk over:\n'
+    printf "    $EXISTING"
+    printf '  the existing kiosk is NOT disabled by this script — do that yourself\n'
+    printf '  once Flight Deck is confirmed to be hosting the playlist.\n'
+else
+    echo "  nothing else appears to own the display"
+fi
 
 # ── packages ─────────────────────────────────────────────────────────────
 say "Packages"
@@ -164,7 +224,16 @@ WantedBy=graphical.target
 UNIT
 
 systemctl daemon-reload
-systemctl set-default graphical.target >/dev/null 2>&1 || true
+
+# Changing the default target reshapes what comes up at boot for everything
+# else on this host, so record the old value and say what happened.
+PREV_TARGET="$(systemctl get-default 2>/dev/null || echo unknown)"
+if [ "$PREV_TARGET" != graphical.target ]; then
+    echo "  default target was ${PREV_TARGET}; leaving it alone"
+    echo "  (the unit is WantedBy=graphical.target — set it yourself if you want"
+    echo "   the kiosk at boot: systemctl set-default graphical.target)"
+fi
+
 systemctl enable flightdeck-kiosk.service >/dev/null
 systemctl restart flightdeck-kiosk.service
 sleep 3
