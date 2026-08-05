@@ -157,6 +157,17 @@ chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.config/autostart/flightsim-greeting.d
 
 install -m 755 "$SCRIPT_DIR/boot-agent.py" /usr/local/bin/boot-agent.py
 
+# Shared token guarding the agent's /reboot, mirroring the Windows agent.
+# Generated once and kept across re-runs so the Pi's copy stays valid.
+install -d -m 755 /etc/flightsim
+AGENT_TOKEN_FILE=/etc/flightsim/boot-agent.token
+if [ ! -s "$AGENT_TOKEN_FILE" ]; then
+    (umask 077; python3 -c 'import secrets; print(secrets.token_hex(16))' \
+        > "$AGENT_TOKEN_FILE")
+fi
+chmod 600 "$AGENT_TOKEN_FILE"
+AGENT_TOKEN="$(head -n1 "$AGENT_TOKEN_FILE")"
+
 # Scarlett keeps stale state across warm dual-boot reboots; reset it at
 # boot so it enumerates without a physical replug.
 install -m 755 "$SCRIPT_DIR/scarlett-reset.py" /usr/local/bin/scarlett-reset.py
@@ -198,13 +209,20 @@ WantedBy=multi-user.target
 EOF
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now flightsim-boot-agent.service >/dev/null 2>&1 || true
+    systemctl enable flightsim-boot-agent.service >/dev/null 2>&1 || true
+    # restart, not `enable --now`: a re-run must pick up the new agent code
+    # rather than leaving the already-running old copy in place.
+    systemctl restart flightsim-boot-agent.service >/dev/null 2>&1 || true
 fi
 if ! curl -sf --max-time 2 http://127.0.0.1:9108/status >/dev/null 2>&1; then
     nohup /usr/local/bin/boot-agent-http >/dev/null 2>&1 &
     sleep 1
 fi
 
+echo
+echo "Linux boot-agent token — add this line to /etc/flightsim/boot.env on the Pi,"
+echo "or the Pi falls back to the ssh key for every reboot request:"
+echo "    LINUX_AGENT_TOKEN=$AGENT_TOKEN"
 echo
 if [ -n "$PUBKEY" ]; then
     echo "Done. Test from the Pi:  ssh -i ~/.ssh/flightsim_ed25519 $REAL_USER@192.168.100.1 boot"

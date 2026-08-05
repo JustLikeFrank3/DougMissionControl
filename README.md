@@ -52,6 +52,11 @@ windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, to
 windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
 windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting
+linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows one)
+linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
+linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
+linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
+tests/                   shell tests for the above — `bash tests/test_*.sh`
 ```
 
 ## One-time setup (in this order)
@@ -83,8 +88,11 @@ to the workstation's Linux boot. Substitute your own throughout.
 3. **Linux boot** (sudo, with the key from step 2):
    `sudo ./linux/setup.sh 'ssh-ed25519 AAAA… flightsim-boot@pi'`
    — GRUB_DEFAULT=saved, the `boot-to-windows` helper, the forced-command
-   authorized_keys entry, persistent `ethtool wol g`, and the Linux logon
-   greeting + VS Code autostart.
+   authorized_keys entry, persistent `ethtool wol g`, the `:9108` boot
+   agent, and the Linux logon greeting + VS Code autostart. It prints a
+   `LINUX_AGENT_TOKEN=` line; add that to `boot.env` on the Pi too. The
+   public key is optional — omit it to install everything except the ssh
+   path, and the Pi will use the token-guarded agent instead.
 4. **BIOS**: enable "Resume by PCI-E/PME" (Wake on LAN) and **disable**
    ErP/EuP deep-off, or the NIC loses standby power at S5 and cold-boot
    wake silently fails.
@@ -112,6 +120,8 @@ Most values live in `/etc/flightsim/boot.env` on the Pi (created by
 | `WS_BROADCAST` | subnet broadcast address for the magic packet |
 | `LINUX_SSH` | user@host for the Linux boot (a direct-link IP is fine) |
 | `WIN_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\boot-agent.token` |
+| `LINUX_AGENT_TOKEN` | must match `/etc/flightsim/boot-agent.token` on the Linux boot. Unset means every reboot-to-Windows request goes over the ssh key instead |
+| `LINUX_AGENT_PORT` | the Linux boot agent's port (default 9108) |
 | `POLL_SECS` | how long to keep watching a boot (default 300) |
 
 Hardcoded elsewhere and worth knowing about: the Pi's address in
@@ -131,9 +141,18 @@ The orchestrator probes two Prometheus exporters that belong to a
 separate project (a Grafana wallboard): `:9105` answering means Linux,
 `:9106` means Windows. This repo does not install them — if you run
 this without that stack, repoint `WIN_PORT`/`LINUX_PORT` at
-anything that answers HTTP only under the OS in question. The boot
-agent's own `:9107/status` is a natural Windows-up signal and is more
-reliable than the exporter (which has died on its own more than once).
+anything that answers HTTP only under the OS in question. The two boot
+agents are the natural candidates — `:9107/status` for Windows and
+`:9108/status` for Linux. Both are unauthenticated reads, both ship with
+this repo, and both are more reliable than the exporters (which have died
+on their own more than once).
+
+Note what a failed probe does *not* distinguish: a machine that is off,
+a machine asleep ignoring magic packets, and a machine that is up with a
+dead exporter all look identical from the Pi. All three log
+`no response — sending WOL`. If a trigger reaches the Pi and nothing
+boots, check whether the machine was merely asleep before suspecting
+fauxmo — see the WOL note in Troubleshooting.
 
 ## Test matrix
 
@@ -171,6 +190,22 @@ cold sim starts — not both.
   enabled, or the last shutdown was from Linux without
   `flightsim-wol.service` armed. A lit link LED while off means standby
   power is present.
+- **WOL does nothing from sleep**, though it works from full off. A
+  different problem with the same symptom, and the one that silently
+  breaks scheduled boots. On Windows check `powercfg /a`: "Standby (S0 Low
+  Power Idle)" means Modern Standby, where wake-on-magic-packet is
+  unreliable by design — switch the BIOS to S3 if it offers the choice, or
+  set sleep to Never on a machine whose whole job is being summonable.
+  `powercfg -devicequery wake_armed` must list the NIC; if it does not,
+  the `powercfg /deviceenablewake` grant did not stick. Under Linux,
+  `ethtool <iface>` should report `Wake-on: g`.
+- **Alexa acknowledges, the Pi logs the trigger, and nothing boots.** Read
+  past the generic `WARN: reboot request failed` — it covers ssh auth
+  failure, an unreachable host, and a token rejection alike. Run the
+  reboot leg by hand from the Pi and read the real error. A `Permission
+  denied (publickey)` here usually means `LINUX_SSH` names the wrong
+  account: it must be the *workstation's* username, which is easy to
+  confuse with the Pi's own.
 - **Machine wakes but nothing is spoken.** Nobody logged on — the greeting
   is a logon task. See auto sign-in above.
 - Logs: `journalctl -t flightsim-boot` on the Pi (plus
@@ -178,17 +213,29 @@ cold sim starts — not both.
 
 ## Security notes
 
-- The Pi holds no workstation credentials. Its ssh key is bound in
-  `authorized_keys` to `command="sudo /usr/local/bin/boot-to-windows"`
-  with `restrict`, and the sudoers rule covers exactly that one script —
-  the key can reboot the box into Windows and nothing else.
-- The boot agent runs as SYSTEM (it must reboot before anyone logs on) and
-  is guarded by a shared token; a wrong token gets a 403. It is a
-  hand-rolled HTTP listener on a LAN port — fine behind a home router,
-  not something to expose to the internet.
+- There are two ways to reboot the workstation into Windows, and both are
+  credential-guarded. The Pi's ssh key is bound in `authorized_keys` to
+  `command="sudo /usr/local/bin/boot-to-windows"` with `restrict`, and the
+  sudoers rule covers exactly that one script — the key can reboot the box
+  into Windows and nothing else. The Linux boot agent on `:9108` is the
+  faster path and needs `LINUX_AGENT_TOKEN`; the orchestrator tries it
+  first and falls back to the ssh key when no token is configured or the
+  agent does not answer.
+- Both boot agents fail closed. A wrong token gets a 403, and a missing or
+  empty token file refuses `/reboot` outright rather than degrading to "no
+  token required" — so a half-finished install cannot leave an
+  unauthenticated reboot endpoint listening on the LAN.
+- The Pi does hold both agent tokens, in `/etc/flightsim/boot.env`. They
+  are reboot-only credentials: neither agent exposes a shell, a file
+  transfer, or any command beyond the reboot it was built for. `/status`
+  and `/` are unauthenticated on both, being reads.
+- The Windows agent runs as SYSTEM (it must reboot before anyone logs on).
+  Both are hand-rolled HTTP listeners on LAN ports — fine behind a home
+  router, not something to expose to the internet.
 - fauxmo is LAN-only, "off" is a deliberate no-op, and the state probe is
   a read.
-- No secrets in the repo. The agent token is generated at install time.
+- No secrets in the repo. Both agent tokens are generated at install time,
+  and `.gitignore` covers `*.token`.
 
 ## Origin
 

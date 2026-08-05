@@ -58,6 +58,11 @@ LINUX_SSH=${LINUX_SSH}
 # windows/setup.ps1 (C:\ProgramData\dualboot\boot-agent.token):
 #WIN_AGENT_TOKEN=
 #WIN_AGENT_PORT=9107
+# Optional, for the faster reboot-into-Windows path — the token printed by
+# linux/setup.sh (/etc/flightsim/boot-agent.token). Unset means every
+# reboot request goes over the ssh key instead:
+#LINUX_AGENT_TOKEN=
+#LINUX_AGENT_PORT=9108
 ENV
 fi
 

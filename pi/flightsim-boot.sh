@@ -40,6 +40,8 @@ LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/flightsim_ed25519}"
 WIN_AGENT_PORT="${WIN_AGENT_PORT:-9107}"
 WIN_AGENT_TOKEN="${WIN_AGENT_TOKEN:-}"     # set in boot.env; see boot-agent.ps1
+LINUX_AGENT_PORT="${LINUX_AGENT_PORT:-9108}"
+LINUX_AGENT_TOKEN="${LINUX_AGENT_TOKEN:-}" # set in boot.env; see linux/boot-agent.py
 POLL_SECS="${POLL_SECS:-300}"              # give WOL + a chained double boot time
 # Why this Windows boot was requested: "sim" (flight deck: greeting +
 # MSFS) or "plain" (greeting only). Set per fauxmo device via env, read
@@ -79,12 +81,17 @@ PY
 }
 
 boot_to_windows() {
-    # Prefer the Linux-side HTTP endpoint when available; it avoids the
-    # SSH key dependency entirely. Fall back to the original ssh path if
-    # the endpoint is unavailable.
-    if curl -sf --max-time 3 "http://${WS_LAN}:9108/reboot" >/dev/null 2>&1; then
+    # Prefer the Linux-side agent when a token is configured; it avoids the
+    # ssh key dependency entirely. The agent refuses an unauthenticated
+    # /reboot, so with no token set we skip straight to ssh rather than
+    # firing a request that could only ever come back 403.
+    if [ -n "$LINUX_AGENT_TOKEN" ] && curl -sf --max-time 3 \
+        "http://${WS_LAN}:${LINUX_AGENT_PORT}/reboot?token=${LINUX_AGENT_TOKEN}" \
+        >/dev/null 2>&1; then
         return 0
     fi
+    # The key is command=-restricted on the workstation to
+    # `sudo /usr/local/bin/boot-to-windows` — whatever we exec, that runs.
     ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 \
         -o StrictHostKeyChecking=accept-new "$LINUX_SSH" boot
 }
