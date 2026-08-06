@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>flightdeck-sim-agent</AssemblyName>
+    <RootNamespace>FlightDeckSimAgent</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The managed SimConnect wrapper is x64-only; AnyCPU produces a build that
+         loads and then throws BadImageFormatException on the first call. -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <!-- Override with: dotnet build -p:MsfsSdk="D:\Some Other Path" -->
+  <PropertyGroup>
+    <MsfsSdk Condition="'$(MsfsSdk)' == ''">C:\MSFS 2024 SDK</MsfsSdk>
+    <SimConnectLib>$(MsfsSdk)\SimConnect SDK\lib</SimConnectLib>
+  </PropertyGroup>
+
+  <!-- Real build: reference the SDK, and keep the compile-only shim out. -->
+  <ItemGroup Condition="'$(SimConnectStub)' != 'true'">
+    <Compile Remove="stubs\**\*.cs" />
+    <Reference Include="Microsoft.FlightSimulator.SimConnect">
+      <HintPath>$(SimConnectLib)\managed\Microsoft.FlightSimulator.SimConnect.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <!-- The managed wrapper P/Invokes into the native DLL, which must sit beside
+         the exe at runtime; it is not resolved from the SDK install. -->
+    <None Include="$(SimConnectLib)\SimConnect.dll"
+          Condition="Exists('$(SimConnectLib)\SimConnect.dll')"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- dotnet build -p:SimConnectStub=true — compiles the agent against
+       stubs\SimConnectStub.cs on a machine with no MSFS SDK. Verifies this
+       project's own code only; it proves nothing about the real binding, and
+       the resulting exe cannot reach a simulator. Never publish it. -->
+  <PropertyGroup Condition="'$(SimConnectStub)' == 'true'">
+    <DefineConstants>$(DefineConstants);SIMCONNECT_STUB</DefineConstants>
+    <!-- Its own output tree. Sharing one with the real build left a stub exe
+         sitting where the real one belonged, and the next incremental real
+         build considered itself up to date and never re-copied the SDK DLLs —
+         which then looked exactly like "the wrapper will not load". -->
+    <BaseOutputPath>bin\stub\</BaseOutputPath>
+  </PropertyGroup>
+
+  <Target Name="CheckMsfsSdk" BeforeTargets="BeforeBuild" Condition="'$(SimConnectStub)' != 'true'">
+    <Error Condition="!Exists('$(SimConnectLib)\managed\Microsoft.FlightSimulator.SimConnect.dll')"
+           Text="MSFS SDK not found at '$(MsfsSdk)'. Install it from inside MSFS 2024 (Developer Mode -> Help -> SDK Installer), or pass -p:MsfsSdk=&lt;path&gt;. To compile without it: -p:SimConnectStub=true (verification only)." />
+  </Target>
+
+</Project>
