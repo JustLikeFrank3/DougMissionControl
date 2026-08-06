@@ -384,10 +384,13 @@
         // agents send what they have. Build the line from the parts that
         // arrived instead of assuming all of them did, which is what rendered
         // a literal "at xundefined" for the Linux agent.
+        // The desktop x offset is deliberately NOT shown. It exists to sort the
+        // cards and to derive LEFT/RIGHT, and once the card is titled with that
+        // position it says nothing a person standing at the desk can use — "at
+        // x1920" is a fact about the framebuffer, not about the monitor.
         var bits = [];
         if (m.w && m.h) bits.push(m.w + '×' + m.h);
         if (m.primary) bits.push('primary');
-        if (typeof m.x === 'number') bits.push('at x' + m.x);
         card.querySelector('.dsp-desc').textContent = bits.length ? bits.join(' · ') : '—';
         var btns = card.querySelector('.dsp-btns');
         // Inputs the panel DECLARED win; a panel that refuses to say (the HP
