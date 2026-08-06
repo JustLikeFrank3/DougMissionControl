@@ -390,3 +390,59 @@ html, body {
            letter-spacing: .16em; color: transparent; }
 .simpend.wait { color: var(--am); }
 .simpend.dead { color: var(--rd); }
+
+/* ── now-playing widget (DECK rail) ────────────────────────────────────── */
+/* Replaces the MEDIA surface: album art never needed 2560 px of panel. */
+.np { display: flex; align-items: center; gap: 12px; min-height: 64px;
+      background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
+.np.idle { opacity: .45; }
+.np-art { width: 48px; height: 48px; object-fit: cover; flex: none; }
+.np-noart { width: 48px; height: 48px; flex: none; display: grid; place-items: center;
+            font-size: 22px; color: var(--mut); background: #0b1016;
+            border: 1px solid var(--ln); }
+.np-mid { flex: 1; min-width: 0; }
+.np-title { font-size: 16px; white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; }
+.np-artist { font-size: 13px; color: var(--mut); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.np-time { font-size: 12px; color: var(--mut); margin-top: 3px; }
+.np-btns { display: flex; gap: 6px; flex: none; }
+.np-b { width: 44px; height: 44px; border: 1px solid var(--ln); background: var(--pan2);
+        color: var(--fg); font-size: 17px; font-family: inherit; cursor: pointer; }
+.np-b:disabled { opacity: .3; cursor: default; }
+
+/* ── SQUADRONS ─────────────────────────────────────────────────────────── */
+/* A title with no telemetry API gets a surface that claims nothing it cannot
+   observe: process, start time, focus. The macro deck is open-loop keyboard
+   emulation — permitted only because no instrumented path exists — and every
+   macro is refused by the agent unless the game owns the foreground window. */
+.body-squadrons { grid-template-columns: 1fr; }
+.sqd { display: flex; flex-direction: column; min-height: 0;
+       padding: 16px 22px; gap: 14px; }
+.sqd-head { display: flex; align-items: baseline; gap: 18px;
+            border-bottom: 1px solid var(--ln); padding-bottom: 12px; }
+.sqd-t { font-size: 30px; letter-spacing: .06em; }
+.sqd-pill { margin-left: auto; font-size: 15px; letter-spacing: .2em;
+            padding: 4px 12px; border: 1px solid var(--mut); color: var(--mut); }
+.sqd-pill.on { border-color: var(--gr); color: var(--gr); }
+.sqd-body { flex: 1; display: flex; gap: 14px; min-height: 0; }
+.sqd-left { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.sqd-right { flex: 2; display: flex; flex-direction: column; gap: 12px; }
+.sqd-launch { min-height: 84px; }
+.sqd-note { font-size: 14px; color: var(--mut); line-height: 1.5; }
+.sqd-note code { color: var(--cy); font-size: 12px; }
+.sqd-warn { font-size: 13px; letter-spacing: .14em; color: var(--am);
+            border: 1px solid var(--am); background: #241d0c; padding: 6px 12px; }
+.sqd-macros { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr);
+              gap: 12px; align-content: start; }
+.sqd-m { position: relative; overflow: hidden; min-height: 74px; padding: 10px;
+         border: 1px solid var(--ln); background: var(--pan); color: var(--fg);
+         font-family: inherit; cursor: pointer; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; gap: 4px; }
+.sqd-m .k { font-size: 12px; color: var(--mut); letter-spacing: .1em; }
+.sqd-m .t { font-size: 17px; letter-spacing: .1em; }
+.sqd-m:disabled { opacity: .3; cursor: default; }
+.sqd-m .fb { position: absolute; inset: auto 0 0 0; height: 4px; background: var(--am);
+             transform: scaleX(0); transform-origin: left; }
+.sqd-m.sent .fb { animation: sqd-sent .5s ease-out; }
+@keyframes sqd-sent { 0% { transform: scaleX(1); } 100% { transform: scaleX(0); } }

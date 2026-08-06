@@ -42,6 +42,12 @@ internal sealed class HttpApi : IDisposable
     public Func<JsonObject> Health { get; init; } = () => new JsonObject();
     public Func<JsonObject?> State { get; init; } = () => null;
     public Func<JsonObject, Task<JsonObject>> Command { get; init; } = _ => Task.FromResult(new JsonObject());
+    public Func<Task<JsonObject>> Media { get; init; } = () => Task.FromResult(new JsonObject());
+    public Func<(byte[] Bytes, string Id)> MediaArt { get; init; } = () => (Array.Empty<byte>(), "");
+    public Func<string, Task<JsonObject>> MediaCommand { get; init; } = _ => Task.FromResult(new JsonObject());
+    public Func<JsonObject> Apps { get; init; } = () => new JsonObject();
+    public Func<JsonObject> AppsLaunch { get; init; } = () => new JsonObject();
+    public Func<string, JsonObject> AppsMacro { get; init; } = _ => new JsonObject();
 
     public HttpApi(int port, string token)
     {
@@ -141,17 +147,57 @@ internal sealed class HttpApi : IDisposable
                 await StreamEventsAsync(stream);
                 return;
 
-            case ("POST", "/command"):
-                JsonObject? body;
-                try { body = JsonNode.Parse(req.Body) as JsonObject; }
-                catch (JsonException) { body = null; }
+            // ── media: system-wide now-playing, art behind its own path ──
+            case ("GET", "/media"):
+                await WriteJsonAsync(stream, "200 OK", await Media());
+                return;
 
-                if (body is null)
+            case ("GET", "/media/art"):
+            {
+                var (bytes, id) = MediaArt();
+                if (bytes.Length == 0)
                 {
-                    await WriteJsonAsync(stream, "400 Bad Request",
-                        new JsonObject { ["accepted"] = false, ["reason"] = "malformed body" });
+                    await WriteAsync(stream, "404 Not Found", "text/plain", "no art\n");
                     return;
                 }
+                var head = $"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nX-Art-Id: {id}\r\n"
+                         + $"Content-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(head), _cts.Token);
+                await stream.WriteAsync(bytes, _cts.Token);
+                await stream.FlushAsync(_cts.Token);
+                return;
+            }
+
+            case ("POST", "/media/command"):
+            {
+                var mb = ParseBody(req);
+                if (mb is null) { await BadBody(stream); return; }
+                await WriteJsonAsync(stream, "200 OK",
+                    await MediaCommand(mb["action"]?.ToString() ?? ""));
+                return;
+            }
+
+            // ── apps: squadrons session + open-loop macros ──
+            case ("GET", "/apps"):
+                await WriteJsonAsync(stream, "200 OK", Apps());
+                return;
+
+            case ("POST", "/apps/squadrons/launch"):
+                await WriteJsonAsync(stream, "200 OK", AppsLaunch());
+                return;
+
+            case ("POST", "/apps/squadrons/macro"):
+            {
+                var ab = ParseBody(req);
+                if (ab is null) { await BadBody(stream); return; }
+                await WriteJsonAsync(stream, "200 OK",
+                    AppsMacro(ab["id"]?.ToString() ?? ""));
+                return;
+            }
+
+            case ("POST", "/command"):
+                var body = ParseBody(req);
+                if (body is null) { await BadBody(stream); return; }
                 await WriteJsonAsync(stream, "200 OK", await Command(body));
                 return;
 
@@ -308,6 +354,16 @@ internal sealed class HttpApi : IDisposable
                 return i;
         return -1;
     }
+
+    private static JsonObject? ParseBody(HttpRequest req)
+    {
+        try { return JsonNode.Parse(req.Body) as JsonObject; }
+        catch (JsonException) { return null; }
+    }
+
+    private static Task BadBody(NetworkStream stream) =>
+        WriteJsonAsync(stream, "400 Bad Request",
+            new JsonObject { ["accepted"] = false, ["reason"] = "malformed body" });
 
     private static Task WriteJsonAsync(NetworkStream stream, string status, JsonObject body) =>
         WriteAsync(stream, status, "application/json", body.ToJsonString());

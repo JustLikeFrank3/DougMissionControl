@@ -147,6 +147,62 @@ internal static class Probe
     }
 
     /// <summary>
+    /// Generic event experiment: transmit an arbitrary named event and watch a
+    /// named SimVar for movement. The tool that answers "this aircraft ignores
+    /// that event" questions — like the A320neo's fly-by-wire autopilot, which
+    /// accepts AP_MASTER as transmitted and does nothing with it.
+    ///
+    ///   flightdeck-sim-agent --try-event AUTOPILOT_ON --watch "AUTOPILOT MASTER"
+    /// </summary>
+    public static int TryEvent(string eventName, uint data, string watchVar, string watchUnit)
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        SimConnect sim;
+        try { sim = new SimConnect("FlightDeckEventTry", IntPtr.Zero, 0, wait, 0); }
+        catch (COMException ex)
+        {
+            Console.Error.WriteLine($"cannot reach a simulator: {ex.Message}");
+            return 1;
+        }
+
+        double? watched = null;
+        var problems = new List<string>();
+        sim.OnRecvException += (_, d) => problems.Add(((SIMCONNECT_EXCEPTION)d.dwException).ToString());
+        sim.OnRecvSimobjectData += (_, d) =>
+        {
+            if ((Request)d.dwRequestID == Request.State) watched = ((OneDouble)d.dwData[0]).Value;
+        };
+
+        sim.AddToDataDefinition(Definition.State, watchVar, watchUnit,
+            SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+        sim.RegisterDataDefineStruct<OneDouble>(Definition.State);
+        sim.RequestDataOnSimObject(Request.State, Definition.State,
+            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SIM_FRAME,
+            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 5, 0);
+
+        sim.MapClientEventToSimEvent(Event.GearToggle /* any spare id */, eventName);
+        sim.AddClientEventToNotificationGroup(Group.Main, Event.GearToggle, false);
+        sim.SetNotificationGroupPriority(Group.Main, SimConnect.SIMCONNECT_GROUP_PRIORITY_HIGHEST);
+
+        void Pump(int ms)
+        {
+            var end = DateTime.UtcNow.AddMilliseconds(ms);
+            while (DateTime.UtcNow < end) { if (wait.WaitOne(50)) sim.ReceiveMessage(); }
+        }
+
+        Pump(1500);
+        Console.WriteLine($"{watchVar} before {eventName}({data}) : {watched?.ToString("F2") ?? "no data"}");
+        sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, Event.GearToggle, data,
+            Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+        Pump(2500);
+        Console.WriteLine($"{watchVar} after                      : {watched?.ToString("F2") ?? "no data"}");
+        if (problems.Count > 0) Console.WriteLine("exceptions: " + string.Join(", ", problems.Distinct()));
+
+        sim.Dispose();
+        return 0;
+    }
+
+    /// <summary>
     /// [Q3] Does PARKING_BRAKE_SET honour a 1/0 parameter, or is PARKING_BRAKES
     /// the only way in? Mapping an event name proves nothing — SimConnect will
     /// happily map a name the simulator ignores — so this transmits SET 1, reads

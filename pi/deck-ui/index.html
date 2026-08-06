@@ -21,8 +21,8 @@
         <button class="navb wide" data-surface="evals">
           <span class="t">jobContext</span><span class="s" id="nav-evals">metrics</span>
         </button>
-        <button class="navb" data-surface="media">
-          <span class="t">MEDIA</span><span class="s" id="nav-media">reserved</span>
+        <button class="navb" data-surface="squadrons">
+          <span class="t">SQUADRONS</span><span class="s" id="nav-squadrons">—</span>
         </button>
         <button class="navb" data-surface="sim">
           <span class="t">SIM</span><span class="s" id="nav-sim">no link</span>
@@ -81,6 +81,25 @@
           <button class="abort" id="abort" hidden>
             <span class="t-name">ABORT</span><span class="hold"></span>
           </button>
+
+          <!-- Now-playing, from whichever OS is up. Replaces the old MEDIA
+               surface: album art never needed 2560 px. Reads observed playback
+               only; transport taps are commands, the widget shows what the
+               player reports. -->
+          <div class="np" id="np">
+            <img class="np-art" id="np-art" alt="" hidden>
+            <div class="np-noart" id="np-noart">♪</div>
+            <div class="np-mid">
+              <div class="np-title" id="np-title">no source</div>
+              <div class="np-artist" id="np-artist"></div>
+              <div class="np-time" id="np-time"></div>
+            </div>
+            <div class="np-btns">
+              <button class="np-b" id="np-prev" aria-label="previous">⏮</button>
+              <button class="np-b" id="np-play" aria-label="play/pause">⏯</button>
+              <button class="np-b" id="np-next" aria-label="next">⏭</button>
+            </div>
+          </div>
 
           <footer class="foot" id="foot">hold to arm · voice triggers land here too</footer>
         </div>
@@ -172,16 +191,38 @@
         </div>
       </section>
 
-      <!-- ─────────── MEDIA ─────────── -->
-      <section class="surface body-plain" data-name="media">
-        <div class="placeholder">
-          <div class="ph-pill">RESERVED</div>
-          <div class="ph-t">MEDIA</div>
-          <div class="ph-s">
-            Artwork, track, artist, transport, position, volume — controlling the
-            machine that is actually producing audio.
+      <!-- ─────────── SQUADRONS ─────────── -->
+      <section class="surface body-squadrons" data-name="squadrons">
+        <div class="sqd">
+          <div class="sqd-head">
+            <span class="sqd-t">STAR WARS SQUADRONS</span>
+            <span class="sqd-pill" id="sqd-pill">—</span>
           </div>
-          <div class="ph-n">The Pi is the remote, never the playback device.</div>
+          <div class="sqd-body">
+            <div class="sqd-left">
+              <div class="simt"><h3>SESSION</h3>
+                <div class="simt-v" id="sqd-state">—</div>
+                <div class="simt-s" id="sqd-since"></div>
+              </div>
+              <button class="tile sqd-launch" id="sqd-launch">
+                <span class="t-name">LAUNCH</span><span class="t-sub">via EA launcher</span>
+                <span class="hold"></span>
+              </button>
+              <div class="sqd-note">
+                This title has no telemetry API. Session presence, start time and
+                focus are observable from outside the game; nothing in-game is.
+              </div>
+            </div>
+            <div class="sqd-right">
+              <div class="sqd-warn">OPEN-LOOP · KEYSTROKES · STATE NOT CONFIRMED</div>
+              <div class="sqd-macros" id="sqd-macros"></div>
+              <div class="sqd-note" id="sqd-macnote">
+                Macros fire only while Squadrons owns the foreground window, and
+                must match the in-game bindings —
+                <code>C:\ProgramData\dualboot\squadrons-macros.json</code>.
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

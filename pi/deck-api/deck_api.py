@@ -122,6 +122,10 @@ AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 # normal operation, so neither is reported as a fault.
 SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
 SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
+# Now-playing under Linux, when someone builds the endpoint: same /media shape
+# on this port. Absent is fine — the widget reads "no source".
+LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
+LINUX_MEDIA_TOKEN = cfg("LINUX_MEDIA_TOKEN", "")
 DECK_TOKEN = cfg("DECK_TOKEN", "")
 LISTEN_PORT = int(cfg("DECK_PORT", "8088"))
 POLL_IDLE = float(cfg("DECK_POLL_IDLE", "5"))
@@ -167,7 +171,8 @@ try:
 except OSError:
     BUILD = {"file": __file__, "mtime": "unknown", "ui": "unknown"}
 
-SURFACES = ("deck", "evals", "media", "sim")
+# media is gone as a surface — now-playing lives as a widget on DECK's rail.
+SURFACES = ("deck", "evals", "squadrons", "sim")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
     DEFAULT_SURFACE = "evals"
@@ -583,6 +588,59 @@ def sim_state() -> dict:
         return {"link": True, "session": False, "reason": f"sim agent returned {e.code}"}
     except (urllib.error.URLError, OSError, ValueError):
         return {"link": False, "session": False, "reason": "no link to the workstation"}
+
+
+def _ws_json(url: str, payload: dict | None = None, timeout: float = 3) -> dict | None:
+    """One JSON round-trip to the workstation; None on any failure."""
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json"} if payload is not None else {},
+            method="POST" if payload is not None else "GET")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read(256_000).decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def media_state(os_now: str) -> dict:
+    """Now-playing from whichever OS is up. Same normalized shape either way;
+    the widget renders the source's absence as "no source", never an error."""
+    if os_now == "windows" and SIM_TOKEN:
+        got = _ws_json(_sim_url("/media"))
+        if got is not None:
+            return {"source": "windows", **got}
+    elif os_now == "linux" and LINUX_MEDIA_TOKEN:
+        # linux/media-agent.py — same shape, so the widget lights up unchanged.
+        # Untested until the workstation next boots Linux.
+        got = _ws_json(f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/media"
+                       f"?token={quote(LINUX_MEDIA_TOKEN)}")
+        if got is not None:
+            return {"source": "linux", **got}
+    return {"source": None, "active": False}
+
+
+def media_art(os_now: str) -> bytes | None:
+    if os_now != "windows" or not SIM_TOKEN:
+        return None
+    try:
+        with urllib.request.urlopen(_sim_url("/media/art"), timeout=3) as r:
+            return r.read(2_000_000)
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def squadrons_state(os_now: str) -> dict:
+    """Session truth for a title with no telemetry API. Everything here is
+    observable from outside the game: the process, its start time, focus.
+    Nothing in-game is ever claimed."""
+    if os_now != "windows" or not SIM_TOKEN:
+        return {"available": False, "running": False,
+                "reason": None if SIM_TOKEN else "SIM_AGENT_TOKEN unset"}
+    got = _ws_json(_sim_url("/apps"))
+    if got is None:
+        return {"available": False, "running": False, "reason": "no link"}
+    return {"available": True, **(got.get("squadrons") or {})}
 
 
 def sim_command(body: dict) -> tuple[int, dict]:
@@ -1038,6 +1096,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, sim_state())
 
+        # Media and squadrons ride the same fast-poll pattern as /api/sim and
+        # stay off the SSE state for the same reasons.
+        if path == "/api/media":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, media_state(DECK.state["workstation"]["os"]))
+
+        if path == "/api/media/art":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            art = media_art(DECK.state["workstation"]["os"])
+            if art is None:
+                return self._json(404, {"error": "no art"})
+            return self._send(200, art, "image/jpeg")
+
+        if path == "/api/squadrons":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, squadrons_state(DECK.state["workstation"]["os"]))
+
         if path.startswith("/api/"):
             return self._json(404, {"error": "not found"})
 
@@ -1066,6 +1144,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sim/command":
             code, out = sim_command(body)
             return self._json(code, out)
+
+        if path == "/api/media/command":
+            got = _ws_json(_sim_url("/media/command"),
+                           {"action": str(body.get("action") or "")}) \
+                if SIM_TOKEN else None
+            return self._json(200 if got else 502, got or {"sent": False})
+
+        if path == "/api/squadrons/launch":
+            got = _ws_json(_sim_url("/apps/squadrons/launch"), {}) if SIM_TOKEN else None
+            return self._json(200 if got else 502,
+                              got or {"ok": False, "reason": "no link"})
+
+        if path == "/api/squadrons/macro":
+            got = _ws_json(_sim_url("/apps/squadrons/macro"),
+                           {"id": str(body.get("id") or "")}) if SIM_TOKEN else None
+            return self._json(200 if got else 502,
+                              got or {"sent": False, "open_loop": True,
+                                      "reason": "no link"})
 
         if path == "/api/abort":
             ok, msg = fire_abort()

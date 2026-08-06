@@ -283,6 +283,136 @@
       b.classList.toggle('on', b.dataset.surface === active);
     });
     simPoll(active === 'sim');
+    npPoll(active === 'deck');
+    sqdPoll(active === 'squadrons');
+  }
+
+  /* ── now-playing widget (DECK rail) ────────────────────────────────────
+     Observed playback only: the widget shows what the player reports, and a
+     transport tap is a command whose effect arrives in the next poll. Art is
+     fetched only when art_id changes — the JSON stays small. */
+  var npTimer = null, npArtId = null;
+
+  function npPoll(on) {
+    if (on && !npTimer) { npTick(); npTimer = setInterval(npTick, 2000); }
+    else if (!on && npTimer) { clearInterval(npTimer); npTimer = null; }
+  }
+
+  function npTick() {
+    fetch('/api/media', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(paintNp)
+      .catch(function () { paintNp({ active: false }); });
+  }
+
+  function fmtTime(s) {
+    if (!s && s !== 0) return '';
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+  }
+
+  function paintNp(m) {
+    var np = $('np');
+    np.classList.toggle('idle', !m.active);
+    if (!m.active) {
+      $('np-title').textContent = 'no source';
+      $('np-artist').textContent = '';
+      $('np-time').textContent = '';
+      $('np-art').hidden = true; $('np-noart').hidden = false;
+      npArtId = null;
+    } else {
+      $('np-title').textContent = m.title || '(untitled)';
+      $('np-artist').textContent = m.artist || '';
+      $('np-time').textContent = (m.playing ? '▶ ' : '❚❚ ')
+        + fmtTime(m.position_s) + (m.duration_s ? ' / ' + fmtTime(m.duration_s) : '');
+      if (m.art_id && m.art_id !== npArtId) {
+        npArtId = m.art_id;
+        var img = $('np-art');
+        img.onload = function () { img.hidden = false; $('np-noart').hidden = true; };
+        img.onerror = function () { img.hidden = true; $('np-noart').hidden = false; };
+        img.src = '/api/media/art?v=' + m.art_id;
+      }
+      var can = m.can || {};
+      $('np-prev').disabled = !can.prev;
+      $('np-play').disabled = !can.play_pause;
+      $('np-next').disabled = !can.next;
+    }
+  }
+
+  [{ id: 'np-prev', a: 'prev' }, { id: 'np-play', a: 'play_pause' },
+   { id: 'np-next', a: 'next' }].forEach(function (b) {
+    $(b.id).addEventListener('click', function () {
+      post('/api/media/command', { action: b.a }).then(function () {
+        setTimeout(npTick, 350);   // let the player react, then re-observe
+      });
+    });
+  });
+
+  /* ── SQUADRONS ─────────────────────────────────────────────────────────
+     No telemetry API exists for this title, so the surface claims only what
+     is observable from outside: process, start time, focus. Macros are
+     open-loop keystrokes — the agent refuses them unless the game owns the
+     foreground window, and nothing here ever renders an in-game state. */
+  var sqdTimer = null, sqdMacroSig = null;
+
+  function sqdPoll(on) {
+    if (on && !sqdTimer) { sqdTick(); sqdTimer = setInterval(sqdTimer2, 2000); }
+    else if (!on && sqdTimer) { clearInterval(sqdTimer); sqdTimer = null; }
+  }
+  function sqdTimer2() { sqdTick(); }
+
+  function sqdTick() {
+    fetch('/api/squadrons', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(paintSqd)
+      .catch(function () { paintSqd({ available: false, running: false }); });
+  }
+
+  function paintSqd(q) {
+    var pill = $('sqd-pill');
+    var running = !!q.running;
+    pill.textContent = !q.available ? 'NO LINK' : running ? (q.focused ? 'RUNNING · FOCUSED' : 'RUNNING') : 'NOT RUNNING';
+    pill.classList.toggle('on', running);
+    $('sqd-state').textContent = running ? 'RUNNING' : 'DOWN';
+    $('sqd-state').className = 'simt-v ' + (running ? 'sim-on' : 'sim-off');
+    $('sqd-since').textContent = running && q.since
+      ? 'since ' + fmtClock(q.since) : '';
+    $('nav-squadrons').textContent = !q.available ? '—' : running ? 'running' : 'ready';
+    $('sqd-launch').disabled = !q.available || running;
+
+    var macros = q.macros || [];
+    var sig = macros.map(function (m) { return m.id + m.key; }).join(',');
+    var grid = $('sqd-macros');
+    if (sig !== sqdMacroSig) {
+      sqdMacroSig = sig;
+      grid.innerHTML = '';
+      macros.forEach(function (m) {
+        var b = document.createElement('button');
+        b.className = 'sqd-m';
+        b.innerHTML = '<span class="t"></span><span class="k"></span><i class="fb"></i>';
+        b.querySelector('.t').textContent = m.label;
+        b.querySelector('.k').textContent = m.key + (m.hint ? ' · ' + m.hint : '');
+        b.addEventListener('click', function () {
+          post('/api/squadrons/macro', { id: m.id }).then(function (r) {
+            if (r && r.sent) {
+              b.classList.remove('sent'); void b.offsetWidth; b.classList.add('sent');
+            } else {
+              var note = $('sqd-macnote');
+              note.textContent = 'REFUSED · ' + ((r && r.reason) || 'no reply').toUpperCase();
+              setTimeout(sqdNoteReset, 4000);
+            }
+          });
+        });
+        grid.appendChild(b);
+      });
+    }
+    [].forEach.call(grid.querySelectorAll('.sqd-m'), function (b) {
+      b.disabled = !running;
+    });
+  }
+
+  var sqdNoteHtml = null;
+  function sqdNoteReset() {
+    if (sqdNoteHtml !== null) $('sqd-macnote').innerHTML = sqdNoteHtml;
   }
 
   /* ── SIM ───────────────────────────────────────────────────────────────
@@ -669,8 +799,9 @@
 
     renderTrack(boot, s.last_boot);
 
-    // Controls: one action at a time.
-    [].forEach.call(document.querySelectorAll('.tile'), function (t) {
+    // Controls: one action at a time. Scoped to the boot tiles — the
+    // Squadrons launch button shares their look but not their lockout.
+    [].forEach.call(document.querySelectorAll('#tiles .tile'), function (t) {
       t.disabled = !!boot.in_flight;
     });
     $('abort').hidden = !boot.in_flight;
@@ -749,12 +880,21 @@
     }).then(function (r) { return r.json(); }).catch(function () { return null; });
   }
 
-  [].forEach.call(document.querySelectorAll('.tile'), function (tile) {
+  // Boot tiles only — .sqd-launch also carries .tile for its styling, and
+  // must not fire /api/boot with an undefined intent.
+  [].forEach.call(document.querySelectorAll('#tiles .tile'), function (tile) {
     wireHold(tile, function () {
       post('/api/boot', { intent: tile.dataset.intent });
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
+
+  wireHold($('sqd-launch'), function () {
+    post('/api/squadrons/launch', {}).then(function () {
+      setTimeout(sqdTick, 1500);   // observe, don't assume
+    });
+  });
+  sqdNoteHtml = $('sqd-macnote').innerHTML;
 
   // Same hold-to-confirm as the boot tiles. wireHold already refuses a
   // disabled element, so a control the aircraft has not got cannot be fired.

@@ -45,6 +45,18 @@ internal static class Program
         // listener — it only reads, so it can run while the agent is running.
         if (args.Contains("--probe")) return Probe.Run();
         if (args.Contains("--probe-events")) return Probe.RunEvents();
+        if (args.Contains("--try-event"))
+        {
+            var i = Array.IndexOf(args, "--try-event");
+            var name = i + 1 < args.Length ? args[i + 1] : "";
+            uint data = 0;
+            var w = Array.IndexOf(args, "--watch");
+            var watch = w >= 0 && w + 1 < args.Length ? args[w + 1] : "AUTOPILOT MASTER";
+            var d = Array.IndexOf(args, "--data");
+            if (d >= 0 && d + 1 < args.Length) uint.TryParse(args[d + 1], out data);
+            if (name.Length == 0) { Console.Error.WriteLine("usage: --try-event NAME [--data N] [--watch \"SIMVAR\"]"); return 1; }
+            return Probe.TryEvent(name, data, watch, "Bool");
+        }
 
         string token;
         try
@@ -67,11 +79,27 @@ internal static class Program
         _sim = new SimBridge();
         _sim.StateReceived += OnStateReceived;
 
+        var media = new MediaBridge();
+        var apps = new AppsBridge();
+
         _api = new HttpApi(Port, token)
         {
             Health = BuildHealth,
             State = CurrentSnapshot,
             Command = HandleCommandAsync,
+            Media = async () => { await media.RefreshAsync(); return media.Snapshot(); },
+            MediaArt = media.Art,
+            MediaCommand = async a => new JsonObject
+            {
+                ["sent"] = await media.CommandAsync(a),
+            },
+            Apps = () => new JsonObject { ["squadrons"] = apps.Snapshot() },
+            AppsLaunch = () =>
+            {
+                var (ok, reason) = apps.Launch();
+                return new JsonObject { ["ok"] = ok, ["reason"] = reason };
+            },
+            AppsMacro = apps.Macro,
         };
 
         _api.Start();
