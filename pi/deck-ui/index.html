@@ -186,17 +186,62 @@
       </section>
 
       <!-- ─────────── SIM ─────────── -->
-      <section class="surface body-plain" data-name="sim">
-        <div class="placeholder">
+      <section class="surface body-sim" data-name="sim">
+        <!-- No agent or no session: the placeholder stays. The agent lives and
+             dies with Windows, so its absence is an absence, not a fault. -->
+        <div class="placeholder" id="sim-ph">
           <div class="ph-pill" id="sim-pill">NO LINK</div>
           <div class="ph-t">SIM</div>
-          <div class="ph-s">
+          <div class="ph-s" id="sim-ph-s">
             Waiting for <code>flightdeck-sim-agent</code> on the workstation.
             SimConnect is Windows-only, so the agent owns it and this panel
             renders only what the simulator reports.
           </div>
           <div class="ph-n">
             Agent absent is normal — it lives and dies with Windows.
+          </div>
+        </div>
+
+        <!-- Observed state only. There is no command UI here yet, and when
+             there is, it will still never draw the commanded position. -->
+        <div class="sim" id="sim-live" hidden>
+          <div class="sim-head">
+            <span class="sim-ac" id="sim-ac">—</span>
+            <span class="sim-meta" id="sim-meta"></span>
+          </div>
+          <div class="sim-body">
+            <div class="sim-controls">
+              <div class="simt wide" id="simt-gear">
+                <h3>LANDING GEAR</h3><span class="simt-u" id="simu-gear"></span>
+                <div class="simt-v" id="simv-gear">—</div>
+                <div class="simt-s" id="sims-gear"></div>
+                <div class="simbar"><i id="simb-gear"></i></div>
+                <div class="simwarn" id="simw-gear"></div>
+              </div>
+              <div class="simt" id="simt-flaps">
+                <h3>FLAPS</h3><span class="simt-u" id="simu-flaps"></span>
+                <div class="simt-v" id="simv-flaps">—</div>
+                <div class="simt-s" id="sims-flaps"></div>
+                <div class="simpips" id="simp-flaps"></div>
+              </div>
+              <div class="simt" id="simt-park"><h3>PARKING BRAKE</h3>
+                <div class="simt-v" id="simv-park">—</div>
+                <div class="simt-s" id="sims-park"></div></div>
+              <div class="simt" id="simt-lights"><h3>LANDING LIGHTS</h3>
+                <div class="simt-v" id="simv-lights">—</div>
+                <div class="simt-s" id="sims-lights"></div></div>
+              <div class="simt" id="simt-ap"><h3>AUTOPILOT</h3>
+                <div class="simt-v" id="simv-ap">—</div>
+                <div class="simt-s" id="sims-ap"></div></div>
+            </div>
+            <div class="sim-reads">
+              <div class="simt"><h3>IAS</h3><span class="simt-u">KT</span>
+                <div class="simt-v big" id="simv-ias">—</div></div>
+              <div class="simt"><h3>ALT</h3><span class="simt-u">FT</span>
+                <div class="simt-v big" id="simv-alt">—</div></div>
+              <div class="simt"><h3>HDG</h3><span class="simt-u">MAG</span>
+                <div class="simt-v big" id="simv-hdg">—</div></div>
+            </div>
           </div>
         </div>
       </section>

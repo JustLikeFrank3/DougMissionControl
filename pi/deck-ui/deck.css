@@ -303,3 +303,70 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .hold { transition: none; }
 }
+
+/* ── SIM ───────────────────────────────────────────────────────────────── */
+/* Observed state only. Nothing here ever draws a commanded position: the
+   agent publishes what the simulator reports, and a control the aircraft
+   does not have is absent from its payload rather than present and false. */
+.body-sim { grid-template-columns: 1fr; }
+.body-sim .placeholder { place-self: center; }
+
+.sim { display: flex; flex-direction: column; min-height: 0;
+       padding: 16px 22px; gap: 14px; }
+.sim.stale { opacity: .45; }              /* state went quiet — say so, quietly */
+.sim-head { display: flex; align-items: baseline; gap: 18px;
+            border-bottom: 1px solid var(--ln); padding-bottom: 12px; }
+.sim-ac { font-size: 30px; letter-spacing: .02em; white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; }
+.sim-meta { margin-left: auto; color: var(--mut); font-size: 15px;
+            letter-spacing: .14em; white-space: nowrap; }
+
+.sim-body { flex: 1; display: flex; gap: 14px; min-height: 0; }
+.sim-controls { flex: 3; display: grid; gap: 14px;
+                grid-template-columns: 1.7fr 1fr 1fr 1fr 1fr; }
+.sim-reads { flex: 1.1; display: grid; gap: 14px;
+             grid-template-rows: repeat(3, 1fr); }
+
+.simt { position: relative; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column; justify-content: center;
+        background: var(--pan); border: 1px solid var(--ln); padding: 16px 18px; }
+.simt h3 { position: absolute; top: 14px; left: 18px; font-size: 13px;
+           font-weight: 400; letter-spacing: .2em; color: var(--mut); }
+.simt-u { position: absolute; top: 14px; right: 18px; font-size: 13px;
+          letter-spacing: .16em; color: var(--mut); }
+.simt-v { font-size: 44px; line-height: 1.05; letter-spacing: .03em; }
+.simt-v.big { font-size: 56px; }
+.simt-s { margin-top: 8px; min-height: 1.1em; font-size: 14px;
+          letter-spacing: .06em; color: var(--mut); }
+
+/* Not fitted on this airframe — greyed and named, never a dead control. */
+.simt.na { opacity: .35; }
+.simt.na .simt-v { font-size: 22px; color: var(--mut); }
+
+.sim-on  { color: var(--gr); }
+.sim-mid { color: var(--am); }
+.sim-off { color: var(--mut); }
+
+.simbar { margin-top: 10px; height: 10px; overflow: hidden;
+          background: #0b1016; border: 1px solid var(--ln); }
+.simbar i { display: block; height: 100%; width: 0; background: var(--gr);
+            transition: width .1s linear; }
+.simbar i.sim-mid { background: var(--am); }
+
+/* Handle commands one position, the gear reports another, nothing is moving:
+   a command the simulator declined. Shown rather than smoothed over. */
+.simwarn { display: none; margin-top: 9px; padding: 5px 10px; font-size: 13px;
+           letter-spacing: .12em; color: var(--am); border: 1px solid var(--am);
+           background: #241d0c; }
+.simwarn.on { display: block; }
+
+/* One pip per flap handle position, filled to the current index. */
+.simpips { display: flex; gap: 6px; margin-top: 10px; }
+.simpips b { flex: 1; height: 9px; background: #0b1016; border: 1px solid var(--ln); }
+.simpips b.f { background: var(--gr); border-color: var(--gr); }
+
+/* No responsive breakpoints on purpose. deck.js lays the whole panel out at a
+   fixed 2560x720 and scales it with a transform, so this surface is always
+   2560x720 internally no matter what it is plugged into. An aspect-ratio query
+   would fire on the physical viewport and reflow the tiles inside a box that
+   never changed size. */

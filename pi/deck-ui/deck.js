@@ -282,6 +282,144 @@
     [].forEach.call(document.querySelectorAll('.navb'), function (b) {
       b.classList.toggle('on', b.dataset.surface === active);
     });
+    simPoll(active === 'sim');
+  }
+
+  /* ── SIM ───────────────────────────────────────────────────────────────
+     Polled directly rather than carried on the SSE state. Gear travel takes
+     about five seconds end to end and deck-api's state poll runs at 2-5 s, so
+     the interesting part — the gear in motion — would fall between samples.
+     Only runs while the surface is on screen: there is no reason to hold a
+     4 Hz conversation with the workstation to feed a hidden panel.
+
+     Everything below renders OBSERVED state. The agent reports what the
+     simulator is doing, never what it was told to do. */
+  var SIM_MS = 250;
+  var simTimer = null, simLastOk = 0;
+  var simPhProse = null;
+
+  function simPoll(on) {
+    if (on && !simTimer) {
+      simTick();
+      simTimer = setInterval(simTick, SIM_MS);
+    } else if (!on && simTimer) {
+      clearInterval(simTimer);
+      simTimer = null;
+    }
+  }
+
+  function simTick() {
+    fetch('/api/sim', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { simLastOk = Date.now(); paintSim(d); })
+      .catch(function () { paintSim({ link: false, reason: 'deck-api unreachable' }); });
+  }
+
+  // Absent from `controls` means the aircraft has not got it — skids instead of
+  // wheels, no flaps. Grey it and name it; never render a dead control.
+  function simAvail(key, present) {
+    $('simt-' + key).classList.toggle('na', !present);
+    if (!present) {
+      $('simv-' + key).textContent = 'NOT FITTED';
+      var s = $('sims-' + key); if (s) s.textContent = '';
+      var u = $('simu-' + key); if (u) u.textContent = '';
+    }
+    return present;
+  }
+
+  function simSimple(key, present, value, onWord) {
+    if (!simAvail(key, present)) return;
+    var v = $('simv-' + key);
+    v.textContent = value.toUpperCase();
+    v.className = 'simt-v ' + (value === onWord ? 'sim-on' : 'sim-off');
+    $('sims-' + key).textContent = value === onWord ? 'active' : 'inactive';
+  }
+
+  function paintSim(d) {
+    d = d || {};
+    var st = d.session ? d.state : null;
+    var live = !!(st && st.controls);
+
+    $('sim-ph').hidden = live;
+    $('sim-live').hidden = !live;
+    $('sim-pill').textContent = !d.link ? 'NO LINK' : (d.session ? 'LINK' : 'NO SIM');
+
+    if (simPhProse === null) simPhProse = $('sim-ph-s').innerHTML;
+    // A missing agent or a sim that is not running are ordinary absences and
+    // keep the standing copy. A rejected token or an HTTP error is a fault
+    // worth reading off the panel.
+    var fault = d.reason && /token|returned/.test(d.reason);
+    $('sim-ph-s').innerHTML = fault ? d.reason : simPhProse;
+    if (!live) return;
+
+    $('sim-live').classList.toggle('stale', Date.now() - simLastOk > 1500);
+    $('sim-ac').textContent = st.aircraft || '(no aircraft)';
+    $('sim-meta').textContent = 'SEQ ' + st.seq;
+
+    var c = st.controls || {};
+
+    if (simAvail('gear', !!c.gear)) {
+      var g = c.gear;
+      var v = $('simv-gear');
+      v.textContent = g.state.toUpperCase();
+      v.className = 'simt-v ' +
+        (g.state === 'transit' ? 'sim-mid' : g.state === 'down' ? 'sim-on' : 'sim-off');
+      $('simu-gear').textContent = g.pct.toFixed(1) + '%';
+      $('sims-gear').textContent =
+        'HANDLE ' + g.handle.toUpperCase() + ' · OBSERVED ' + g.state.toUpperCase();
+      var bar = $('simb-gear');
+      bar.style.width = g.pct + '%';
+      bar.className = g.state === 'transit' ? 'sim-mid' : '';
+
+      // The handle says one thing, the gear reports another, and nothing is
+      // moving: the simulator declined the command — over the gear speed
+      // limit, on the ground, whatever. Observed at 205-228 kt in a King Air,
+      // where drawing the commanded position would have read GEAR DOWN.
+      var stuck = g.state !== 'transit' && g.handle !== g.state;
+      $('simw-gear').classList.toggle('on', stuck);
+      if (stuck) {
+        $('simw-gear').textContent =
+          'COMMANDED ' + g.handle.toUpperCase() + ' · NOT MOVING · SIM DECLINED';
+      }
+    }
+
+    if (simAvail('flaps', !!c.flaps)) {
+      var f = c.flaps;
+      var fv = $('simv-flaps');
+      fv.textContent = f.index + ' / ' + f.detents;
+      fv.className = 'simt-v ' + (f.index > 0 ? 'sim-on' : 'sim-off');
+      $('simu-flaps').textContent = f.angle_deg.toFixed(1) + '°';
+      $('sims-flaps').textContent = f.index === 0 ? 'UP / CLEAN' : 'DETENT ' + f.index;
+      var pips = $('simp-flaps');
+      if (pips.children.length !== f.detents) {
+        pips.innerHTML = '';
+        for (var i = 0; i < f.detents; i++) pips.appendChild(document.createElement('b'));
+      }
+      for (var j = 0; j < pips.children.length; j++) {
+        pips.children[j].className = j < f.index ? 'f' : '';
+      }
+    }
+
+    simSimple('park', !!c.parking_brake, c.parking_brake ? c.parking_brake.state : '', 'set');
+    simSimple('lights', !!c.landing_lights, c.landing_lights ? c.landing_lights.state : '', 'on');
+    simSimple('ap', !!c.ap_master, c.ap_master ? c.ap_master.state : '', 'engaged');
+
+    var r = st.readouts || {};
+    $('simv-ias').textContent = r.ias_kt;
+    $('simv-alt').textContent = r.alt_ft;
+    $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
+  }
+
+  // The strip's SIM sub-label, from the ordinary state poll. Losing the agent
+  // is normal operation — it lives and dies with Windows — so this reads as an
+  // absence, not an alert.
+  function renderSimNav(s) {
+    var sim = s.sim || {};
+    var el = $('nav-sim');
+    if (!el) return;
+    var ac = sim.aircraft || '';
+    if (ac.length > 17) ac = ac.slice(0, 16) + '…';
+    el.textContent = !sim.link ? 'no link' : !sim.session ? 'no sim' : (ac || 'connected');
   }
 
   var navSig = null;
@@ -419,6 +557,7 @@
     renderSurface(s);
     renderEvals(s);
     renderStrip(s);
+    renderSimNav(s);
 
     var ws = s.workstation || {};
     var boot = s.boot || {};

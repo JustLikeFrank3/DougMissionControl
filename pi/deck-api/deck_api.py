@@ -45,7 +45,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 # ── configuration ─────────────────────────────────────────────────────────
 
@@ -117,6 +117,11 @@ WIN_METRICS_URL = cfg("WIN_METRICS_URL", f"http://{WS_LAN}:9106/metrics")
 LINUX_METRICS_URL = cfg("LINUX_METRICS_URL", f"http://{WS_LAN}:9105/metrics")
 AGENT_PORT = int(cfg("WIN_AGENT_PORT", "9107"))
 AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
+# windows/sim-agent — the SimConnect owner, on its own port and its own token.
+# Windows-only by construction, and gone whenever MSFS is not running. Both are
+# normal operation, so neither is reported as a fault.
+SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
+SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
 DECK_TOKEN = cfg("DECK_TOKEN", "")
 LISTEN_PORT = int(cfg("DECK_PORT", "8088"))
 POLL_IDLE = float(cfg("DECK_POLL_IDLE", "5"))
@@ -196,6 +201,10 @@ class Deck:
                    "uptime": None, "cpu_pct": None},
             # Latest sample only — no history is kept anywhere on the Pi.
             "telemetry": {"ts": None, "source": None, "ws": {}, "pi": {}},
+            # Coarse sim link, for the nav strip, on the ordinary poll cadence.
+            # The SIM surface itself reads /api/sim far faster — see sim_state().
+            "sim": {"link": False, "session": False, "aircraft": None,
+                    "checked": None},
             # Which copy of this file is actually running. `git pull` updates
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
@@ -517,6 +526,65 @@ def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
     return values, f"{src} {url}"
 
 
+def _sim_url(path: str) -> str:
+    return f"http://{WS_LAN}:{SIM_PORT}{path}?token={quote(SIM_TOKEN)}"
+
+
+def fetch_sim_link(os_now: str) -> dict:
+    """Is the sim agent there, and does it hold a live SimConnect session?
+
+    Cheap enough for the ordinary poll: one /health call, only under Windows.
+    The agent lives and dies with that boot, so its absence is not an error and
+    is never reported as one — the strip just reads no link.
+    """
+    blank = {"link": False, "session": False, "aircraft": None,
+             "checked": time.time()}
+    if os_now != "windows" or not SIM_TOKEN:
+        return blank
+    try:
+        with urllib.request.urlopen(_sim_url("/health"), timeout=2) as r:
+            health = json.loads(r.read(64_000).decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return blank
+    sim = health.get("sim") or {}
+    return {"link": True,
+            # connected means a live SimConnect session, not "a process is up"
+            "session": bool(sim.get("connected")),
+            "aircraft": sim.get("aircraft") or None,
+            "checked": time.time()}
+
+
+def sim_state() -> dict:
+    """One pass-through of the agent's /state, for /api/sim.
+
+    Proxied rather than fetched by the browser directly: the panel would
+    otherwise need the agent's token in page JavaScript and a CORS grant on a
+    token-guarded LAN endpoint. Neither is worth it when deck-api is already
+    talking to the workstation.
+
+    Nothing is reshaped here. The agent publishes normalized Flight Deck state
+    and no SimVar name, unit or event id reaches this file — that is the whole
+    point of the split, and re-deriving anything here would undo it.
+    """
+    if not SIM_TOKEN:
+        return {"link": False, "session": False,
+                "reason": "SIM_AGENT_TOKEN unset in /etc/flightsim/boot.env"}
+    try:
+        with urllib.request.urlopen(_sim_url("/state"), timeout=2) as r:
+            return {"link": True, "session": True,
+                    "state": json.loads(r.read(256_000).decode("utf-8", "replace"))}
+    except urllib.error.HTTPError as e:
+        # Must precede URLError — HTTPError is a subclass. 503 is the agent
+        # saying it is up but holds no session: MSFS is not running.
+        if e.code == 503:
+            return {"link": True, "session": False, "reason": "no simulator session"}
+        if e.code == 403:
+            return {"link": True, "session": False, "reason": "sim agent rejected the token"}
+        return {"link": True, "session": False, "reason": f"sim agent returned {e.code}"}
+    except (urllib.error.URLError, OSError, ValueError):
+        return {"link": False, "session": False, "reason": "no link to the workstation"}
+
+
 _prev_cpu: tuple[int, int] | None = None
 
 
@@ -702,6 +770,7 @@ def poll_once(prev_os):
 
     changed = os_now != prev_os
     ws_telemetry, source = fetch_telemetry(os_now)
+    sim_link = fetch_sim_link(os_now)
 
     def apply(s):
         w = s["workstation"]
@@ -709,6 +778,7 @@ def poll_once(prev_os):
             w["since"] = time.time()
         w["os"] = os_now
         w["agent"] = agent
+        s["sim"] = sim_link
         s["pi"] = read_pi_metrics()
         # Latest reading only. The browser holds the rolling window.
         s["telemetry"] = {"ts": time.time(), "source": source,
@@ -926,6 +996,17 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
             return self._sse()
+
+        # Deliberately outside the SSE state. The SIM surface polls this several
+        # times a second while it is on screen, and gear travel takes about five
+        # seconds end to end — far too fast for the 2-5 s state poll to catch.
+        # Routing it through DECK.mutate instead would bump the version, wake
+        # every SSE client and rewrite state.json to the SD card at the same
+        # rate, which is not a trade worth making for one surface.
+        if path == "/api/sim":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, sim_state())
 
         if path.startswith("/api/"):
             return self._json(404, {"error": "not found"})
