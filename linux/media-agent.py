@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 import subprocess
 import sys
@@ -243,13 +244,13 @@ def _detect() -> list[dict]:
         return _buses
     found: list[dict] = []
     text = _ddcutil(["detect", "--brief"], timeout=25) or ""
-    bus, model = None, ""
+    bus, model, conn = None, "", ""
 
     def flush() -> None:
-        nonlocal bus, model
+        nonlocal bus, model, conn
         if bus is not None:
-            found.append({"bus": bus, "model": model})
-        bus, model = None, ""
+            found.append({"bus": bus, "model": model, "connector": conn})
+        bus, model, conn = None, "", ""
 
     for line in text.splitlines():
         s = line.strip()
@@ -266,6 +267,11 @@ def _detect() -> list[dict]:
         m = _BUS_RE.search(s)
         if m:
             bus = m.group(1)
+        elif s.startswith("DRM connector:"):
+            # "card1-HDMI-A-1" — the only link between an I2C bus and a thing
+            # the display server has an opinion about, so resolution and
+            # desktop position hang off this.
+            conn = s.split(":", 1)[1].strip()
         elif s.startswith("Monitor:"):
             parts = s.split(":", 1)[1].split(":")
             model = parts[1].strip() if len(parts) > 1 else ""
@@ -278,11 +284,82 @@ def _detect() -> list[dict]:
     return found
 
 
+def _conn_key(name: str) -> str:
+    """Normalize a connector name so ddcutil's DRM spelling and the display
+    server's meet. DRM says "card1-HDMI-A-1", xrandr says "HDMI-1" for the
+    same port, and amdgpu says "DisplayPort-0" where DRM says "DP-1" — so
+    reduce both to protocol + trailing number."""
+    s = re.sub(r"^card\d+-", "", name).strip().lower()
+    m = re.match(r"([a-z]+)", s)
+    proto = m.group(1) if m else s
+    proto = {"displayport": "dp"}.get(proto, proto)
+    nums = re.findall(r"\d+", s)
+    return proto + (nums[-1] if nums else "")
+
+
+def _sysfs_mode(connector: str) -> tuple[int, int] | None:
+    """Resolution straight from DRM. Needs no display server and no session,
+    which matters because this unit lingers and may run before either."""
+    if not connector:
+        return None
+    try:
+        first = Path(f"/sys/class/drm/{connector}/modes").read_text().split("\n")[0]
+    except OSError:
+        return None
+    m = re.match(r"(\d+)x(\d+)", first.strip())
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+_XRANDR_RE = re.compile(
+    r"^(\S+)\s+connected\s+(primary\s+)?(\d+)x(\d+)\+(\d+)\+(\d+)")
+
+
+def _layout() -> dict[str, dict]:
+    """Desktop rectangles, keyed by _conn_key. Only the display server knows
+    which panel is on the left, so without one there is no honest answer and
+    the geometry is simply omitted — never guessed."""
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")
+    try:
+        out = subprocess.run(["xrandr", "--query"], capture_output=True,
+                             text=True, timeout=5, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if out.returncode != 0:
+        return {}
+    found = {}
+    for line in out.stdout.splitlines():
+        m = _XRANDR_RE.match(line.strip())
+        if m:
+            found[_conn_key(m.group(1))] = {
+                "w": int(m.group(3)), "h": int(m.group(4)),
+                "x": int(m.group(5)), "y": int(m.group(6)),
+                "primary": bool(m.group(2)),
+            }
+    return found
+
+
+def _position_labels(count: int) -> list[str]:
+    if count == 1:
+        return [""]
+    if count == 2:
+        return ["LEFT", "RIGHT"]
+    if count == 3:
+        return ["LEFT", "CENTER", "RIGHT"]
+    return [str(i + 1) for i in range(count)]
+
+
 def monitors() -> dict:
-    """Same payload as the Windows agent's /monitor, minus desktop geometry:
-    ddcutil sees I2C buses, not desktop rectangles, so position is left to
-    the operator's ordering rather than invented."""
+    """Same payload as the Windows agent's /monitor.
+
+    Geometry is best-effort and every field is optional: DRM gives resolution
+    without a session, but only a display server knows which panel sits on the
+    left, and under a bare Wayland compositor there may be no way to ask. The
+    panel renders whatever arrives and omits the rest, so a missing rectangle
+    costs a label, never the input buttons.
+    """
     out = []
+    layout = _layout()
     for i, disp in enumerate(_detect()):
         raw, name = None, None
         text = _ddcutil(["getvcp", "60", "--bus", disp["bus"], "--brief"]) or ""
@@ -294,7 +371,10 @@ def monitors() -> dict:
                 name = next((k for k, v in MON_INPUTS.items() if v == raw), "other")
             except ValueError:
                 raw = None
-        out.append({
+        rec = {
+            # The ddcutil ordinal, NOT this monitor's place in the sorted list:
+            # POST /monitor selects by it, so it has to survive the reordering
+            # below or the buttons would drive the wrong panel.
             "index": i,
             "desc": disp["model"] or f"i2c-{disp['bus']}",
             "position": "",
@@ -302,7 +382,28 @@ def monitors() -> dict:
             "input_raw": raw,
             "input": name,
             "inputs": None,
-        })
+        }
+        geo = layout.get(_conn_key(disp.get("connector") or ""))
+        if geo:
+            rec.update(geo)
+        else:
+            # No display server to ask, but DRM still knows the mode. Report
+            # the resolution and leave x/primary out rather than inventing a
+            # desktop position — the panel omits what is absent.
+            mode = _sysfs_mode(disp.get("connector") or "")
+            if mode:
+                rec["w"], rec["h"] = mode
+        out.append(rec)
+
+    # Order the cards the way the monitors are actually arranged, so the
+    # leftmost panel is the leftmost card. ddcutil enumerates by I2C bus, which
+    # bears no relation to how the desks are laid out — that ordering is what
+    # made the two HP panels come out reversed.
+    if out and all("x" in m for m in out):
+        out.sort(key=lambda m: (m["x"], m.get("y", 0)))
+        for label, m in zip(_position_labels(len(out)), out):
+            m["position"] = label
+
     if out:
         return {"monitors": out}
     # An empty list is the one answer SCREENS cannot act on and cannot explain,

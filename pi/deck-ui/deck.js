@@ -353,8 +353,13 @@
     dspDefaults = (d.default_inputs && d.default_inputs.length) ? d.default_inputs : null;
 
     var box = $('dsp-live');
+    // position and size join the signature: the cards are ordered by desktop
+    // geometry, so a monitor moving or a display server appearing has to
+    // rebuild them, not just repaint the pills.
     var sig = mons.map(function (m) {
-      return m.index + ':' + m.desc + ':' + (m.inputs || dspDefaults || []).join(',');
+      return m.index + ':' + m.desc + ':' + (m.position || '') + ':' +
+        (m.w || '') + 'x' + (m.h || '') +
+        ':' + (m.inputs || dspDefaults || []).join(',');
     }).join('|');
     if (sig !== dspSig) {
       dspSig = sig;
@@ -373,9 +378,17 @@
         var model = (m.desc && !/generic/i.test(m.desc)) ? m.desc : DSP_MODEL;
         card.querySelector('.h-name').textContent =
           (model ? model + ' ' : 'MON ') + (m.position || (m.index + 1));
-        card.querySelector('.dsp-desc').textContent =
-          (m.w ? m.w + '×' + m.h : '—') + (m.primary ? ' · primary' : '') +
-          ' · at x' + m.x;
+        // Every geometry field is optional. DRM knows the resolution without a
+        // display server, but only the display server knows where a panel sits
+        // on the desktop, and a Wayland compositor may refuse to say — so the
+        // agents send what they have. Build the line from the parts that
+        // arrived instead of assuming all of them did, which is what rendered
+        // a literal "at xundefined" for the Linux agent.
+        var bits = [];
+        if (m.w && m.h) bits.push(m.w + '×' + m.h);
+        if (m.primary) bits.push('primary');
+        if (typeof m.x === 'number') bits.push('at x' + m.x);
+        card.querySelector('.dsp-desc').textContent = bits.length ? bits.join(' · ') : '—';
         var btns = card.querySelector('.dsp-btns');
         // Inputs the panel DECLARED win; a panel that refuses to say (the HP
         // 32f refuses outright) falls back to deck-api's configured default,
