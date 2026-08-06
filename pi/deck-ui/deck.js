@@ -166,7 +166,13 @@
   /* ── sparkline ────────────────────────────────────────────────────────── */
 
   function drawSpark(svg) {
-    var key = svg.dataset.key;
+    // The stat tiles put data-key on the .stat div, not on their svg — so the
+    // svg's own key is undefined there and this looked up series[undefined],
+    // which is why every stat spark has read "no data — exporter not
+    // answering" since the day it shipped, healthy exporter or not. Fall back
+    // to the parent's key.
+    var key = svg.dataset.key ||
+      (svg.parentNode && svg.parentNode.dataset && svg.parentNode.dataset.key);
     var data = series[key] || [];
     var vb = svg.viewBox.baseVal;
     var W = vb.width, H = vb.height;
@@ -886,6 +892,12 @@
     });
   });
 
+  } catch (err) {
+    // Wired what we could; connect() below still runs, so the ui-stamp check
+    // inside render() can still reload this page into a consistent pair.
+    try { console.error('deck wiring failed:', err); } catch (ignored) { }
+  }
+
   /* ── live state ───────────────────────────────────────────────────────── */
   var es = null, retry = 1000;
 
@@ -928,12 +940,6 @@
   }, 1000);
 
   window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-
-  } catch (err) {
-    // Wired what we could; the stream below still runs and the next ui-stamp
-    // change still reloads this page into a consistent pair.
-    try { console.error('deck wiring failed:', err); } catch (ignored) { }
-  }
 
   buildTrack();
   fit();
