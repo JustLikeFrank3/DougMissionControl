@@ -316,12 +316,23 @@
      (true track) — fly the arrow to the top and the waypoint arrives.
      Nothing here is commanded state, and there are no map tiles: a vector
      trail on dark is cheaper for the Pi and more EFIS anyway. */
-  var NAV_WPTS = [
-    { id: 'MK',    t: 'MAGIC KGDM', s: 'castle',       lat: 28.4205, lon: -81.5812 },
-    { id: 'EPCOT', t: 'EPCOT',      s: 'the sphere',   lat: 28.3747, lon: -81.5494 },
-    { id: 'MCO',   t: 'MCO',        s: 'home plate',   lat: 28.4294, lon: -81.3090 }
+  // Waypoint sets by region; the set nearest the aircraft wins, so
+  // teleporting across the country re-arms the panel without a deploy.
+  var NAV_SETS = [
+    { name: 'orlando', wpts: [
+      { id: 'MK',    t: 'MAGIC KGDM', lat: 28.4205, lon: -81.5812 },
+      { id: 'EPCOT', t: 'EPCOT',      lat: 28.3747, lon: -81.5494 },
+      { id: 'MCO',   t: 'MCO',        lat: 28.4294, lon: -81.3090 }
+    ] },
+    { name: 'nyc', wpts: [
+      { id: 'LADY', t: 'LADY LIBERTY', lat: 40.6892, lon: -74.0445 },
+      { id: 'ESB',  t: 'EMPIRE STATE', lat: 40.7484, lon: -73.9857 },
+      { id: 'JRB',  t: 'WALL ST HELI', lat: 40.7013, lon: -74.0090 }
+    ] }
   ];
-  var navSel = 'MK';
+  var NAV_WPTS = NAV_SETS[0].wpts;   // repointed per position in paintNav
+  var navSetName = NAV_SETS[0].name;
+  var navSel = NAV_WPTS[0].id;
   var navTrail = [];               // {t, lat, lon} — browser memory only
   var navTimer = null;
   var navZoom = null;              // null = auto-fit; integer = manual slippy z
@@ -380,6 +391,21 @@
     }
     var cut = Date.now() - 45 * 60000;
     while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
+
+    // Whichever region's first waypoint is nearest owns the panel now.
+    var best = NAV_SETS[0], bestD = Infinity;
+    NAV_SETS.forEach(function (set) {
+      var d = navDistBrg(r.lat, r.lon, set.wpts[0].lat, set.wpts[0].lon).dist;
+      if (d < bestD) { bestD = d; best = set; }
+    });
+    if (best.name !== navSetName) {
+      navSetName = best.name;
+      NAV_WPTS = best.wpts;
+      navSel = NAV_WPTS[0].id;
+      navTrail = [];               // a new region is a new flight
+      navWptsBuilt = false;
+      $('navp-wpts').innerHTML = '';
+    }
 
     var wpt = null;
     for (var i = 0; i < NAV_WPTS.length; i++) if (NAV_WPTS[i].id === navSel) wpt = NAV_WPTS[i];
