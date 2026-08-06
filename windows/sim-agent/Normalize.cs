@@ -144,6 +144,14 @@ internal static class Normalize
         ["ias_kt"] = (int)Math.Round(s.AirspeedIndicatedKt),
         ["alt_ft"] = (int)Math.Round(s.IndicatedAltitudeFt),
         ["hdg_mag"] = (int)Math.Round(Heading(s.PlaneHeadingMagneticDeg)) % 360,
+        // NAV. 5 decimal places is ~1 m — plenty for a wall map, small enough
+        // not to churn the JSON with sub-metre noise every frame.
+        ["lat"] = Math.Round(s.PlaneLatDeg, 5),
+        ["lon"] = Math.Round(s.PlaneLonDeg, 5),
+        ["gs_kt"] = (int)Math.Round(s.GroundSpeedKt),
+        // True track, not magnetic: bearings computed from lat/lon are true,
+        // and mixing references on one instrument is how people get lost.
+        ["trk_true"] = (int)Math.Round(Heading(s.GpsTrueTrackDeg)) % 360,
     };
 
     public static JsonObject State(long seq, double ts, string aircraft, SimStateRaw s, SimCapsRaw c) => new()

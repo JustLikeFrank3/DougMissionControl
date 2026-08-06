@@ -411,3 +411,33 @@ html, body {
         color: var(--fg); font-size: 17px; font-family: inherit; cursor: pointer; }
 .np-b:disabled { opacity: .3; cursor: default; }
 
+
+/* ── NAV ───────────────────────────────────────────────────────────────── */
+/* Observed position only: the trail is where the aircraft HAS been, the
+   steer arrow derives from observed position and observed track. Bearings
+   and track are TRUE, stated on the labels — mixing references on one
+   instrument is how people get lost. */
+.body-nav { grid-template-columns: 1fr; }
+.body-nav .placeholder { place-self: center; }
+.navmap { display: flex; min-height: 0; height: 100%; }
+.navrail { width: 430px; flex: none; display: flex; flex-direction: column;
+           gap: 14px; padding: 16px 18px; border-right: 1px solid var(--ln); }
+.navwpts { display: flex; gap: 8px; }
+.navwpt { flex: 1; padding: 10px 6px; border: 1px solid var(--ln);
+          background: var(--pan); color: var(--mut); font-family: inherit;
+          cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+          align-items: center; }
+.navwpt .t { font-size: 16px; letter-spacing: .1em; }
+.navwpt .s { font-size: 11px; letter-spacing: .06em; }
+.navwpt.on { color: var(--fg); background: #141d29;
+             box-shadow: inset 0 -3px 0 var(--cy); }
+.navsteer { display: flex; flex-direction: column; align-items: center;
+            gap: 6px; padding: 8px 0; }
+.navsteer svg { width: 190px; height: 190px; }
+.ns-ring { fill: none; stroke: var(--ln); stroke-width: 2; }
+.ns-arrow { fill: var(--cy); }
+#navp-arrow-g { transform-origin: 50px 50px; transition: transform .25s linear; }
+.ns-cap { font-size: 12px; letter-spacing: .22em; color: var(--mut); }
+.navrail .simt { flex: 1; }
+.simt-v.sm2 { font-size: 34px; }
+#navp-canvas { flex: 1; min-width: 0; background: #070a0f; }

@@ -306,6 +306,191 @@
     });
     simPoll(active === 'sim');
     npPoll(active === 'deck');
+    navPoll(active === 'nav');
+  }
+
+  /* ── NAV ───────────────────────────────────────────────────────────────
+     Moving map from the sim agent's observed position, via the same
+     /api/sim pass-through the SIM surface uses. The trail is where the
+     aircraft HAS been; the steer arrow is (true bearing to waypoint) minus
+     (true track) — fly the arrow to the top and the waypoint arrives.
+     Nothing here is commanded state, and there are no map tiles: a vector
+     trail on dark is cheaper for the Pi and more EFIS anyway. */
+  var NAV_WPTS = [
+    { id: 'MK',    t: 'MAGIC KGDM', s: 'castle',       lat: 28.4205, lon: -81.5812 },
+    { id: 'EPCOT', t: 'EPCOT',      s: 'the sphere',   lat: 28.3747, lon: -81.5494 },
+    { id: 'MCO',   t: 'MCO',        s: 'home plate',   lat: 28.4294, lon: -81.3090 }
+  ];
+  var navSel = 'MK';
+  var navTrail = [];               // {t, lat, lon} — browser memory only
+  var navTimer = null;
+
+  function navPoll(on) {
+    if (on && !navTimer) { navTick(); navTimer = setInterval(navTick, 500); }
+    else if (!on && navTimer) { clearInterval(navTimer); navTimer = null; }
+  }
+
+  function navTick() {
+    fetch('/api/sim', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(paintNav)
+      .catch(function () { paintNav({ link: false }); });
+  }
+
+  var NM_PER_DEG = 60;
+  function navXY(lat, lon, lat0, lon0) {
+    // Local flat projection in nm around the reference — exact enough for a
+    // wall map at Florida distances, and vastly cheaper than real geodesy.
+    var k = Math.cos(lat0 * Math.PI / 180);
+    return { x: (lon - lon0) * NM_PER_DEG * k, y: (lat - lat0) * NM_PER_DEG };
+  }
+
+  function navDistBrg(lat1, lon1, lat2, lon2) {
+    var p = navXY(lat2, lon2, lat1, lon1);
+    var dist = Math.sqrt(p.x * p.x + p.y * p.y);
+    var brg = (Math.atan2(p.x, p.y) * 180 / Math.PI + 360) % 360;
+    return { dist: dist, brg: brg };
+  }
+
+  function fmtEte(nm, gs) {
+    if (!gs || gs < 5) return 'ETE — · ' + gs + ' kt';
+    var min = nm / gs * 60;
+    return 'ETE ' + (min >= 90 ? (min / 60).toFixed(1) + ' h' : Math.round(min) + ' min');
+  }
+
+  function paintNav(d) {
+    d = d || {};
+    var st = d.session ? d.state : null;
+    var r = st && st.readouts;
+    var live = !!(r && typeof r.lat === 'number');
+
+    $('navp-ph').hidden = live;
+    $('navp-live').hidden = !live;
+    $('navp-pill').textContent = !d.link ? 'NO LINK'
+      : !d.session ? 'NO SIM'
+      : 'AGENT PREDATES NAV';       // session up but no lat in readouts
+    if (!live) return;
+
+    // Trail: record when we have actually moved (~37 m), prune at 45 min.
+    var last = navTrail[navTrail.length - 1];
+    if (!last || navDistBrg(last.lat, last.lon, r.lat, r.lon).dist > 0.02) {
+      navTrail.push({ t: Date.now(), lat: r.lat, lon: r.lon });
+    }
+    var cut = Date.now() - 45 * 60000;
+    while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
+
+    var wpt = null;
+    for (var i = 0; i < NAV_WPTS.length; i++) if (NAV_WPTS[i].id === navSel) wpt = NAV_WPTS[i];
+    var nav = navDistBrg(r.lat, r.lon, wpt.lat, wpt.lon);
+
+    $('navp-brg').textContent = ('00' + Math.round(nav.brg)).slice(-3) + '°T · ' +
+      (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
+    $('navp-ete').textContent = fmtEte(nav.dist, r.gs_kt) + ' · to ' + wpt.t;
+    $('navp-trk').textContent = ('00' + (r.trk_true || 0)).slice(-3) + '°T · ' + r.gs_kt + ' kt';
+    $('navp-alt').textContent = r.alt_ft + ' ft · ' + r.ias_kt + ' kt ias';
+    $('navp-arrow-g').style.transform = 'rotate(' + ((nav.brg - (r.trk_true || 0) + 360) % 360) + 'deg)';
+    $('nav-nav').textContent = wpt.id + ' ' +
+      (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
+
+    drawNavMap(r, wpt);
+    renderNavWpts(r);
+  }
+
+  var navWptsBuilt = false;
+  function renderNavWpts(r) {
+    var box = $('navp-wpts');
+    if (!navWptsBuilt) {
+      navWptsBuilt = true;
+      NAV_WPTS.forEach(function (w) {
+        var b = document.createElement('button');
+        b.className = 'navwpt';
+        b.dataset.wpt = w.id;
+        b.innerHTML = '<span class="t"></span><span class="s"></span>';
+        b.querySelector('.t').textContent = w.id;
+        b.addEventListener('click', function () { navSel = w.id; navTick(); });
+        box.appendChild(b);
+      });
+    }
+    [].forEach.call(box.children, function (b) {
+      var w = null;
+      for (var i = 0; i < NAV_WPTS.length; i++) if (NAV_WPTS[i].id === b.dataset.wpt) w = NAV_WPTS[i];
+      var d = navDistBrg(r.lat, r.lon, w.lat, w.lon).dist;
+      b.querySelector('.s').textContent =
+        (d >= 10 ? Math.round(d) : d.toFixed(1)) + ' nm';
+      b.classList.toggle('on', b.dataset.wpt === navSel);
+    });
+  }
+
+  function drawNavMap(r, wpt) {
+    var cv = $('navp-canvas');
+    if (cv.width !== cv.clientWidth || cv.height !== cv.clientHeight) {
+      cv.width = cv.clientWidth; cv.height = cv.clientHeight;
+    }
+    var g = cv.getContext('2d');
+    var W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+
+    // Fit aircraft + selected waypoint + trail, north up, min 6 nm span.
+    var pts = [{ x: 0, y: 0 }, navXY(wpt.lat, wpt.lon, r.lat, r.lon)];
+    navTrail.forEach(function (p) { pts.push(navXY(p.lat, p.lon, r.lat, r.lon)); });
+    var minX = 0, maxX = 0, minY = 0, maxY = 0;
+    pts.forEach(function (p) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    });
+    var span = Math.max(maxX - minX, maxY - minY, 6) * 1.3;
+    var scale = Math.min(W, H) / span;
+    var cx = W / 2 - (minX + maxX) / 2 * scale;
+    var cy = H / 2 + (minY + maxY) / 2 * scale;
+    function px(p) { return { x: cx + p.x * scale, y: cy - p.y * scale }; }
+
+    // Range rings around the aircraft at a tidy step.
+    var steps = [1, 2, 5, 10, 20, 50, 100];
+    var ring = steps[0];
+    for (var i = 0; i < steps.length; i++) if (steps[i] * scale < Math.min(W, H) / 2.2) ring = steps[i];
+    var me = px({ x: 0, y: 0 });
+    g.strokeStyle = '#1b2532'; g.fillStyle = '#5d6b7d'; g.font = '12px ' + 'monospace';
+    for (var n = 1; n <= 2; n++) {
+      g.beginPath(); g.arc(me.x, me.y, ring * n * scale, 0, 7); g.stroke();
+      g.fillText(ring * n + ' nm', me.x + 6, me.y - ring * n * scale + 14);
+    }
+
+    // Trail — where we have actually been.
+    if (navTrail.length > 1) {
+      g.strokeStyle = '#2c6f80'; g.lineWidth = 2; g.beginPath();
+      navTrail.forEach(function (p, idx) {
+        var q = px(navXY(p.lat, p.lon, r.lat, r.lon));
+        if (idx === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
+      });
+      g.stroke(); g.lineWidth = 1;
+    }
+
+    // Every waypoint, selected one connected by a course line.
+    NAV_WPTS.forEach(function (w) {
+      var q = px(navXY(w.lat, w.lon, r.lat, r.lon));
+      var on = w.id === navSel;
+      if (on) {
+        g.strokeStyle = '#56cfe1'; g.setLineDash([6, 6]);
+        g.beginPath(); g.moveTo(me.x, me.y); g.lineTo(q.x, q.y); g.stroke();
+        g.setLineDash([]);
+      }
+      g.strokeStyle = on ? '#56cfe1' : '#5d6b7d';
+      g.beginPath();
+      g.moveTo(q.x, q.y - 7); g.lineTo(q.x + 7, q.y); g.lineTo(q.x, q.y + 7);
+      g.lineTo(q.x - 7, q.y); g.closePath(); g.stroke();
+      g.fillStyle = on ? '#56cfe1' : '#5d6b7d';
+      g.fillText(w.id, q.x + 11, q.y + 4);
+    });
+
+    // The aircraft, rotated to its observed true track.
+    g.save();
+    g.translate(me.x, me.y);
+    g.rotate((r.trk_true || 0) * Math.PI / 180);
+    g.fillStyle = '#e2e9f2';
+    g.beginPath();
+    g.moveTo(0, -11); g.lineTo(8, 11); g.lineTo(0, 6); g.lineTo(-8, 11);
+    g.closePath(); g.fill();
+    g.restore();
   }
 
   /* ── now-playing widget (DECK rail) ────────────────────────────────────

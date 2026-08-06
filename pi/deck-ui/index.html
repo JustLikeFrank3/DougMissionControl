@@ -21,6 +21,9 @@
         <button class="navb wide" data-surface="evals">
           <span class="t">jobContext</span><span class="s" id="nav-evals">metrics</span>
         </button>
+        <button class="navb" data-surface="nav">
+          <span class="t">NAV</span><span class="s" id="nav-nav">moving map</span>
+        </button>
         <button class="navb" data-surface="sim">
           <span class="t">SIM</span><span class="s" id="nav-sim">no link</span>
         </button>
@@ -188,6 +191,43 @@
         </div>
       </section>
 
+
+      <!-- ─────────── NAV ─────────── -->
+      <section class="surface body-nav" data-name="nav">
+        <div class="placeholder" id="navp-ph">
+          <div class="ph-pill" id="navp-pill">NO LINK</div>
+          <div class="ph-t">NAV</div>
+          <div class="ph-s">
+            Moving map from the sim agent's position readouts. Needs a live
+            SimConnect session and an agent that publishes lat/lon.
+          </div>
+          <div class="ph-n">Same lifeline as SIM — it lives and dies with Windows.</div>
+        </div>
+
+        <!-- Observed position only. The trail is where the aircraft HAS been;
+             the steer arrow is derived from observed position and track. -->
+        <div class="navmap" id="navp-live" hidden>
+          <div class="navrail">
+            <div class="navwpts" id="navp-wpts"></div>
+            <div class="navsteer">
+              <svg viewBox="0 0 100 100" id="navp-arrow">
+                <circle cx="50" cy="50" r="46" class="ns-ring"/>
+                <g id="navp-arrow-g">
+                  <path class="ns-arrow" d="M50 12 L62 62 L50 52 L38 62 Z"/>
+                </g>
+              </svg>
+              <div class="ns-cap" id="navp-steer-cap">STEER</div>
+            </div>
+            <div class="simt"><h3>BRG · DIST</h3>
+              <div class="simt-v sm2" id="navp-brg">—</div>
+              <div class="simt-s" id="navp-ete"></div></div>
+            <div class="simt"><h3>TRK · GS</h3>
+              <div class="simt-v sm2" id="navp-trk">—</div>
+              <div class="simt-s" id="navp-alt"></div></div>
+          </div>
+          <canvas id="navp-canvas"></canvas>
+        </div>
+      </section>
 
       <!-- ─────────── SIM ─────────── -->
       <section class="surface body-sim" data-name="sim">

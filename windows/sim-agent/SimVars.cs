@@ -89,6 +89,10 @@ internal struct SimStateRaw
     public double AirspeedIndicatedKt;
     public double IndicatedAltitudeFt;
     public double PlaneHeadingMagneticDeg;
+    public double PlaneLatDeg;
+    public double PlaneLonDeg;
+    public double GroundSpeedKt;
+    public double GpsTrueTrackDeg;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -129,6 +133,12 @@ internal static class SimVars
         ("AIRSPEED INDICATED",             "Knots"),
         ("INDICATED ALTITUDE",             "Feet"),
         ("PLANE HEADING DEGREES MAGNETIC", "Degrees"),          // radians natively
+        // NAV surface. Appended at the END: SimConnect fills SimStateRaw
+        // positionally, so insertion anywhere else shifts every later field.
+        ("PLANE LATITUDE",                 "Degrees"),           // radians natively
+        ("PLANE LONGITUDE",                "Degrees"),           // radians natively
+        ("GROUND VELOCITY",                "Knots"),
+        ("GPS GROUND TRUE TRACK",          "Degrees"),           // radians natively
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =

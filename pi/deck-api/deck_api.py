@@ -174,7 +174,9 @@ except OSError:
 # media is gone as a surface — now-playing lives as a widget on DECK's rail.
 # squadrons came and went: without a telemetry API the surface was a blind
 # macro deck, and its SendInput keystrokes never reached the game anyway.
-SURFACES = ("deck", "evals", "sim")
+# nav rides the sim agent's /state (lat/lon/gs/track readouts) via /api/sim —
+# no new endpoint, the pass-through already carries it.
+SURFACES = ("deck", "evals", "nav", "sim")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
     DEFAULT_SURFACE = "evals"
