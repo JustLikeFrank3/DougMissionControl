@@ -36,7 +36,11 @@ G="${GRAFANA_URL:-http://localhost:3000}"
 # fills the EVALS surface. A kiosk that opens on a connection error and stays
 # there is worse than one that opens ten seconds later.
 until curl -sf -o /dev/null --max-time 3 "$DECK/api/state"; do sleep 5; done
-until curl -sf -o /dev/null --max-time 3 "$G/api/health";   do sleep 5; done
+# No Grafana gate. That wait was inherited from wallboard-kiosk.sh, which
+# pointed chromium AT Grafana and had nothing to show without it. Flight Deck
+# owns its surfaces: EVALS renders an honest "unreachable" overlay and heals
+# itself when Grafana arrives — k3s takes minutes on a cold boot, and hiding
+# the entire deck for one surface's backend read as a dead panel.
 
 while true; do
     chromium \
