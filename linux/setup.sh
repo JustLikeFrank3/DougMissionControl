@@ -268,10 +268,26 @@ Type=simple
 ExecStart=/usr/bin/python3 /usr/local/bin/media-agent.py
 Restart=always
 RestartSec=2
+# Left-to-right monitor order, for compositors that will not report desktop
+# geometry — GNOME on Wayland has no CLI for it. xrandr, wlr-randr and swaymsg
+# are all tried first, so this is only consulted when none of them answer.
+EnvironmentFile=-/etc/dualboot/media-agent.env
 
 [Install]
 WantedBy=default.target
 EOF
+
+# Created empty, and never overwritten: it holds an operator statement about
+# the physical desk that this script has no way to discover.
+if [ ! -f /etc/dualboot/media-agent.env ]; then
+    cat > /etc/dualboot/media-agent.env <<'EOF'
+# Left-to-right order of the monitors on the desk, by connector name as
+# `ddcutil detect --brief` reports it under "DRM connector" (card1- prefix
+# optional). Only used when no display server will give desktop geometry.
+#
+#   MON_ORDER=hdmi1,dp1
+EOF
+fi
 chown "$REAL_USER:$REAL_USER" "$USER_UNIT_DIR/flightsim-media-agent.service"
 
 # Linger so the agent is up before anyone logs in: SCREENS should work from

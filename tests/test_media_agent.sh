@@ -9,6 +9,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 python3 - "$repo_dir" <<'PY'
 import importlib.util
+import json
 import sys
 
 spec = importlib.util.spec_from_file_location(
@@ -144,6 +145,67 @@ for m in got:
     if "x" in m or m["position"] != "":
         failures.append(f"invented a desktop position with no display server: {m}")
 check("order preserved without geometry", [m["index"] for m in got], [0, 1])
+
+
+# The wlroots and sway paths, for compositors with no xrandr view. Same desk
+# either way: DP on the left, HDMI on the right, so the ddcutil order reverses.
+WLR = """HDMI-A-1 "HP Inc. HP M32f FHD 3CM30811V7"
+  Enabled: yes
+  Modes:
+    1920x1080 px, 60.000000 Hz (preferred, current)
+  Position: 1920,0
+DP-1 "HP Inc. HP M32f FHD 3CM1171SHX"
+  Enabled: yes
+  Modes:
+    1920x1080 px, 60.000000 Hz (preferred, current)
+  Position: 0,0
+"""
+SWAY = json.dumps([
+    {"name": "HDMI-A-1", "active": True,
+     "rect": {"x": 1920, "y": 0, "width": 1920, "height": 1080}},
+    {"name": "DP-1", "active": True, "primary": True,
+     "rect": {"x": 0, "y": 0, "width": 1920, "height": 1080}}])
+
+
+def monitors_from(tool, text, env=None):
+    """Only `tool` answers; every other display-server query fails."""
+    ma._buses = [dict(b) for b in BUSES]
+    ma._last_error = None
+    ma._ddcutil = lambda args, timeout=10: "VCP 60 SNC x12"
+    ma.os.environ.pop("MON_ORDER", None)
+    if env:
+        ma.os.environ.update(env)
+
+    def fake(cmd, **kw):
+        class R:
+            returncode, stdout, stderr = 1, "", ""
+        if cmd[0] == tool:
+            R.returncode, R.stdout = 0, text
+        return R
+
+    ma.subprocess.run = fake
+    try:
+        return ma.monitors()["monitors"]
+    finally:
+        ma.subprocess.run = subprocess_run_real
+        ma.os.environ.pop("MON_ORDER", None)
+
+
+for tool, text in [("wlr-randr", WLR), ("swaymsg", SWAY)]:
+    got = monitors_from(tool, text)
+    check(f"{tool} layout",
+          [(m["index"], m["position"], m["x"]) for m in got],
+          [(1, "LEFT", 0), (0, "RIGHT", 1920)])
+
+# MON_ORDER is the last resort for compositors that will not say — GNOME on
+# Wayland has no CLI for this. It must order the cards WITHOUT inventing an x:
+# an ordinal is not a pixel offset, and the panel prints x as one.
+got = monitors_from("nothing-answers", "", env={"MON_ORDER": "dp1,hdmi1"})
+check("MON_ORDER labels", [(m["index"], m["position"]) for m in got],
+      [(1, "LEFT"), (0, "RIGHT")])
+for m in got:
+    if "x" in m:
+        failures.append(f"MON_ORDER leaked an ordinal as a pixel offset: {m}")
 
 if failures:
     print("FAIL: media-agent ddcutil parsing", file=sys.stderr)

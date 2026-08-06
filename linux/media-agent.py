@@ -25,6 +25,13 @@ needs the user's session bus, which a system unit cannot reach. DDC then needs
 /dev/i2c-*, so setup.sh also installs ddcutil, loads i2c-dev, and puts the
 desktop user in the i2c group.
 
+Monitor cards are ordered left-to-right by desktop geometry, asked of xrandr,
+then wlr-randr, then swaymsg. A compositor that answers none of them (GNOME on
+Wayland has no CLI for this) leaves the order to MON_ORDER in
+/etc/dualboot/media-agent.env — an operator statement about the desk. Each card
+keeps its ddcutil ordinal as "index" through the sort, because POST /monitor
+selects by it.
+
 Verify after install — DDC is the half that fails silently, because every
 ddcutil error path here collapses to "no monitors found":
     python3 media-agent.py --check      # playerctl parsing, now-playing
@@ -314,21 +321,29 @@ _XRANDR_RE = re.compile(
     r"^(\S+)\s+connected\s+(primary\s+)?(\d+)x(\d+)\+(\d+)\+(\d+)")
 
 
-def _layout() -> dict[str, dict]:
-    """Desktop rectangles, keyed by _conn_key. Only the display server knows
-    which panel is on the left, so without one there is no honest answer and
-    the geometry is simply omitted — never guessed."""
+def _run_env(cmd: list[str]) -> str | None:
+    """Run a display-server query with a session environment guessed in. The
+    unit lingers, so it may have started with no session at all and picked up
+    none of these — which is survivable, since every caller treats an empty
+    answer as "geometry unknown"."""
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":0")
+    env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     try:
-        out = subprocess.run(["xrandr", "--query"], capture_output=True,
-                             text=True, timeout=5, env=env)
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=5, env=env)
     except (OSError, subprocess.SubprocessError):
-        return {}
-    if out.returncode != 0:
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def _layout_xrandr() -> dict[str, dict]:
+    text = _run_env(["xrandr", "--query"])
+    if not text:
         return {}
     found = {}
-    for line in out.stdout.splitlines():
+    for line in text.splitlines():
         m = _XRANDR_RE.match(line.strip())
         if m:
             found[_conn_key(m.group(1))] = {
@@ -337,6 +352,79 @@ def _layout() -> dict[str, dict]:
                 "primary": bool(m.group(2)),
             }
     return found
+
+
+def _layout_wlr() -> dict[str, dict]:
+    """wlr-randr, for wlroots compositors (sway, labwc, Hyprland). Connector
+    names come out bare — "HDMI-A-1" — and the rectangle is spread over
+    "Position:" plus whichever mode is marked current."""
+    text = _run_env(["wlr-randr"])
+    if not text:
+        return {}
+    found: dict[str, dict] = {}
+    name = None
+    for raw in text.splitlines():
+        if raw and not raw[0].isspace():
+            name = _conn_key(raw.split()[0])
+            found[name] = {}
+            continue
+        if name is None:
+            continue
+        s = raw.strip()
+        m = re.match(r"Position:\s*(-?\d+),\s*(-?\d+)", s)
+        if m:
+            found[name]["x"], found[name]["y"] = int(m.group(1)), int(m.group(2))
+            continue
+        m = re.match(r"(\d+)x(\d+)\s+px.*current", s)
+        if m:
+            found[name]["w"], found[name]["h"] = int(m.group(1)), int(m.group(2))
+    return {k: v for k, v in found.items() if "x" in v}
+
+
+def _layout_sway() -> dict[str, dict]:
+    text = _run_env(["swaymsg", "-t", "get_outputs", "-r"])
+    if not text:
+        return {}
+    try:
+        outs = json.loads(text)
+    except ValueError:
+        return {}
+    found = {}
+    for o in outs:
+        r = o.get("rect") or {}
+        if not o.get("active") or "x" not in r:
+            continue
+        found[_conn_key(str(o.get("name") or ""))] = {
+            "w": r.get("width"), "h": r.get("height"),
+            "x": r.get("x"), "y": r.get("y"),
+            "primary": bool(o.get("primary")),
+        }
+    return found
+
+
+def _layout_configured() -> dict[str, dict]:
+    """Operator-stated left-to-right order, for the compositors that will not
+    say. MON_ORDER=hdmi1,dp1 in the agent's environment names the connectors
+    across the desk; the x values it invents are ordinals, not pixels, and
+    exist only to sort by. Resolution still comes from DRM, so nothing here
+    fabricates anything the panel presents as measured."""
+    raw = os.environ.get("MON_ORDER", "")
+    keys = [_conn_key(s) for s in raw.split(",") if s.strip()]
+    # _order sorts; it is deliberately not "x", because an ordinal is not a
+    # pixel offset and the panel would have printed it as one.
+    return {k: {"_order": i} for i, k in enumerate(keys)}
+
+
+def _layout() -> dict[str, dict]:
+    """Desktop rectangles, keyed by _conn_key. Only the display server knows
+    which panel is on the left, so where none will answer the geometry is
+    omitted rather than guessed — unless the operator has stated the order,
+    which is a fact rather than a guess."""
+    for source in (_layout_xrandr, _layout_wlr, _layout_sway, _layout_configured):
+        found = source()
+        if found:
+            return found
+    return {}
 
 
 def _position_labels(count: int) -> list[str]:
@@ -383,26 +471,32 @@ def monitors() -> dict:
             "input": name,
             "inputs": None,
         }
-        geo = layout.get(_conn_key(disp.get("connector") or ""))
-        if geo:
-            rec.update(geo)
-        else:
-            # No display server to ask, but DRM still knows the mode. Report
-            # the resolution and leave x/primary out rather than inventing a
-            # desktop position — the panel omits what is absent.
-            mode = _sysfs_mode(disp.get("connector") or "")
-            if mode:
-                rec["w"], rec["h"] = mode
+        conn = disp.get("connector") or ""
+        # DRM knows the mode with no display server and no session, so
+        # resolution is reported even when nothing will say where a panel sits.
+        mode = _sysfs_mode(conn)
+        if mode:
+            rec["w"], rec["h"] = mode
+        geo = dict(layout.get(_conn_key(conn)) or {})
+        order = geo.pop("_order", None)
+        for k, v in geo.items():
+            if v is not None:
+                rec[k] = v
+        # Sort by real desktop x where a compositor gave one, else by the
+        # operator's stated order. Kept off the payload either way.
+        rec["_order"] = order if order is not None else rec.get("x")
         out.append(rec)
 
     # Order the cards the way the monitors are actually arranged, so the
     # leftmost panel is the leftmost card. ddcutil enumerates by I2C bus, which
     # bears no relation to how the desks are laid out — that ordering is what
     # made the two HP panels come out reversed.
-    if out and all("x" in m for m in out):
-        out.sort(key=lambda m: (m["x"], m.get("y", 0)))
+    if out and all(m["_order"] is not None for m in out):
+        out.sort(key=lambda m: (m["_order"], m.get("y", 0)))
         for label, m in zip(_position_labels(len(out)), out):
             m["position"] = label
+    for m in out:
+        m.pop("_order", None)
 
     if out:
         return {"monitors": out}
