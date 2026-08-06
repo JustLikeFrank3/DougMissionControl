@@ -559,6 +559,10 @@
      distances update every paint without rebuilding the DOM. */
   function renderNavPlan(r) {
     var box = $('navp-plan');
+    // There is nothing to name when the plan is empty, and the server says so
+    // too. Disabled rather than silently inert, so the button never reads as
+    // broken — which is how a no-op control looks on a panel with no console.
+    $('navp-save').disabled = !navPlan.length;
     var sig = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
     if (sig !== navPlanSig) {
       navPlanSig = sig;
@@ -1594,6 +1598,13 @@
   navKbdBuild();
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
+  // SAVE sits next to ADD, not behind PLANS. Saving was reachable only by
+  // opening a list of saved plans and finding a button at the bottom of it,
+  // which reads as "load a plan" — so the feature existed and looked absent.
+  $('navp-save').addEventListener('click', function () {
+    if (!navPlan.length) return;
+    navSearchOpen(true, 'save');
+  });
   $('navp-plansbtn').addEventListener('click', function () { navPlansOpen(true); });
   $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
   $('navp-saveas').addEventListener('click', function () {

@@ -432,8 +432,15 @@ html, body {
 .body-nav { grid-template-columns: 1fr; }
 .body-nav .placeholder { place-self: center; }
 .navmap { display: flex; min-height: 0; height: 100%; }
+/* Same overflow trap the DECK columns had: a flex column with no min-height:0
+   sizes to its content and spills past the 648 px the strip leaves. Stacked at
+   full height this rail wants ~780 px, so the BRG/DIST and TRK/GS readouts ran
+   off the bottom. The plan list is the one child that should give up the room —
+   it scrolls already — so everything else is flex:none. */
 .navrail { width: 430px; flex: none; display: flex; flex-direction: column;
-           gap: 14px; padding: 16px 18px; border-right: 1px solid var(--ln); }
+           gap: 14px; padding: 16px 18px; border-right: 1px solid var(--ln);
+           min-height: 0; overflow: hidden; }
+.navrail > * { flex: none; }
 .navwpts { display: flex; gap: 8px; }
 .navwpt { flex: 1; padding: 10px 6px; border: 1px solid var(--ln);
           background: var(--pan); color: var(--mut); font-family: inherit;
@@ -476,8 +483,11 @@ html, body {
 .navzoom #navp-fit.on { color: var(--fg); box-shadow: inset 0 -3px 0 var(--acc); }
 
 /* NAV flight plan — the rail's waypoint list */
+/* flex: 1 1 auto beats the `.navrail > *` reset above — this is the child that
+   absorbs the squeeze, because it is the only one that can scroll what it
+   loses. min-height:0 so it is actually allowed to shrink below its content. */
 .navplan { display: flex; flex-direction: column; gap: 6px; max-height: 208px;
-           overflow-y: auto; }
+           overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .navrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
           border: 1px solid var(--ln); background: var(--pan); cursor: pointer; }
 .navrow.on { box-shadow: inset 3px 0 0 var(--acc); background: #141d29; }
@@ -494,6 +504,8 @@ html, body {
 .navadd { padding: 12px; border: 1px dashed var(--ln); background: transparent;
           color: var(--cy); font-family: inherit; font-size: 15px;
           letter-spacing: .12em; cursor: pointer; }
+/* SAVE with an empty plan. Visibly unavailable beats silently inert. */
+.navadd:disabled { color: var(--mut); opacity: .45; cursor: default; }
 
 /* Search overlay + on-screen keyboard */
 .navsearch { position: absolute; inset: 0; background: rgba(11, 15, 21, .96);
