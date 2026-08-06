@@ -89,10 +89,12 @@ Environment=DECK_UI_DIR=${DEST}/deck-ui
 ExecStart=/usr/bin/python3 ${DEST}/deck_api.py
 Restart=always
 RestartSec=5
-# State lives in tmpfs — this Pi boots off a thumb drive and nothing here
-# needs to survive a reboot.
+# Live state is tmpfs (RuntimeDirectory) — rebuilt every boot. Saved flight
+# plans are the one thing worth keeping, so they get a real StateDirectory,
+# which systemd creates in /var/lib owned by the service user.
 RuntimeDirectory=flightdeck
 RuntimeDirectoryMode=0755
+StateDirectory=flightdeck
 NoNewPrivileges=yes
 ProtectSystem=full
 PrivateTmp=no
