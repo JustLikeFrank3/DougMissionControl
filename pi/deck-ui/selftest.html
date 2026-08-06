@@ -90,6 +90,7 @@
       <tr><td>input type</td>        <td id="r-type" class="wait">awaiting touch</td></tr>
       <tr><td>corners registered</td><td id="r-corners" class="wait">0 / 4</td></tr>
       <tr><td>max simultaneous</td>  <td id="r-multi">0</td></tr>
+      <tr><td>touch events</td>      <td id="r-tev" class="wait">—</td></tr>
       <tr><td>worst corner offset</td><td id="r-offset">—</td></tr>
     </table>
     <div id="verdict" class="wait">Waiting for input…</div>
@@ -107,7 +108,11 @@
   var stage = $('stage'), trail = $('trail'), ctx = trail.getContext('2d');
   var corners = { tl: false, tr: false, bl: false, br: false };
   var maxPointers = 0, worstOffset = 0, sawTouch = false, sawMouse = false;
-  var live = {};
+  // Whether the browser delivers Touch Events at all, which is a separate
+  // question from whether the panel is multi-touch — and the one that
+  // decides which event family the UI can be built on.
+  var sawTouchEvents = false;
+  var live = {}, downIds = {};
 
   function sizeCanvas() {
     trail.width = stage.clientWidth;
@@ -151,6 +156,9 @@
     ce.className = hit === 4 ? 'ok' : 'wait';
 
     $('r-multi').textContent = String(maxPointers);
+    $('r-tev').textContent = sawTouchEvents ? 'delivered'
+      : (maxPointers ? 'NOT delivered — pointer events only' : '—');
+    $('r-tev').className = sawTouchEvents || !maxPointers ? '' : 'wait';
 
     var oe = $('r-offset');
     if (worstOffset > 0) {
@@ -198,6 +206,16 @@
     if (e.pointerType === 'touch') sawTouch = true;
     else sawMouse = true;
 
+    // Count contacts from pointer events as well as touch events. Counting
+    // only touchstart made this field read 0 on a panel with perfectly good
+    // multi-touch, if the browser delivers pointer events and not touch ones —
+    // which is exactly the case that broke pinch-to-zoom on NAV.
+    if (e.pointerType !== 'mouse') {
+      downIds[e.pointerId] = true;
+      var n = Object.keys(downIds).length;
+      if (n > maxPointers) maxPointers = n;
+    }
+
     var k = cornerAt(e.clientX, e.clientY);
     if (k) {
       corners[k] = true;
@@ -218,11 +236,17 @@
   });
 
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) {
-    stage.addEventListener(t, function (e) { clearDot(e.pointerId); });
+    stage.addEventListener(t, function (e) {
+      clearDot(e.pointerId);
+      delete downIds[e.pointerId];
+    });
   });
 
-  // Count concurrent contacts — the Edge should reach 5.
+  // Count concurrent contacts — the Edge should reach 5. Kept alongside the
+  // pointer count above: whether this handler ever runs is itself the
+  // diagnosis, since it is the event family NAV's pinch first tried to use.
   stage.addEventListener('touchstart', function (e) {
+    sawTouchEvents = true;
     if (e.touches.length > maxPointers) maxPointers = e.touches.length;
     refresh();
   }, { passive: true });

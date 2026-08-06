@@ -1516,29 +1516,43 @@
   // against THAT. Reading the current zoom each move would ratchet: each
   // committed step would become the new baseline and a slow steady pinch
   // would run away to the clamp.
+  // Pointer events, not touch events: every working control on this panel is
+  // wired on pointerdown (see wireHold), and a touchstart/touchmove version of
+  // this never fired a single handler on the real hardware.
   (function () {
     var cv = $('navp-canvas');
+    var live = [];                      // active pointer ids, in contact order
+    var pos = {};                       // id -> {x, y}
     var span0 = 0, z0 = 0, zLast = 0;
 
-    function span(t) {
-      var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    function span() {
+      var a = pos[live[0]], b = pos[live[1]];
+      if (!a || !b) return 0;
+      var dx = a.x - b.x, dy = a.y - b.y;
       return Math.sqrt(dx * dx + dy * dy);
     }
 
-    cv.addEventListener('touchstart', function (e) {
-      if (e.touches.length !== 2) return;
-      e.preventDefault();
-      span0 = span(e.touches);
+    function arm() {
+      span0 = span();
       // Starting from the auto-fit's current level means the first pinch
       // nudges from what is on screen, exactly like the +/- buttons.
       z0 = zLast = (navZoom === null ? navLastZ : navZoom);
-    }, { passive: false });
+    }
 
-    cv.addEventListener('touchmove', function (e) {
-      if (e.touches.length !== 2 || !span0) return;
+    cv.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse') return;   // one mouse cannot pinch
+      if (live.indexOf(e.pointerId) === -1) live.push(e.pointerId);
+      pos[e.pointerId] = { x: e.clientX, y: e.clientY };
+      if (live.length === 2) { e.preventDefault(); arm(); }
+    });
+
+    cv.addEventListener('pointermove', function (e) {
+      if (!pos[e.pointerId]) return;
+      pos[e.pointerId] = { x: e.clientX, y: e.clientY };
+      if (live.length !== 2 || !span0) return;
       e.preventDefault();
-      var now = span(e.touches);
-      if (now < 8) return;              // fingers together: ratio goes wild
+      var now = span();
+      if (now < 8) return;              // fingers together: the ratio goes wild
       // Clamp before comparing, not after. Tracking the requested level past
       // the limit would mean a pinch that overshot had to be given back the
       // overshoot before the map moved again.
@@ -1547,11 +1561,21 @@
         zLast = z;
         navSetZoom(z);                  // drops FIT back off
       }
-    }, { passive: false });
+    });
 
-    function end(e) { if (e.touches.length < 2) span0 = 0; }
-    cv.addEventListener('touchend', end);
-    cv.addEventListener('touchcancel', end);
+    function lift(e) {
+      var i = live.indexOf(e.pointerId);
+      if (i !== -1) live.splice(i, 1);
+      delete pos[e.pointerId];
+      span0 = 0;
+      // Lifting one finger of three leaves two still down; re-arm from where
+      // they are now, or the next move would be measured against a span that
+      // included a finger no longer on the glass.
+      if (live.length === 2) arm();
+    }
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) {
+      cv.addEventListener(t, lift);
+    });
   })();
 
   // Flight-plan search overlay + its on-screen keyboard.
