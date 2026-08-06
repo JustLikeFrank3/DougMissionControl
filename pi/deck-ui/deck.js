@@ -320,7 +320,12 @@
     ['vga', 'VGA'], ['hdmi1', 'HDMI 1'], ['hdmi2', 'HDMI 2'],
     ['dp1', 'DP 1'], ['dp2', 'DP 2']
   ];
+  // Windows reports "Generic PnP Monitor" for these panels, so the model name
+  // is stated here rather than guessed from EDID. Only used when the monitor
+  // does not name itself.
+  var DSP_MODEL = 'HP32F';
   var dspTimer = null, dspSig = null;
+  var dspDefaults = null;   // deck-api's stated fallback for silent panels
 
   function dspPoll(on) {
     if (on && !dspTimer) { dspTick(); dspTimer = setInterval(dspTick, 3000); }
@@ -345,9 +350,11 @@
       : (d.available ? 'none' : 'no link');
     if (!live) return;
 
+    dspDefaults = (d.default_inputs && d.default_inputs.length) ? d.default_inputs : null;
+
     var box = $('dsp-live');
     var sig = mons.map(function (m) {
-      return m.index + ':' + m.desc + ':' + (m.inputs || []).join(',');
+      return m.index + ':' + m.desc + ':' + (m.inputs || dspDefaults || []).join(',');
     }).join('|');
     if (sig !== dspSig) {
       dspSig = sig;
@@ -360,14 +367,22 @@
           '<div class="h-top"><span class="h-name"></span>' +
           '<span class="h-pill dsp-obs">—</span></div>' +
           '<div class="dsp-desc"></div><div class="dsp-btns"></div>';
-        card.querySelector('.h-name').textContent = 'MON ' + (m.index + 1);
-        card.querySelector('.dsp-desc').textContent = m.desc || 'unnamed panel';
+        // Name from the panel's own EDID model where it gives one — Windows
+        // says "Generic PnP Monitor" for plenty of screens, so fall back to
+        // the geometry-derived position rather than inventing a model.
+        var model = (m.desc && !/generic/i.test(m.desc)) ? m.desc : DSP_MODEL;
+        card.querySelector('.h-name').textContent =
+          (model ? model + ' ' : 'MON ') + (m.position || (m.index + 1));
+        card.querySelector('.dsp-desc').textContent =
+          (m.w ? m.w + '×' + m.h : '—') + (m.primary ? ' · primary' : '') +
+          ' · at x' + m.x;
         var btns = card.querySelector('.dsp-btns');
-        // Offer only the inputs the panel DECLARED in its capabilities
-        // string; a panel that would not say gets the full set, since a
-        // spare button beats an invisible input.
+        // Inputs the panel DECLARED win; a panel that refuses to say (the HP
+        // 32f refuses outright) falls back to deck-api's configured default,
+        // which is an operator-stated fact rather than a guess from a model.
+        var allowed = m.inputs || dspDefaults;
         var offer = DSP_INPUTS.filter(function (inp) {
-          return !m.inputs || m.inputs.indexOf(inp[0]) !== -1;
+          return !allowed || allowed.indexOf(inp[0]) !== -1;
         });
         btns.style.gridTemplateColumns = 'repeat(' + offer.length + ', 1fr)';
         offer.forEach(function (inp) {

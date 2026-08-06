@@ -50,6 +50,21 @@ internal sealed class DdcBridge
     [DllImport("user32.dll")]
     private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor, rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX info);
+
     [DllImport("dxva2.dll", SetLastError = true)]
     private static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint count);
 
@@ -74,11 +89,37 @@ internal sealed class DdcBridge
     private static extern bool CapabilitiesRequestAndCapabilitiesReply(IntPtr hMonitor,
         [Out] byte[] caps, uint length);
 
+    // Capabilities are asked ONCE per panel, in the background, and cached
+    // forever: the HP 32f never answers the request at all — it hung /monitor
+    // for over a minute when this ran inline, which took the whole SCREENS
+    // surface down. A panel's input list cannot change, so one attempt is
+    // enough, and "unknown" simply means the UI offers every input.
+    private static readonly Dictionary<string, List<string>?> CapsCache = new();
+    private static readonly HashSet<string> CapsAsked = new();
+
+    private static List<string>? CachedInputs(IntPtr hMonitor, string key)
+    {
+        lock (CapsCache)
+        {
+            if (CapsCache.TryGetValue(key, out var hit)) return hit;
+            if (!CapsAsked.Add(key)) return null;   // in flight
+        }
+        // Deliberately fire-and-forget on its own thread: the P/Invoke cannot
+        // be cancelled, so a panel that never replies costs one parked thread
+        // once, rather than every caller of /monitor forever.
+        new Thread(() =>
+        {
+            var got = DeclaredInputs(hMonitor);
+            lock (CapsCache) CapsCache[key] = got;
+        })
+        { IsBackground = true, Name = "ddc-caps" }.Start();
+        return null;
+    }
+
     /// <summary>
     /// The inputs a monitor DECLARES, parsed from its MCCS capabilities string
     /// — "60(01 11 12)" means VGA/HDMI1/HDMI2 and nothing else. Null when the
-    /// panel won't answer (the caps request is slow and some panels refuse),
-    /// in which case the UI falls back to offering everything.
+    /// panel won't answer, in which case the UI offers everything.
     /// </summary>
     private static List<string>? DeclaredInputs(IntPtr hMonitor)
     {
@@ -100,18 +141,44 @@ internal sealed class DdcBridge
         return declared.Count > 0 ? declared : null;
     }
 
-    private static List<PHYSICAL_MONITOR> Enumerate()
+    // Physical monitor plus where its desktop rectangle sits, so the panel can
+    // say "left"/"right" from geometry instead of from a hardcoded guess that
+    // rots the moment the desk is rearranged.
+    private readonly record struct Found(PHYSICAL_MONITOR Mon, int X, int Y, int W, int H, bool Primary);
+
+    private static List<Found> Enumerate()
     {
-        var found = new List<PHYSICAL_MONITOR>();
+        var found = new List<Found>();
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (hMon, _, _, _) =>
         {
             if (GetNumberOfPhysicalMonitorsFromHMONITOR(hMon, out var n) && n > 0)
             {
                 var phys = new PHYSICAL_MONITOR[n];
-                if (GetPhysicalMonitorsFromHMONITOR(hMon, n, phys)) found.AddRange(phys);
+                if (GetPhysicalMonitorsFromHMONITOR(hMon, n, phys))
+                {
+                    var info = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+                    var ok = GetMonitorInfo(hMon, ref info);
+                    var r = info.rcMonitor;
+                    foreach (var p in phys)
+                    {
+                        found.Add(new Found(p,
+                            ok ? r.Left : 0, ok ? r.Top : 0,
+                            ok ? r.Right - r.Left : 0, ok ? r.Bottom - r.Top : 0,
+                            ok && (info.dwFlags & 1) != 0));   // MONITORINFOF_PRIMARY
+                    }
+                }
             }
             return true;
         }, IntPtr.Zero);
+        // Top row first, then left-to-right within a row — the desk is stacked
+        // (a G9 above a pair of HPs), not a single line. Rows are grouped by
+        // vertical overlap rather than exact Y, since panels of different
+        // heights rarely share a top edge.
+        found.Sort((a, b) =>
+        {
+            var sameRow = a.Y < b.Y + b.H / 2 && b.Y < a.Y + a.H / 2;
+            return sameRow ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y);
+        });
         return found;
     }
 
@@ -120,17 +187,40 @@ internal sealed class DdcBridge
     {
         var monitors = new JsonArray();
         var idx = 0;
-        foreach (var m in Enumerate())
+        var all = Enumerate();
+        foreach (var f in all)
         {
+            var m = f.Mon;
             uint current = 0, max = 0;
             var readable = GetVCPFeatureAndVCPFeatureReply(
                 m.hPhysicalMonitor, VCP_INPUT, IntPtr.Zero, out current, out max);
             var name = Inputs.FirstOrDefault(kv => kv.Value == (current & 0xFF)).Key;
-            var declared = readable ? DeclaredInputs(m.hPhysicalMonitor) : null;
+            // Cached/background — never blocks this response. See CachedInputs.
+            var declared = readable
+                ? CachedInputs(m.hPhysicalMonitor, $"{f.X},{f.Y},{f.W}x{f.H}")
+                : null;
+            // Position word from geometry, never a guess. Row-aware, because
+            // this desk stacks: a monitor alone on its row is TOP/BOTTOM,
+            // while panels sharing a row get LEFT/CENTRE/RIGHT among
+            // themselves. Rearranging the desk relabels the panel by itself.
+            var row = all.Where(o => o.Y < f.Y + f.H / 2 && f.Y < o.Y + o.H / 2)
+                         .OrderBy(o => o.X).ToList();
+            var rowCount = all.Select(o => (o.Y + o.H / 2) / 400).Distinct().Count();
+            var inRow = row.FindIndex(o => o.X == f.X && o.Y == f.Y);
+            string pos;
+            if (row.Count == 1)
+                pos = rowCount <= 1 ? "" : (f.Y + f.H / 2 <= all.Min(o => o.Y + o.H / 2) ? "TOP" : "BOTTOM");
+            else
+                pos = row.Count == 2 ? (inRow == 0 ? "LEFT" : "RIGHT")
+                    : row.Count == 3 ? (inRow == 0 ? "LEFT" : inRow == 1 ? "CENTRE" : "RIGHT")
+                    : $"#{inRow + 1}";
             monitors.Add(new JsonObject
             {
                 ["index"] = idx++,
                 ["desc"] = m.szPhysicalMonitorDescription?.Trim() ?? "",
+                ["position"] = pos,
+                ["x"] = f.X, ["y"] = f.Y, ["w"] = f.W, ["h"] = f.H,
+                ["primary"] = f.Primary,
                 ["ddc"] = readable,
                 // Raw and translated both: a vendor-deviant code stays visible.
                 ["input_raw"] = readable ? (current & 0xFF) : null,
@@ -158,10 +248,10 @@ internal sealed class DdcBridge
         var results = new JsonArray();
         var any = false;
         var idx = 0;
-        foreach (var m in Enumerate())
+        foreach (var f in Enumerate())
         {
-            var mine = index < 0 || idx == index;
-            if (mine)
+            var m = f.Mon;
+            if (index < 0 || idx == index)
             {
                 var sent = SetVCPFeature(m.hPhysicalMonitor, VCP_INPUT, code);
                 any |= sent;

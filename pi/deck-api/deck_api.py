@@ -132,6 +132,13 @@ SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
 # The Mac mini. Liveness only — it runs no exporter, so the card claims
 # nothing beyond what a ping and two TCP handshakes can observe.
 MAC_LAN = cfg("MAC_LAN", "192.168.68.68")
+# Which inputs to offer on a monitor that will not declare its own. The HP 32f
+# refuses the DDC capabilities request outright (it hung /monitor for a minute
+# when asked inline), so the operator states the fact once here rather than
+# the panel guessing from a model table. A monitor that DOES declare its
+# inputs always wins over this. Empty means offer everything.
+MON_DEFAULT_INPUTS = [s for s in
+                      cfg("MON_DEFAULT_INPUTS", "vga,hdmi1,hdmi2").split(",") if s.strip()]
 # Now-playing under Linux, when someone builds the endpoint: same /media shape
 # on this port. Absent is fine — the widget reads "no source".
 LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
@@ -1333,7 +1340,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"available": False,
                                         "reason": "the switcher lives on the Windows boot"})
             got = _ws_json(_sim_url("/monitor"))
-            return self._json(200, {"available": bool(got), **(got or {})})
+            return self._json(200, {"available": bool(got),
+                                    "default_inputs": MON_DEFAULT_INPUTS,
+                                    **(got or {})})
 
         if path == "/api/nav/geocode":
             if not self._authorised(query):
