@@ -838,6 +838,16 @@
     }).then(function (r) { return r.json(); }).catch(function () { return null; });
   }
 
+  // ── wiring ────────────────────────────────────────────────────────────
+  // Guarded so that a crash in here can never stop connect() below from
+  // running. The kiosk's only self-heal path is the ui-stamp check inside
+  // render(), which needs the stream alive: a mid-deploy reload once fetched
+  // a mismatched index.html/deck.js pair, threw on a missing element in this
+  // section, and died before connect() — leaving a page that could never see
+  // the corrected files. A control that fails to wire is a dead button; a
+  // wiring crash that stops the stream is a dead panel.
+  try {
+
   // Boot tiles only — .sqd-launch also carries .tile for its styling, and
   // must not fire /api/boot with an undefined intent.
   [].forEach.call(document.querySelectorAll('#tiles .tile'), function (tile) {
@@ -918,6 +928,12 @@
   }, 1000);
 
   window.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  } catch (err) {
+    // Wired what we could; the stream below still runs and the next ui-stamp
+    // change still reloads this page into a consistent pair.
+    try { console.error('deck wiring failed:', err); } catch (ignored) { }
+  }
 
   buildTrack();
   fit();
