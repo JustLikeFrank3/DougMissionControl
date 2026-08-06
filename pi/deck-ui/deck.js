@@ -346,7 +346,9 @@
     if (!live) return;
 
     var box = $('dsp-live');
-    var sig = mons.map(function (m) { return m.index + ':' + m.desc; }).join('|');
+    var sig = mons.map(function (m) {
+      return m.index + ':' + m.desc + ':' + (m.inputs || []).join(',');
+    }).join('|');
     if (sig !== dspSig) {
       dspSig = sig;
       box.innerHTML = '';
@@ -361,7 +363,14 @@
         card.querySelector('.h-name').textContent = 'MON ' + (m.index + 1);
         card.querySelector('.dsp-desc').textContent = m.desc || 'unnamed panel';
         var btns = card.querySelector('.dsp-btns');
-        DSP_INPUTS.forEach(function (inp) {
+        // Offer only the inputs the panel DECLARED in its capabilities
+        // string; a panel that would not say gets the full set, since a
+        // spare button beats an invisible input.
+        var offer = DSP_INPUTS.filter(function (inp) {
+          return !m.inputs || m.inputs.indexOf(inp[0]) !== -1;
+        });
+        btns.style.gridTemplateColumns = 'repeat(' + offer.length + ', 1fr)';
+        offer.forEach(function (inp) {
           var b = document.createElement('button');
           b.className = 'simbtn';
           b.innerHTML = '<span></span><i class="hold"></i>';

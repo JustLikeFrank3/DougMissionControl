@@ -67,6 +67,39 @@ internal sealed class DdcBridge
     [DllImport("dxva2.dll", SetLastError = true)]
     private static extern bool DestroyPhysicalMonitor(IntPtr hMonitor);
 
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool GetCapabilitiesStringLength(IntPtr hMonitor, out uint length);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    private static extern bool CapabilitiesRequestAndCapabilitiesReply(IntPtr hMonitor,
+        [Out] byte[] caps, uint length);
+
+    /// <summary>
+    /// The inputs a monitor DECLARES, parsed from its MCCS capabilities string
+    /// — "60(01 11 12)" means VGA/HDMI1/HDMI2 and nothing else. Null when the
+    /// panel won't answer (the caps request is slow and some panels refuse),
+    /// in which case the UI falls back to offering everything.
+    /// </summary>
+    private static List<string>? DeclaredInputs(IntPtr hMonitor)
+    {
+        if (!GetCapabilitiesStringLength(hMonitor, out var len) || len == 0) return null;
+        var buf = new byte[len];
+        if (!CapabilitiesRequestAndCapabilitiesReply(hMonitor, buf, len)) return null;
+        var caps = System.Text.Encoding.ASCII.GetString(buf).TrimEnd('\0');
+        var m = System.Text.RegularExpressions.Regex.Match(caps, @"60\s*\(([^)]*)\)");
+        if (!m.Success) return null;
+        var declared = new List<string>();
+        foreach (var tok in m.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (uint.TryParse(tok, System.Globalization.NumberStyles.HexNumber, null, out var code))
+            {
+                var name = Inputs.FirstOrDefault(kv => kv.Value == code).Key;
+                if (name is not null) declared.Add(name);
+            }
+        }
+        return declared.Count > 0 ? declared : null;
+    }
+
     private static List<PHYSICAL_MONITOR> Enumerate()
     {
         var found = new List<PHYSICAL_MONITOR>();
@@ -93,6 +126,7 @@ internal sealed class DdcBridge
             var readable = GetVCPFeatureAndVCPFeatureReply(
                 m.hPhysicalMonitor, VCP_INPUT, IntPtr.Zero, out current, out max);
             var name = Inputs.FirstOrDefault(kv => kv.Value == (current & 0xFF)).Key;
+            var declared = readable ? DeclaredInputs(m.hPhysicalMonitor) : null;
             monitors.Add(new JsonObject
             {
                 ["index"] = idx++,
@@ -101,6 +135,10 @@ internal sealed class DdcBridge
                 // Raw and translated both: a vendor-deviant code stays visible.
                 ["input_raw"] = readable ? (current & 0xFF) : null,
                 ["input"] = readable ? (name ?? "other") : null,
+                // What the panel says it has — null means it would not say,
+                // and the UI should offer everything rather than invent.
+                ["inputs"] = declared is null ? null
+                    : new JsonArray(declared.Select(d => (JsonNode)d).ToArray()),
             });
             DestroyPhysicalMonitor(m.hPhysicalMonitor);
         }
