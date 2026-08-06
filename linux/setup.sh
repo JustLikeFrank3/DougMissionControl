@@ -15,6 +15,8 @@
 #     driver otherwise disarms WOL, breaking wake-after-Linux-shutdown)
 #   * logon autostart: spoken boot confirmation (neural TTS with espeak
 #     fallback) + VS Code — the Linux mirror of jarvis-greeting.ps1
+#   * media-agent.py as a systemd USER unit on :9110 — the Linux half of the
+#     MEDIA widget and the SCREENS surface (ddcutil, i2c-dev, the i2c group)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -219,10 +221,91 @@ if ! curl -sf --max-time 2 http://127.0.0.1:9108/status >/dev/null 2>&1; then
     sleep 1
 fi
 
+# --- media-agent: now-playing (MPRIS) + monitor input switching (DDC) -------
+# The Linux half of the MEDIA widget and the SCREENS surface. deck-api polls
+# whichever OS is up and both agents publish the identical shape, so the panel
+# never learns which OS holds the video cables.
+#
+# This is a systemd USER unit, not a system one, and that is forced: playerctl
+# reads MPRIS over the user's session bus, which a system unit has no route to.
+# DDC then needs /dev/i2c-*, hence the i2c group on the same user.
+apt-get install -y -qq ddcutil playerctl >/dev/null 2>&1 || true
+
+# ddcutil talks to monitors over I2C; the bus nodes only exist once i2c-dev is
+# loaded, and it is not autoloaded on most desktops.
+modprobe i2c-dev >/dev/null 2>&1 || true
+echo i2c-dev > /etc/modules-load.d/flightsim-ddc.conf
+
+# The ddcutil package usually creates this group; create it if it did not, or
+# the usermod below fails and DDC silently returns nothing.
+getent group i2c >/dev/null || groupadd -r i2c
+usermod -aG i2c "$REAL_USER"
+
+install -m 755 "$SCRIPT_DIR/media-agent.py" /usr/local/bin/media-agent.py
+
+# Same token discipline as the boot agent: minted once, preserved across
+# re-runs so the Pi's copy stays valid. Owned by the desktop user because the
+# user unit reads it as that user — 600, not the 644 the docstring once said.
+install -d -m 755 /etc/dualboot
+MEDIA_TOKEN_FILE=/etc/dualboot/media-agent.token
+if [ ! -s "$MEDIA_TOKEN_FILE" ]; then
+    (umask 077; python3 -c 'import secrets; print(secrets.token_hex(16))' \
+        > "$MEDIA_TOKEN_FILE")
+fi
+chown "$REAL_USER:$REAL_USER" "$MEDIA_TOKEN_FILE"
+chmod 600 "$MEDIA_TOKEN_FILE"
+MEDIA_TOKEN="$(head -n1 "$MEDIA_TOKEN_FILE")"
+
+USER_UNIT_DIR="$REAL_HOME/.config/systemd/user"
+install -d -m 755 -o "$REAL_USER" -g "$REAL_USER" "$USER_UNIT_DIR"
+cat > "$USER_UNIT_DIR/flightsim-media-agent.service" <<EOF
+[Unit]
+Description=Flight Deck media + monitor agent (MPRIS now-playing, DDC input switching)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/media-agent.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+chown "$REAL_USER:$REAL_USER" "$USER_UNIT_DIR/flightsim-media-agent.service"
+
+# Linger so the agent is up before anyone logs in: SCREENS should work from
+# the greeter. With no session there is no MPRIS, which the agent already
+# reports as {"active": false} — the widget reads that as "no source", not an
+# error, so this degrades exactly the way it should.
+loginctl enable-linger "$REAL_USER" >/dev/null 2>&1 || true
+
+REAL_UID="$(id -u "$REAL_USER")"
+if command -v systemctl >/dev/null 2>&1; then
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$REAL_UID" \
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$REAL_UID" \
+        systemctl --user enable flightsim-media-agent.service >/dev/null 2>&1 || true
+    # restart rather than `enable --now`, so a re-run picks up new agent code
+    sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$REAL_UID" \
+        systemctl --user restart flightsim-media-agent.service >/dev/null 2>&1 || true
+fi
+
 echo
 echo "Linux boot-agent token — add this line to /etc/flightsim/boot.env on the Pi,"
 echo "or the Pi falls back to the ssh key for every reboot request:"
 echo "    LINUX_AGENT_TOKEN=$AGENT_TOKEN"
+echo
+echo "Linux media/monitor agent token — add this line to boot.env on the Pi too,"
+echo "or MEDIA and SCREENS stay dark under Linux (deck-api skips the agent"
+echo "entirely when the token is unset):"
+echo "    LINUX_MEDIA_TOKEN=$MEDIA_TOKEN"
+echo
+echo "Verify DDC before trusting SCREENS:"
+echo "    python3 /usr/local/bin/media-agent.py --monitors"
+echo "Expect one entry per monitor with \"ddc\": true. An empty list means"
+echo "ddcutil reached no I2C bus — group membership does not apply to sessions"
+echo "that were already open, so log out and back in (or reboot) and re-check."
 echo
 if [ -n "$PUBKEY" ]; then
     echo "Done. Test from the Pi:  ssh -i ~/.ssh/flightsim_ed25519 $REAL_USER@192.168.100.1 boot"

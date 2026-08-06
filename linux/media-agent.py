@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
-"""media-agent.py — now-playing under Linux, on :9110.
+"""media-agent.py — now-playing and monitor input switching under Linux, :9110.
 
-The Linux counterpart to the sim-agent's /media: deck-api polls whichever OS
-is up, and both serve the SAME normalized shape, so the panel widget neither
-knows nor cares which OS is playing. Reads MPRIS via playerctl, which covers
-Spotify, browsers, VLC and anything else speaking the standard.
+The Linux counterpart to the sim-agent on the Windows boot: deck-api polls
+whichever OS is up, and both serve the SAME normalized shapes, so the panel
+neither knows nor cares which OS is playing the music or holding the video
+cables. Now-playing reads MPRIS via playerctl (Spotify, browsers, VLC, anything
+speaking the standard); monitor switching drives DDC/CI via ddcutil.
 
-    GET /            -> 200 "media-agent"      (liveness, no token)
-    GET /media?token= -> the shape below
-    GET /media/art?token= -> jpeg/png bytes, 404 when the track has none
+    GET  /             -> 200 "media-agent"     (liveness, no token)
+    GET  /media?token=       -> the now-playing shape
+    GET  /media/art?token=   -> jpeg/png bytes, 404 when the track has none
     POST /media/command?token=  {"action": "play_pause"|"next"|"prev"}
+    GET  /monitor?token=     -> {"monitors": [...]} — drives SCREENS
+    POST /monitor?token=     {"input": "hdmi1", "index": n}  (index < 0 = all)
 
-Token: first line of /etc/dualboot/media-agent.token (0600, root-owned is
-fine — this runs as the desktop user via a systemd user unit). Same guard
-rules as every other agent in this repo: wrong token 403, RFC1918 only.
+Token: first line of /etc/dualboot/media-agent.token, owned by the desktop
+user at 0600 — this runs as that user, so root-owned would not be readable.
+Same guard rules as every other agent in this repo: wrong token 403, RFC1918
+only.
 
-UNTESTED as of writing: authored while the workstation was booted into
-Windows. The next Linux session should run:
-    python3 media-agent.py --check
-which exercises playerctl parsing locally and reports.
+Installed by linux/setup.sh as a systemd USER unit
+(flightsim-media-agent.service), which is forced rather than chosen: playerctl
+needs the user's session bus, which a system unit cannot reach. DDC then needs
+/dev/i2c-*, so setup.sh also installs ddcutil, loads i2c-dev, and puts the
+desktop user in the i2c group.
 
-Install (as the desktop user):
-    sudo install -d /etc/dualboot
-    uuidgen | tr -d - | sudo tee /etc/dualboot/media-agent.token
-    sudo chmod 644 /etc/dualboot/media-agent.token
-    systemctl --user enable --now path-to/media-agent.service
+Verify after install — DDC is the half that fails silently, because every
+ddcutil error path here collapses to "no monitors found":
+    python3 media-agent.py --check      # playerctl parsing, now-playing
+    python3 media-agent.py --monitors   # ddcutil parsing, expect "ddc": true
+An empty --monitors list means ddcutil reached no bus. Group membership does
+not apply to already-open sessions, so log out and back in before believing it.
 """
 
 from __future__ import annotations

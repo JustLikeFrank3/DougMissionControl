@@ -51,12 +51,13 @@ pi/flightsim-boot.sh     the orchestrator itself (→ /usr/local/bin on the Pi)
 windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, token
 windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
 windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
-linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting
+linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting, media-agent
 linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows one)
 linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
 linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
 linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
-linux/media-agent.py     now-playing (MPRIS) on :9110 — Linux twin of the agent's /media
+linux/media-agent.py     :9110 — now-playing (MPRIS) + monitor input switching (DDC),
+                         the Linux twin of the sim-agent's /media and /monitor
 tests/                   shell tests for the above — `bash tests/test_*.sh`
 
 Flight Deck — the touchscreen front-end (v0.1):
@@ -189,6 +190,10 @@ Most values live in `/etc/flightsim/boot.env` on the Pi (created by
 | `WIN_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\boot-agent.token` |
 | `LINUX_AGENT_TOKEN` | must match `/etc/flightsim/boot-agent.token` on the Linux boot. Unset means every reboot-to-Windows request goes over the ssh key instead |
 | `LINUX_AGENT_PORT` | the Linux boot agent's port (default 9108) |
+| `LINUX_MEDIA_TOKEN` | must match `/etc/dualboot/media-agent.token` on the Linux boot. Unset means MEDIA and SCREENS stay dark under Linux — deck-api skips the agent entirely rather than guessing |
+| `LINUX_MEDIA_PORT` | the Linux media/monitor agent's port (default 9110) |
+| `SIM_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\sim-agent.token`. The same token guards SIM, MEDIA and SCREENS under Windows — one agent serves all three |
+| `SIM_AGENT_PORT` | the Windows sim agent's port (default 9109) |
 | `POLL_SECS` | how long to keep watching a boot (default 300) |
 
 Hardcoded elsewhere and worth knowing about: the Pi's address in
