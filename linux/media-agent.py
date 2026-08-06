@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -204,37 +205,75 @@ class Handler(BaseHTTPRequestHandler):
 
 MON_INPUTS = {"vga": 0x01, "dp1": 0x0F, "dp2": 0x10, "hdmi1": 0x11, "hdmi2": 0x12}
 _buses: list[dict] | None = None
+_last_error: str | None = None
 
 
 def _ddcutil(args: list[str], timeout: float = 10) -> str | None:
+    """Run ddcutil, keeping why it failed. Every caller here treats None as
+    "no monitors", so without _last_error an empty SCREENS cannot tell a
+    missing binary from a permission denial from a GPU that has no DDC."""
+    global _last_error
     try:
         out = subprocess.run(["ddcutil", *args], capture_output=True, text=True,
                              timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
+    except FileNotFoundError:
+        _last_error = "ddcutil is not installed"
         return None
-    return out.stdout if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError) as e:
+        _last_error = f"ddcutil did not run: {e}"
+        return None
+    if out.returncode != 0:
+        _last_error = (out.stderr or out.stdout or "").strip()[:400] \
+            or f"ddcutil exited {out.returncode}"
+        return None
+    _last_error = None
+    return out.stdout
+
+
+# "I2C bus:  /dev/i2c-4" — the path sits mid-line, so anchoring a match to the
+# start of the line finds nothing and yields an empty monitor list on a machine
+# where DDC works perfectly. Match the path wherever it appears.
+_BUS_RE = re.compile(r"/dev/i2c-(\d+)")
 
 
 def _detect() -> list[dict]:
     """Displays ddcutil can reach, cached — detection probes every I2C bus."""
     global _buses
-    if _buses is not None:
+    if _buses:
         return _buses
     found: list[dict] = []
     text = _ddcutil(["detect", "--brief"], timeout=25) or ""
     bus, model = None, ""
+
+    def flush() -> None:
+        nonlocal bus, model
+        if bus is not None:
+            found.append({"bus": bus, "model": model})
+        bus, model = None, ""
+
     for line in text.splitlines():
         s = line.strip()
-        if s.startswith("/dev/i2c-"):
-            bus = s.rsplit("-", 1)[-1]
+        # Records start at "Display N" and are blank-line separated; keying on
+        # both survives either layout. An "Invalid display" block still names a
+        # bus, so it is kept and simply reads back no VCP value — SCREENS shows
+        # it as a monitor with ddc false, which is truer than hiding it.
+        if s.startswith("Display ") or s.startswith("Invalid display"):
+            flush()
+            continue
+        if not s:
+            flush()
+            continue
+        m = _BUS_RE.search(s)
+        if m:
+            bus = m.group(1)
         elif s.startswith("Monitor:"):
             parts = s.split(":", 1)[1].split(":")
             model = parts[1].strip() if len(parts) > 1 else ""
-        elif not s and bus is not None:
-            found.append({"bus": bus, "model": model})
-            bus, model = None, ""
-    if bus is not None:
-        found.append({"bus": bus, "model": model})
+    flush()
+    # Deliberately not caching an empty result. The unit starts at boot under
+    # linger, which can be before the i2c group or the GPU driver is ready —
+    # caching [] there would keep SCREENS dark until someone restarted the
+    # service, long after the machine had become perfectly capable.
     _buses = found
     return found
 
@@ -264,7 +303,12 @@ def monitors() -> dict:
             "input": name,
             "inputs": None,
         })
-    return {"monitors": out}
+    if out:
+        return {"monitors": out}
+    # An empty list is the one answer SCREENS cannot act on and cannot explain,
+    # so say why. deck-api passes this through untouched and the panel renders
+    # the surface from "monitors" alone, so the extra key costs nothing there.
+    return {"monitors": [], "reason": _last_error or "ddcutil reached no I2C bus"}
 
 
 def monitor_switch(input_name: str, index: int) -> dict:
