@@ -500,3 +500,12 @@ html, body {
 
 .navbtns { display: flex; gap: 8px; }
 .navbtns .navadd { flex: 1; }
+
+/* Finger-sized scrollbars for the deck's own scrolling lists (plan, search
+   results). The Grafana iframe is cross-origin — its bars are handled by the
+   kiosk's OverlayScrollbar flag instead, since no page CSS can reach them. */
+.navplan::-webkit-scrollbar, .nsx-results::-webkit-scrollbar { width: 22px; }
+.navplan::-webkit-scrollbar-track, .nsx-results::-webkit-scrollbar-track {
+  background: #0b1016; }
+.navplan::-webkit-scrollbar-thumb, .nsx-results::-webkit-scrollbar-thumb {
+  background: #2a3648; border: 4px solid #0b1016; border-radius: 11px; }

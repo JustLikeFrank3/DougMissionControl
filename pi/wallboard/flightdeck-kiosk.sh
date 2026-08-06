@@ -46,6 +46,7 @@ while true; do
     chromium \
         --password-store=basic \
         --ozone-platform=wayland \
+        --disable-features=OverlayScrollbar \
         --kiosk \
         --noerrdialogs \
         --disable-infobars \
@@ -56,6 +57,9 @@ while true; do
     # State as a chrome://flags preference — so a wiped or fresh profile made
     # chromium try X11 and die with "Missing X server or $DISPLAY". A kiosk
     # must survive losing its profile.
+    # OverlayScrollbar off: the auto-hiding slivers are unfindable by finger,
+    # and the Grafana iframe is cross-origin so no page CSS can widen them —
+    # only the browser can. Classic always-visible bars everywhere instead.
     CHROME_PID=$!
 
     fails=0
