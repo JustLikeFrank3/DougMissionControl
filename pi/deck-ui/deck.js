@@ -440,6 +440,10 @@
   var navSelIdx = 0;
   var navPlanSig = null;
   var navTrail = [];               // {t, lat, lon} — browser memory only
+  // Implied ground speed above which the aircraft did not fly there, it was
+  // put there. Comfortably above anything the sim's aircraft do, and far
+  // below the rate a relocate across a continent implies.
+  var NAV_TELEPORT_KT = 1500;
   var navTimer = null;
   var navZoom = null;              // null = auto-fit; integer = manual slippy z
   // Manual zoom range. The auto-fit stops at 15; manual goes one closer, which
@@ -495,6 +499,23 @@
 
     // Trail: record when we have actually moved (~37 m), prune at 45 min.
     var last = navTrail[navTrail.length - 1];
+    if (last) {
+      // A relocate — new departure airport, repositioned flight — is
+      // instantaneous, and the trail is one polyline, so without this the map
+      // draws a straight blue line from the old airport to the new one and
+      // keeps it for 45 minutes. It also poisons the auto-fit, which bounds
+      // the view on the trail: one relocate and the map zooms out to hold two
+      // states at once.
+      //
+      // Detect it as implied ground speed rather than raw distance. Dividing
+      // by elapsed time is what keeps a backgrounded tab or a missed poll —
+      // both of which produce a legitimately large gap — from being mistaken
+      // for a jump.
+      var moved = navDistBrg(last.lat, last.lon, r.lat, r.lon).dist;
+      var hrs = Math.max(Date.now() - last.t, 1000) / 3600000;
+      if (moved / hrs > NAV_TELEPORT_KT) navTrail.length = 0;
+      last = navTrail[navTrail.length - 1];
+    }
     if (!last || navDistBrg(last.lat, last.lon, r.lat, r.lon).dist > 0.02) {
       navTrail.push({ t: Date.now(), lat: r.lat, lon: r.lon });
     }
