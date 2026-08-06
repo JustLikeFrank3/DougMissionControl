@@ -56,7 +56,21 @@ linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows
 linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
 linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
 linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
+linux/media-agent.py     now-playing (MPRIS) on :9110 — Linux twin of the agent's /media
 tests/                   shell tests for the above — `bash tests/test_*.sh`
+
+Flight Deck — the touchscreen front-end (v0.1):
+pi/display-check.sh      read-only: is the XENEON Edge's video + touch sound?
+pi/setup-display.sh      cage + chromium kiosk on the Edge, mode pinning
+pi/setup-deck.sh         installs deck-api, repoints fauxmo at it
+pi/deck-api/deck_api.py  one entry point for every trigger; state + SSE
+pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
+pi/deck-ui/              the panel itself (index/deck.css/deck.js) + selftest.html
+
+The Windows sim agent (docs/SIM-AGENT-BRIEF.md):
+windows/sim-agent/       flightdeck-sim-agent — SimConnect + media on :9109
+windows/setup-sim-agent.ps1   build, token, firewall, logon task
+windows/scarlett-power.ps1    keep the Scarlett on the bus (power mgmt + ghosts)
 ```
 
 ## One-time setup (in this order)
@@ -107,6 +121,59 @@ to the workstation's Linux boot. Substitute your own throughout.
    (they appear under Plugs). Then More → Routines → **+** → When:
    *Voice* → your phrase → Action 1 *Alexa Says* (your Jarvis line) →
    Action 2 *Smart Home* → the device → **On**.
+
+## Flight Deck — the touchscreen (v0.1)
+
+A Corsair XENEON Edge (2560 × 720, HDMI + USB HID touch) on the Pi, giving
+the same four triggers a physical panel — plus the thing voice cannot: a
+live picture of the ninety seconds after you ask. It hangs off the Pi rather
+than the workstation, because the workstation is the subject of every
+control on it.
+
+```
+./pi/display-check.sh          # prove video + touch; fix every ✗ before continuing
+sudo ./pi/setup-display.sh     # cage + chromium kiosk, opens the touch self-test
+sudo ./pi/setup-deck.sh        # deck-api on :8088, repoints fauxmo, real UI
+```
+
+`flightsim-boot.sh` is **not modified**. `deck-api` triggers it exactly as
+fauxmo always has and derives boot phases by following the script's own
+`journalctl -t flightsim-boot` output, so a boot started by voice, by touch,
+or by hand all show up the same way.
+
+| | |
+|---|---|
+| `GET /api/state` | everything the panel renders |
+| `GET /api/events` | the same, streamed over SSE |
+| `POST /api/boot` | `{"intent":"sim\|squadrons\|plain\|code"}` |
+| `POST /api/launch` | target already up — fire greeting + profile |
+| `POST /api/abort` | kill an in-flight run |
+| `POST /api/hook/greeting` | for the Windows callback; not wired in v0.1 |
+
+Loopback needs no token; anything else needs `DECK_TOKEN` from
+`/etc/flightsim/boot.env`. Phases 6–7 (LOGON, LAUNCHED) stay dark until
+`jarvis-greeting.ps1` gains a callback — nothing on the Windows side is
+touched, so a run completes at **OS UP**.
+
+### Live telemetry, and only live
+
+GPU temperature, utilisation and VRAM come from the exporters that already
+answer on `:9105` / `:9106` — this project installs none of its own. deck-api
+parses what they emit and keeps **only the latest value**; the rolling
+60-minute window behind the sparklines lives in the browser's memory and dies
+with the page.
+
+There is deliberately no Prometheus, Grafana, Loki, or long-term retention.
+This targets the existing Pi 4B with 4 GB and a USB thumb drive, and a TSDB
+on flash with no real wear levelling corrupts before it dies. deck-api state
+lives in tmpfs and `/tmp` is moved there too, so nothing writes in a loop.
+
+When neither OS answers, the trace breaks rather than reading zero — on a
+dual-boot machine that gap *is* the reboot.
+
+Both `pi/deck-api/test_phases.py` and `test_telemetry.py` run anywhere, with
+no Pi and no exporter needed. See [docs/DESIGN.md](docs/DESIGN.md) for the
+full picture.
 
 ## Configuration
 

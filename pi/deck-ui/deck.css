@@ -1,0 +1,413 @@
+/* Flight Deck v0.1 — 2560 x 720 on the XENEON Edge.
+   Authored at true panel pixels; #fit scales it down on a laptop so the
+   layout can be checked without the hardware.
+
+   Palette is avionics EFIS, which is the vernacular this thing lives in:
+   magenta is the target the system is flying toward and marks every boot
+   affordance; cyan is reference data; green/amber/red stay reserved for
+   state and are never used decoratively. */
+
+:root {
+  --bg:   #0b0f15;
+  --pan:  #131a24;
+  --pan2: #18202c;
+  --ln:   #232e3e;
+  --fg:   #e2e9f2;
+  --mut:  #7f8da2;
+  --acc:  #d95bb8;
+  --cy:   #56cfe1;
+  --gr:   #4fc48a;
+  --am:   #e6a339;
+  --rd:   #e2564d;
+
+  --mono: ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* The UA stylesheet's `[hidden] { display: none }` is beaten by ANY author
+   rule that sets display — and .overlay sets `display: grid`, .abort sets
+   `display: flex`. Without this the EVALS "unreachable" overlay sits on top
+   of a perfectly good wallboard forever, and ABORT is always on screen.
+   Author-level and !important so nothing can lose to it again. */
+[hidden] { display: none !important; }
+
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#fit { width: 100vw; height: 100vh; overflow: hidden; }
+
+#deck {
+  width: 2560px; height: 720px;
+  transform-origin: 0 0;
+  display: flex; flex-direction: column;
+}
+
+/* ── persistent strip ──────────────────────────────────────────────────────
+   72 px, on every surface. Carries navigation, the host status that SIM mode
+   must keep, and a permanent HOME — so "persistent system status in SIM" is
+   satisfied everywhere rather than only there. Moving the wordmark and clock
+   up here is what pays for the height: DECK's rail loses its own eyebrow. */
+
+.strip {
+  height: 72px; flex: none; display: flex; align-items: stretch;
+  background: #0e141d; border-bottom: 1px solid var(--ln);
+}
+.mark { display: flex; align-items: center; padding: 0 26px;
+        border-right: 1px solid var(--ln); flex: none; }
+.mark b { font-size: 20px; letter-spacing: .26em; font-weight: 600; white-space: nowrap; }
+
+.nav { display: flex; align-items: stretch; }
+.navb {
+  width: 196px;                       /* ~27 mm at this panel's ~180 ppi */
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; border: 0; border-right: 1px solid var(--ln);
+  background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
+}
+.navb.wide { width: 260px; }
+.navb .t { font-size: 22px; letter-spacing: .14em; }
+.navb .s { font-size: 11px; letter-spacing: .1em; }
+.navb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--acc); }
+.navb.alert .s { color: var(--am); }
+
+.status { margin-left: auto; display: flex; align-items: center; gap: 26px;
+          padding: 0 22px; font-size: 16px; color: var(--mut); }
+.status b { color: var(--fg); font-weight: 400; }
+.status .live { color: var(--gr); }
+.status .dead { color: var(--rd); }
+
+.home {
+  width: 150px; border: 0; border-left: 1px solid var(--ln); background: transparent;
+  color: var(--fg); font-family: inherit; font-size: 17px; letter-spacing: .14em;
+  cursor: pointer;
+}
+
+/* ── surfaces ─────────────────────────────────────────────────────────────
+   All four stay in the DOM. The EVALS iframe in particular must not be
+   unmounted — reloading it would restart the Grafana playlist every time you
+   glance at DECK. */
+.surfaces { flex: 1; position: relative; min-height: 0; }
+.surface { position: absolute; inset: 0; display: none; }
+.surface.on { display: grid; }
+.body-deck  { grid-template-columns: 600px 1100px 860px; }
+.body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
+.body-plain { grid-template-columns: 1fr; place-items: center; }
+
+.rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.mid   { padding: 16px 22px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 11px; }
+.right { padding: 16px 20px; border-left: 1px solid var(--ln);
+         display: flex; flex-direction: column; gap: 10px; }
+
+/* ── EVALS ─────────────────────────────────────────────────────────────── */
+
+/* Second-level nav, built at runtime from Grafana's own dashboard list.
+   In flow and always visible: the board scrolls inside its own frame, so the
+   56 px this costs is not lost content. An overlay was tried and reverted —
+   permanently covering the top of the dashboard is worse than shortening it. */
+.subnav { display: flex; align-items: stretch; border-bottom: 1px solid var(--ln);
+          background: #0e141d; overflow: hidden; }
+.subb {
+  flex: 1; min-width: 0; border: 0; border-right: 1px solid var(--ln);
+  background: transparent; color: var(--mut); font-family: inherit; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; padding: 0 8px;
+}
+.subb .t { font-size: 17px; letter-spacing: .1em; white-space: nowrap;
+           overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.subb .s { font-size: 10px; letter-spacing: .08em; opacity: .8; }
+.subb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--cy); }
+.subb[data-view="auto"].on { box-shadow: inset 0 -3px 0 var(--acc); }
+
+#evals-frame { width: 100%; height: 100%; border: 0; background: var(--bg); }
+
+.overlay {
+  position: absolute; inset: 0; background: rgba(11, 15, 21, .93);
+  display: grid; place-items: center;
+}
+.ov-box { max-width: 900px; padding: 0 40px; text-align: center; }
+.ov-pill { display: inline-block; font-size: 15px; letter-spacing: .2em;
+           padding: 5px 12px; border: 1px solid var(--rd); color: var(--rd); }
+.ov-t { font-size: 44px; margin-top: 18px; letter-spacing: -.01em; }
+.ov-s { font-size: 19px; color: var(--mut); margin-top: 12px; }
+.ov-n { font-size: 15px; color: var(--mut); margin-top: 22px; line-height: 1.6; opacity: .8; }
+
+/* ── MEDIA / SIM placeholders ──────────────────────────────────────────── */
+.placeholder { max-width: 1100px; text-align: center; padding: 0 40px; }
+.ph-pill { display: inline-block; font-size: 15px; letter-spacing: .2em;
+           padding: 5px 12px; border: 1px solid var(--mut); color: var(--mut); }
+.ph-t { font-size: 72px; letter-spacing: .1em; margin-top: 18px; line-height: 1; }
+.ph-s { font-size: 20px; color: var(--mut); margin-top: 20px; line-height: 1.6; }
+.ph-s code { color: var(--cy); }
+.ph-n { font-size: 15px; color: var(--mut); margin-top: 20px; opacity: .75; }
+
+/* ── left rail ─────────────────────────────────────────────────────────── */
+
+.eyebrow { display: flex; justify-content: space-between; align-items: baseline; }
+.eyebrow b { font-size: 19px; font-weight: 600; letter-spacing: .3em; }
+.eyebrow span { font-size: 26px; color: var(--mut); }
+
+.state { background: var(--pan); border: 1px solid var(--ln); padding: 18px 20px; }
+.pill {
+  display: inline-block; font-size: 15px; letter-spacing: .18em;
+  padding: 4px 10px; border: 1px solid currentColor; color: var(--mut);
+}
+.pill.ok    { color: var(--gr); }
+.pill.busy  { color: var(--am); }
+.pill.off   { color: var(--mut); }
+.pill.bad   { color: var(--rd); }
+.state .os   { font-size: 52px; line-height: 1; margin-top: 12px; letter-spacing: -.02em; }
+.state .meta { font-size: 17px; color: var(--mut); margin-top: 12px; }
+
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.tile, .abort {
+  position: relative; overflow: hidden;
+  background: var(--pan); border: 1px solid var(--ln); color: var(--fg);
+  font-family: inherit; text-align: left; padding: 16px 18px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;
+  cursor: pointer;
+}
+.tile { height: 158px; }                 /* ~22 mm at this panel's ~180 ppi */
+.abort { height: 96px; border-color: var(--rd); color: var(--rd); }
+
+.tile .glyph {
+  position: absolute; top: 14px; right: 14px; width: 34px; height: 34px;
+  fill: none; stroke-width: 1.6; stroke-linejoin: round;
+}
+.tile[data-accent="acc"] .glyph { stroke: var(--acc); }
+.tile[data-accent="cy"]  .glyph { stroke: var(--cy); }
+.tile[data-accent="mut"] .glyph { stroke: var(--mut); }
+
+.t-name { font-size: 26px; letter-spacing: .02em; }
+.t-sub  { font-size: 16px; color: var(--mut); }
+
+.tile.arming { border-color: var(--acc); }
+.abort.arming { border-color: var(--rd); }
+
+/* the fill sweep that replaces a confirm dialog — a modal on a 720px-tall
+   ribbon would eat the whole screen */
+.hold {
+  position: absolute; left: 0; bottom: 0; height: 5px; width: 0;
+  background: var(--acc); transition: width 60ms linear;
+}
+.abort .hold { background: var(--rd); }
+
+.tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
+
+.foot { font-size: 15px; color: var(--mut); margin-top: auto; }
+
+/* ── centre ────────────────────────────────────────────────────────────── */
+
+.lbl { font-size: 14px; letter-spacing: .16em; color: var(--mut); }
+
+.track { display: flex; align-items: flex-start; }
+
+.node { flex: 1; display: flex; flex-direction: column; align-items: center;
+        position: relative; }
+.node::before {
+  content: ""; position: absolute; top: 7px; left: -50%; width: 100%; height: 2px;
+  background: var(--ln);
+}
+.node:first-child::before { display: none; }
+.node.done::before, .node.now::before { background: var(--acc); }
+
+.node .dot {
+  width: 16px; height: 16px; border-radius: 50%; position: relative; z-index: 1;
+  background: var(--bg); border: 2px solid var(--ln);
+}
+.node.done .dot { background: var(--acc); border-color: var(--acc); }
+.node.now  .dot { border-color: var(--acc); border-width: 3px; }
+.node.fail .dot { background: var(--rd); border-color: var(--rd); }
+
+.node .n { font-size: 13px; margin-top: 10px; letter-spacing: .06em; }
+.node .s { font-size: 12px; color: var(--mut); margin-top: 3px; text-align: center; }
+.node.pending .n, .node.pending .s { opacity: .45; }
+
+.note { font-size: 13px; color: var(--mut); line-height: 1.6; }
+.note code { color: var(--cy); }
+.note b { color: var(--fg); font-weight: 400; }
+
+.log { font-size: 14px; line-height: 1.8; color: var(--mut); overflow: hidden; flex: 1; }
+.log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .t { color: var(--fg); }
+.log .src { color: var(--cy); }
+.log .warn .src { color: var(--am); }
+.log .ok .src { color: var(--gr); }
+
+/* ── right ─────────────────────────────────────────────────────────────── */
+
+.host {
+  background: var(--pan); border: 1px solid var(--ln); padding: 14px 16px; flex: 1;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.h-top { display: flex; justify-content: space-between; align-items: center; }
+.h-name { font-size: 21px; letter-spacing: .04em; }
+.h-pill { font-size: 13px; letter-spacing: .14em; padding: 3px 8px;
+          border: 1px solid currentColor; color: var(--mut); }
+.h-pill.ok   { color: var(--gr); }
+.h-pill.busy { color: var(--am); }
+.h-pill.off  { color: var(--mut); }
+
+.h-rows { display: flex; flex-direction: column; gap: 6px; font-size: 16px; }
+.h-rows .row { display: flex; justify-content: space-between; }
+.h-rows .k { color: var(--mut); }
+.h-rows .v { color: var(--fg); }
+
+.bar { display: flex; justify-content: space-between; font-size: 14px; color: var(--mut); }
+.bar .live { color: var(--gr); }
+.bar .dead { color: var(--rd); }
+
+/* ── live traces ───────────────────────────────────────────────────────────
+   Every trace is the same cyan: identity comes from the tile's own title,
+   never from hue, so green/amber/red stay reserved for state. The rolling
+   window lives in this page's memory and dies with it — deck-api keeps no
+   history and nothing is written to the Pi's thumb drive. */
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+
+.stat { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px 0; }
+.stat .k { font-size: 13px; letter-spacing: .14em; color: var(--mut); }
+.stat .v { font-size: 32px; line-height: 1.1; margin-top: 1px; }
+.stat .v .u { font-size: 16px; color: var(--mut); margin-left: 3px; }
+.stat .v.stale { color: var(--mut); }
+
+.chart { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px 0; }
+
+.spark { display: block; width: 100%; height: 40px; overflow: visible; }
+.stat .spark  { height: 40px; margin-top: 2px; }
+.host .spark  { height: 44px; margin-top: auto; }
+.spark.wide   { height: 132px; margin-top: 4px; }
+
+/* non-scaling-stroke keeps lines even, since preserveAspectRatio="none"
+   stretches the viewBox to whatever width the column gives it */
+.spark .sk-a { fill: var(--cy); opacity: .13; stroke: none; }
+.spark .sk-l { fill: none; stroke: var(--cy); stroke-width: 1.6;
+               stroke-linejoin: round; stroke-linecap: round;
+               vector-effect: non-scaling-stroke; }
+.spark .sk-g { stroke: var(--ln); stroke-width: 1; fill: none;
+               vector-effect: non-scaling-stroke; }
+.spark .sk-d { fill: var(--cy); stroke: var(--pan); stroke-width: 1.5; }
+.spark text  { font-family: var(--mono); fill: var(--mut); font-size: 12px; }
+.spark text.now { fill: var(--fg); font-size: 17px; }
+/* a gap in a trace is real information — the machine was off or rebooting */
+.spark .sk-gap { stroke: var(--ln); stroke-width: 1; stroke-dasharray: 3 4;
+                 fill: none; vector-effect: non-scaling-stroke; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hold { transition: none; }
+}
+
+/* ── SIM ───────────────────────────────────────────────────────────────── */
+/* Observed state only. Nothing here ever draws a commanded position: the
+   agent publishes what the simulator reports, and a control the aircraft
+   does not have is absent from its payload rather than present and false. */
+.body-sim { grid-template-columns: 1fr; }
+.body-sim .placeholder { place-self: center; }
+
+.sim { display: flex; flex-direction: column; min-height: 0;
+       padding: 16px 22px; gap: 14px; }
+.sim.stale { opacity: .45; }              /* state went quiet — say so, quietly */
+.sim-head { display: flex; align-items: baseline; gap: 18px;
+            border-bottom: 1px solid var(--ln); padding-bottom: 12px; }
+.sim-ac { font-size: 30px; letter-spacing: .02em; white-space: nowrap;
+          overflow: hidden; text-overflow: ellipsis; }
+.sim-meta { margin-left: auto; color: var(--mut); font-size: 15px;
+            letter-spacing: .14em; white-space: nowrap; }
+
+.sim-body { flex: 1; display: flex; gap: 14px; min-height: 0; }
+.sim-controls { flex: 3; display: grid; gap: 14px;
+                grid-template-columns: 1.7fr 1fr 1fr 1fr 1fr; }
+.sim-reads { flex: 1.1; display: grid; gap: 14px;
+             grid-template-rows: repeat(3, 1fr); }
+
+.simt { position: relative; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column; justify-content: center;
+        background: var(--pan); border: 1px solid var(--ln); padding: 16px 18px; }
+.simt h3 { position: absolute; top: 14px; left: 18px; font-size: 13px;
+           font-weight: 400; letter-spacing: .2em; color: var(--mut); }
+.simt-u { position: absolute; top: 14px; right: 18px; font-size: 13px;
+          letter-spacing: .16em; color: var(--mut); }
+.simt-v { font-size: 44px; line-height: 1.05; letter-spacing: .03em; }
+.simt-v.big { font-size: 56px; }
+.simt-s { margin-top: 8px; min-height: 1.1em; font-size: 14px;
+          letter-spacing: .06em; color: var(--mut); }
+
+/* Not fitted on this airframe — greyed and named, never a dead control. */
+.simt.na { opacity: .35; }
+.simt.na .simt-v { font-size: 22px; color: var(--mut); }
+
+.sim-on  { color: var(--gr); }
+.sim-mid { color: var(--am); }
+.sim-off { color: var(--mut); }
+
+.simbar { margin-top: 10px; height: 10px; overflow: hidden;
+          background: #0b1016; border: 1px solid var(--ln); }
+.simbar i { display: block; height: 100%; width: 0; background: var(--gr);
+            transition: width .1s linear; }
+.simbar i.sim-mid { background: var(--am); }
+
+/* Handle commands one position, the gear reports another, nothing is moving:
+   a command the simulator declined. Shown rather than smoothed over. */
+.simwarn { display: none; margin-top: 9px; padding: 5px 10px; font-size: 13px;
+           letter-spacing: .12em; color: var(--am); border: 1px solid var(--am);
+           background: #241d0c; }
+.simwarn.on { display: block; }
+
+/* One pip per flap handle position, filled to the current index. */
+.simpips { display: flex; gap: 6px; margin-top: 10px; }
+.simpips b { flex: 1; height: 9px; background: #0b1016; border: 1px solid var(--ln); }
+.simpips b.f { background: var(--gr); border-color: var(--gr); }
+
+/* No responsive breakpoints on purpose. deck.js lays the whole panel out at a
+   fixed 2560x720 and scales it with a transform, so this surface is always
+   2560x720 internally no matter what it is plugged into. An aspect-ratio query
+   would fire on the physical viewport and reflow the tiles inside a box that
+   never changed size. */
+
+/* Commands. Hold to fire, matching the boot tiles — the .hold sweep is the
+   confirm step. Each button names an explicit position; nothing here toggles,
+   so a dropped frame cannot invert what was asked for. */
+.simcmd { display: flex; gap: 8px; margin-top: 12px; }
+.simbtn { position: relative; overflow: hidden; flex: 1; padding: 9px 6px;
+          font-family: inherit; font-size: 14px; letter-spacing: .16em;
+          color: var(--fg); background: var(--pan2); border: 1px solid var(--ln);
+          cursor: pointer; }
+.simbtn.arming { border-color: var(--acc); }
+.simbtn[disabled] { opacity: .3; cursor: default; }
+
+/* PENDING is an overlay on the last observed state, never a stand-in for it.
+   It clears when the simulator actually moves, and turns to NO RESPONSE when
+   nothing moved before the timeout — the command failed, and the state on
+   screen is still the truth. */
+.simpend { min-height: 1.15em; margin-top: 6px; font-size: 13px;
+           letter-spacing: .16em; color: transparent; }
+.simpend.wait { color: var(--am); }
+.simpend.dead { color: var(--rd); }
+
+/* ── now-playing widget (DECK rail) ────────────────────────────────────── */
+/* Replaces the MEDIA surface: album art never needed 2560 px of panel. */
+.np { display: flex; align-items: center; gap: 12px; min-height: 64px;
+      background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
+.np.idle { opacity: .45; }
+.np-art { width: 48px; height: 48px; object-fit: cover; flex: none; }
+.np-noart { width: 48px; height: 48px; flex: none; display: grid; place-items: center;
+            font-size: 22px; color: var(--mut); background: #0b1016;
+            border: 1px solid var(--ln); }
+.np-mid { flex: 1; min-width: 0; }
+.np-title { font-size: 16px; white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; }
+.np-artist { font-size: 13px; color: var(--mut); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.np-time { font-size: 12px; color: var(--mut); margin-top: 3px; }
+.np-btns { display: flex; gap: 6px; flex: none; }
+.np-b { width: 44px; height: 44px; border: 1px solid var(--ln); background: var(--pan2);
+        color: var(--fg); font-size: 17px; font-family: inherit; cursor: pointer; }
+.np-b:disabled { opacity: .3; cursor: default; }
+

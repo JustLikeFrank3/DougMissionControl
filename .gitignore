@@ -1,3 +1,9 @@
 *.log
 *.mp3
 *.token
+__pycache__/
+*.pyc
+
+# .NET build output (windows/sim-agent)
+bin/
+obj/
