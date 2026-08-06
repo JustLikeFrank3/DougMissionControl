@@ -196,8 +196,13 @@ class Deck:
         self._cv = threading.Condition()
         self.version = 0
         self.state = {
-            "workstation": {"os": "unknown", "since": None, "ip": WS_LAN,
-                            "agent": False},
+            # `since`: when the OS state last CHANGED. `last_alive`: when a
+            # probe last got an answer. Two different clocks — the UI once
+            # rendered `since` as "last seen", which reads "last seen 0 s" on a
+            # host that just went dark. The moment it went dark is not the last
+            # time it was seen.
+            "workstation": {"os": "unknown", "since": None, "last_alive": None,
+                            "ip": WS_LAN, "agent": False},
             "boot": {"in_flight": False, "target": None, "intent": None,
                      "phase": 0, "phase_name": "IDLE", "started": None,
                      "elapsed": 0, "result": None, "observable_max": PHASE_MAX_V01},
@@ -864,6 +869,8 @@ def poll_once(prev_os):
         w = s["workstation"]
         if changed:
             w["since"] = time.time()
+        if alive:
+            w["last_alive"] = time.time()
         w["os"] = os_now
         w["agent"] = agent
         s["sim"] = sim_link

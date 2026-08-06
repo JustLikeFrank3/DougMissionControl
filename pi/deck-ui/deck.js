@@ -59,8 +59,14 @@
       if (p < reached) el.classList.add('done');
       else if (p === reached) el.classList.add(failed ? 'fail' : (boot.in_flight ? 'now' : 'done'));
       else el.classList.add('pending');
-      // 6 and 7 are unreachable until the Windows greeting calls back.
-      if (p > observableMax && p > reached) el.classList.add('pending');
+      // 6 and 7 are unreachable until the Windows greeting calls back. Marked
+      // distinctly from merely-unreached phases, so "phase 4 / 5" against a
+      // seven-node rail reads as a stated scope limit, not an off-by-two.
+      if (p > observableMax && p > reached) {
+        el.classList.remove('pending');
+        el.classList.add('unwired');
+        el.querySelector('.s').textContent = 'not wired';
+      }
     });
 
     var lbl = $('track-lbl');
@@ -254,15 +260,25 @@
   function drawAllSparks() {
     [].forEach.call(document.querySelectorAll('svg.spark'), drawSpark);
 
+    // A stale number in primary type is a lie readable from across the room —
+    // and this fires exactly when the workstation is down or rebooting, the one
+    // moment someone actually looks. Stale (> ~3 scrape intervals) dims the
+    // value AND stamps its age beside it in the same glance; a value older
+    // than two minutes stops being shown at all.
     [].forEach.call(document.querySelectorAll('.stat'), function (el) {
       var p = latest(el.dataset.key);
       var v = el.querySelector('.v');
-      var stale = !p || (Date.now() / 1000 - p.t) > 30;
+      var age = p ? Date.now() / 1000 - p.t : Infinity;
+      var stale = age > 15;
       v.className = 'v' + (stale ? ' stale' : '');
-      v.innerHTML = p
-        ? (Math.abs(p.v) >= 100 ? Math.round(p.v) : Math.round(p.v * 10) / 10) +
-          '<span class="u">' + (el.dataset.unit || '') + '</span>'
-        : '—';
+      if (!p || age > 120) {
+        v.innerHTML = '—';
+      } else {
+        v.innerHTML =
+          (Math.abs(p.v) >= 100 ? Math.round(p.v) : Math.round(p.v * 10) / 10) +
+          '<span class="u">' + (el.dataset.unit || '') + '</span>' +
+          (stale ? '<span class="age">· ' + fmtAgo(p.t) + ' ago</span>' : '');
+      }
     });
 
     var mins = Math.round(WINDOW_S / 60);
@@ -816,7 +832,13 @@
       ['os', ws.os === 'booting' ? 'no exporter yet' : (ws.os || '—')],
       ['address', ws.ip || '—'],
       ['boot agent', ws.agent ? ':9107 answering' : 'no answer'],
-      [ws.os === 'off' ? 'last seen' : 'changed', fmtAgo(ws.since)]
+      // Two clocks, two labels. `changed` is when the OS state flipped;
+      // `last seen` is the last successful contact — the one that matters
+      // during an outage, and NOT zero just because a probe ran and confirmed
+      // the host is dark.
+      ['changed', fmtAgo(ws.since)],
+      ['last seen', ws.os === 'windows' || ws.os === 'linux'
+        ? 'now' : fmtAgo(ws.last_alive)]
     ]);
 
     var pi = s.pi || {};
