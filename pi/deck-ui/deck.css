@@ -497,3 +497,6 @@ html, body {
 .nsx-kbd button.wide { min-width: 120px; font-size: 15px; letter-spacing: .12em; }
 .nsx-kbd button.space { flex: 1; max-width: 420px; }
 .nsx-kbd button.go { color: var(--cy); border-color: var(--cy); }
+
+.navbtns { display: flex; gap: 8px; }
+.navbtns .navadd { flex: 1; }

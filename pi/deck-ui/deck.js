@@ -386,9 +386,17 @@
 
     if (wpt) {
       var nav = navDistBrg(r.lat, r.lon, wpt.lat, wpt.lon);
+      // Route total: aircraft -> wpt1 -> ... -> N, since the start point is
+      // wherever the aircraft actually is.
+      var total = 0, prev = { lat: r.lat, lon: r.lon };
+      navPlan.forEach(function (w) {
+        total += navDistBrg(prev.lat, prev.lon, w.lat, w.lon).dist;
+        prev = w;
+      });
       $('navp-brg').textContent = ('00' + Math.round(nav.brg)).slice(-3) + '°T · ' +
         (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
-      $('navp-ete').textContent = fmtEte(nav.dist, r.gs_kt) + ' · ' + wpt.name;
+      $('navp-ete').textContent = fmtEte(nav.dist, r.gs_kt) + ' · ' + wpt.name +
+        (navPlan.length > 1 ? ' · route ' + Math.round(total) + ' nm' : '');
       $('navp-arrow-g').style.transform =
         'rotate(' + ((nav.brg - (r.trk_true || 0) + 360) % 360) + 'deg)';
       $('nav-nav').textContent = wpt.name.slice(0, 12) + ' ' +
@@ -450,9 +458,20 @@
      Nominatim proxy; a tapped result is appended to the plan. */
   var navQ = '';
 
-  function navSearchOpen(on) {
+  var navKbdMode = 'wpt';          // 'wpt' = geocode search, 'save' = plan name
+  var navKbdGoBtn = null;
+
+  function navSearchOpen(on, mode) {
+    navKbdMode = mode || 'wpt';
     $('navp-search').hidden = !on;
-    if (on) { navQ = ''; navQPaint(); $('navp-results').innerHTML = ''; }
+    if (navKbdGoBtn) navKbdGoBtn.textContent = navKbdMode === 'save' ? 'SAVE' : 'SEARCH';
+    if (on) {
+      navQ = ''; navQPaint();
+      $('navp-results').innerHTML = navKbdMode === 'save'
+        ? '<div class="nsx-msg">Name the current ' + navPlan.length +
+          '-waypoint plan, then SAVE. It survives reboots.</div>'
+        : '';
+    }
   }
 
   function navQPaint() {
@@ -461,6 +480,16 @@
 
   function navSearchGo() {
     if (navQ.trim().length < 2) return;
+    if (navKbdMode === 'save') {
+      post('/api/nav/plans', { action: 'save', name: navQ.trim() }).then(function (rsp) {
+        if (rsp && rsp.ok) { navSearchOpen(false); navPlansOpen(true); }
+        else {
+          $('navp-results').innerHTML = '<div class="nsx-msg">SAVE FAILED · ' +
+            ((rsp && rsp.reason) || 'no reply') + '</div>';
+        }
+      });
+      return;
+    }
     var res = $('navp-results');
     res.innerHTML = '<div class="nsx-msg">searching…</div>';
     fetch('/api/nav/geocode?q=' + encodeURIComponent(navQ.trim()), { cache: 'no-store' })
@@ -517,9 +546,49 @@
       k.textContent = def[0];
       k.className = def[1];
       k.addEventListener('click', function () { def[2](); navQPaint(); });
+      if (def[0] === 'SEARCH') navKbdGoBtn = k;   // relabels to SAVE in name mode
       last.appendChild(k);
     });
     kbd.appendChild(last);
+  }
+
+  /* Saved plans overlay: tap to load, ✕ to delete. The plan itself arrives
+     back through the SSE state, same as any other plan edit. */
+  function navPlansOpen(on) {
+    $('navp-plans').hidden = !on;
+    if (!on) return;
+    var list = $('navp-plans-list');
+    list.innerHTML = '<div class="nsx-msg">loading…</div>';
+    fetch('/api/nav/plans', { cache: 'no-store' })
+      .then(function (x) { return x.json(); })
+      .then(function (d) {
+        var plans = (d && d.plans) || [];
+        list.innerHTML = plans.length ? ''
+          : '<div class="nsx-msg">No saved plans yet. Build one, then SAVE it.</div>';
+        plans.forEach(function (p) {
+          var row = document.createElement('div');
+          row.className = 'navrow';
+          row.innerHTML = '<span class="t"></span><span class="d"></span>' +
+                          '<button class="x">✕</button>';
+          row.querySelector('.t').textContent = p.name;
+          row.querySelector('.d').textContent = p.count + ' wpts';
+          row.addEventListener('click', function () {
+            post('/api/nav/plans', { action: 'load', name: p.name }).then(function () {
+              navSelIdx = 0;
+              navPlansOpen(false);
+            });
+          });
+          row.querySelector('.x').addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            post('/api/nav/plans', { action: 'delete', name: p.name })
+              .then(function () { navPlansOpen(true); });   // refresh the list
+          });
+          list.appendChild(row);
+        });
+      })
+      .catch(function () {
+        list.innerHTML = '<div class="nsx-msg">could not load plans</div>';
+      });
   }
 
   /* OpenStreetMap raster tiles under the overlays, dimmed so the EFIS
@@ -652,13 +721,16 @@
       }, '#56cfe1', 2.5);
     }
 
-    // The route: legs between waypoints in plan order, the selected one tied
-    // to the aircraft by a dashed course line, diamonds numbered like a chart.
-    if (navPlan.length > 1) {
+    // The route: the START POINT is the aircraft, always — legs run from the
+    // observed position through the waypoints in plan order, Google-Maps
+    // style. The selected target additionally gets a dashed direct-to line,
+    // which matters when it is not the next waypoint in sequence.
+    if (navPlan.length > 0) {
       casedLine(function () {
-        navPlan.forEach(function (w, i) {
+        g.moveTo(me.x, me.y);
+        navPlan.forEach(function (w) {
           var q = px(w.lat, w.lon);
-          if (i === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
+          g.lineTo(q.x, q.y);
         });
       }, '#8fa2b8', 2);
     }
@@ -1285,8 +1357,14 @@
 
   // Flight-plan search overlay + its on-screen keyboard.
   navKbdBuild();
-  $('navp-add').addEventListener('click', function () { navSearchOpen(true); });
+  $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
+  $('navp-plansbtn').addEventListener('click', function () { navPlansOpen(true); });
+  $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
+  $('navp-saveas').addEventListener('click', function () {
+    navPlansOpen(false);
+    navSearchOpen(true, 'save');
+  });
 
   // Surface navigation. Applied locally first so a tap feels instant on a
   // touch panel; the SSE frame confirms it a moment later.

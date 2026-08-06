@@ -210,7 +210,10 @@
           <div class="navrail">
             <!-- The flight plan: ordered, tap to target, ✕ to drop. -->
             <div class="navplan" id="navp-plan"></div>
-            <button class="navadd" id="navp-add">+ ADD WAYPOINT</button>
+            <div class="navbtns">
+              <button class="navadd" id="navp-add">+ ADD</button>
+              <button class="navadd" id="navp-plansbtn">PLANS</button>
+            </div>
             <div class="navsteer">
               <svg viewBox="0 0 100 100" id="navp-arrow">
                 <circle cx="50" cy="50" r="46" class="ns-ring"/>
@@ -238,6 +241,21 @@
             </div>
             <div class="nsx-results" id="navp-results"></div>
             <div class="nsx-kbd" id="navp-kbd"></div>
+          </div>
+
+          <!-- Saved plans: tap to load, ✕ to delete, SAVE names the current
+               plan on the same keyboard the search uses. -->
+          <div class="navsearch" id="navp-plans" hidden>
+            <div class="nsx-head">
+              <div class="nsx-q">SAVED PLANS</div>
+              <button class="nsx-close" id="navp-plans-close">✕</button>
+            </div>
+            <div class="nsx-results" id="navp-plans-list"></div>
+            <div class="nsx-kbd">
+              <div class="krow">
+                <button class="wide go" id="navp-saveas">SAVE CURRENT PLAN AS…</button>
+              </div>
+            </div>
           </div>
           <!-- Zoom: manual steps follow the aircraft; FIT hands framing back
                to the auto-fit (aircraft + waypoint + trail). -->

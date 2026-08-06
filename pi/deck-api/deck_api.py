@@ -691,10 +691,9 @@ def geocode(q: str) -> list:
     return out
 
 
-def set_nav_plan(body: dict) -> tuple[int, dict]:
-    wpts = body.get("waypoints")
+def _clean_waypoints(wpts) -> list | None:
     if not isinstance(wpts, list) or len(wpts) > 12:
-        return 400, {"ok": False, "reason": "waypoints must be a list of at most 12"}
+        return None
     clean = []
     for w in wpts:
         try:
@@ -704,12 +703,81 @@ def set_nav_plan(body: dict) -> tuple[int, dict]:
             clean.append({"name": str(w.get("name", "WPT"))[:40] or "WPT",
                           "lat": lat, "lon": lon})
         except (KeyError, TypeError, ValueError):
-            return 400, {"ok": False, "reason": "each waypoint needs name, lat, lon"}
+            return None
+    return clean
+
+
+def set_nav_plan(body: dict) -> tuple[int, dict]:
+    clean = _clean_waypoints(body.get("waypoints"))
+    if clean is None:
+        return 400, {"ok": False, "reason": "waypoints must be a valid list of at most 12"}
 
     def apply(s):
         s["nav_plan"] = clean
     DECK.mutate(apply)
     return 200, {"ok": True, "count": len(clean)}
+
+
+# Saved plans persist to disk, unlike the live plan: a route worth naming is
+# worth keeping across restarts and reboots.
+PLANS_FILE = Path(cfg("DECK_PLANS_FILE", "/var/lib/flightdeck/plans.json"))
+
+
+def _load_plans() -> dict:
+    try:
+        data = json.loads(PLANS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _store_plans(plans: dict) -> bool:
+    try:
+        PLANS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PLANS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(plans))
+        tmp.replace(PLANS_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def nav_plans_op(body: dict) -> tuple[int, dict]:
+    action = str(body.get("action") or "")
+    name = str(body.get("name") or "").strip()[:24]
+    plans = _load_plans()
+
+    if action == "save":
+        if not name:
+            return 400, {"ok": False, "reason": "a plan needs a name"}
+        current = DECK.state["nav_plan"]
+        if not current:
+            return 400, {"ok": False, "reason": "nothing to save — the plan is empty"}
+        if name not in plans and len(plans) >= 20:
+            return 400, {"ok": False, "reason": "20 plans is plenty; delete one first"}
+        plans[name] = current
+        if not _store_plans(plans):
+            return 500, {"ok": False, "reason": f"cannot write {PLANS_FILE}"}
+        return 200, {"ok": True}
+
+    if action == "load":
+        if name not in plans:
+            return 404, {"ok": False, "reason": "no such plan"}
+        clean = _clean_waypoints(plans[name]) or []
+
+        def apply(s):
+            s["nav_plan"] = clean
+        DECK.mutate(apply)
+        return 200, {"ok": True, "count": len(clean)}
+
+    if action == "delete":
+        if plans.pop(name, None) is None:
+            return 404, {"ok": False, "reason": "no such plan"}
+        if not _store_plans(plans):
+            return 500, {"ok": False, "reason": f"cannot write {PLANS_FILE}"}
+        return 200, {"ok": True}
+
+    return 400, {"ok": False, "reason": "action must be save, load or delete"}
 
 
 def sim_command(body: dict) -> tuple[int, dict]:
@@ -1172,6 +1240,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, {"results": geocode((query.get("q") or [""])[0])})
 
+        if path == "/api/nav/plans":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            plans = _load_plans()
+            return self._json(200, {"plans": [
+                {"name": n, "count": len(w)} for n, w in sorted(plans.items())
+            ]})
+
         # Media and squadrons ride the same fast-poll pattern as /api/sim and
         # stay off the SSE state for the same reasons.
         if path == "/api/media":
@@ -1219,6 +1295,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/nav/plan":
             code, out = set_nav_plan(body)
+            return self._json(code, out)
+
+        if path == "/api/nav/plans":
+            code, out = nav_plans_op(body)
             return self._json(code, out)
 
         if path == "/api/media/command":
