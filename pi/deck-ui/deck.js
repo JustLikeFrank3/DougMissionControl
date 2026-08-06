@@ -324,6 +324,8 @@
   var navSel = 'MK';
   var navTrail = [];               // {t, lat, lon} — browser memory only
   var navTimer = null;
+  var navZoom = null;              // null = auto-fit; integer = manual slippy z
+  var navLastZ = 12;               // whatever the auto-fit last chose
 
   function navPoll(on) {
     if (on && !navTimer) { navTick(); navTimer = setInterval(navTick, 500); }
@@ -460,22 +462,29 @@
     var W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
 
-    // Fit aircraft + selected waypoint + trail, north up, min 6 nm span.
-    var lats = [r.lat, wpt.lat], lons = [r.lon, wpt.lon];
-    navTrail.forEach(function (p) { lats.push(p.lat); lons.push(p.lon); });
-    var latC = (Math.min.apply(0, lats) + Math.max.apply(0, lats)) / 2;
-    var lonC = (Math.min.apply(0, lons) + Math.max.apply(0, lons)) / 2;
-    var spanNm = Math.max(
-      (Math.max.apply(0, lats) - Math.min.apply(0, lats)) * NM_PER_DEG,
-      (Math.max.apply(0, lons) - Math.min.apply(0, lons)) * NM_PER_DEG *
-        Math.cos(latC * Math.PI / 180),
-      6) * 1.3;
-
-    // Integer slippy zoom whose scale best fits that span — the map steps
-    // between zoom levels as the flight closes in, like any slippy map.
-    var mPerPx = spanNm * 1852 / Math.min(W, H);
-    var z = Math.floor(Math.log(156543.03 * Math.cos(latC * Math.PI / 180) / mPerPx) / Math.LN2);
-    z = Math.max(8, Math.min(15, z));
+    var latC, lonC, z;
+    if (navZoom !== null) {
+      // Manual zoom follows the aircraft; the waypoint is allowed offscreen —
+      // that is what the operator asked for by taking the wheel.
+      latC = r.lat; lonC = r.lon; z = navZoom;
+    } else {
+      // Auto: fit aircraft + selected waypoint + trail, north up, min 6 nm.
+      var lats = [r.lat, wpt.lat], lons = [r.lon, wpt.lon];
+      navTrail.forEach(function (p) { lats.push(p.lat); lons.push(p.lon); });
+      latC = (Math.min.apply(0, lats) + Math.max.apply(0, lats)) / 2;
+      lonC = (Math.min.apply(0, lons) + Math.max.apply(0, lons)) / 2;
+      var spanNm = Math.max(
+        (Math.max.apply(0, lats) - Math.min.apply(0, lats)) * NM_PER_DEG,
+        (Math.max.apply(0, lons) - Math.min.apply(0, lons)) * NM_PER_DEG *
+          Math.cos(latC * Math.PI / 180),
+        6) * 1.3;
+      // Integer slippy zoom whose scale best fits that span — the map steps
+      // between zoom levels as the flight closes in, like any slippy map.
+      var mPerPx = spanNm * 1852 / Math.min(W, H);
+      z = Math.floor(Math.log(156543.03 * Math.cos(latC * Math.PI / 180) / mPerPx) / Math.LN2);
+      z = Math.max(8, Math.min(15, z));
+      navLastZ = z;
+    }
 
     var c = navWorld(latC, lonC, z);
     var ox = c.x - W / 2, oy = c.y - H / 2;
@@ -1129,6 +1138,22 @@
   // not return to it.
   $('evals-nav').querySelector('[data-view="auto"]')
     .addEventListener('click', function () { pickView('auto'); });
+
+  // NAV zoom. Steps start from wherever the auto-fit currently sits, so the
+  // first tap nudges rather than jumps; FIT hands framing back to auto.
+  function navSetZoom(zOrNull) {
+    navZoom = zOrNull === null ? null
+      : Math.max(8, Math.min(16, zOrNull));
+    $('navp-fit').classList.toggle('on', navZoom === null);
+    if (navTimer) navTick();
+  }
+  $('navp-zin').addEventListener('click', function () {
+    navSetZoom((navZoom === null ? navLastZ : navZoom) + 1);
+  });
+  $('navp-zout').addEventListener('click', function () {
+    navSetZoom((navZoom === null ? navLastZ : navZoom) - 1);
+  });
+  $('navp-fit').addEventListener('click', function () { navSetZoom(null); });
 
   // Surface navigation. Applied locally first so a tap feels instant on a
   // touch panel; the SSE frame confirms it a moment later.
