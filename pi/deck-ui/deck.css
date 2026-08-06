@@ -452,9 +452,17 @@ html, body {
 .ns-cap { font-size: 12px; letter-spacing: .22em; color: var(--mut); }
 .navrail .simt { flex: 1; }
 .simt-v.sm2 { font-size: 34px; }
-/* touch-action: none so the pinch reaches the canvas. Without it Chromium
-   claims the gesture for its own scroll/zoom before touchmove ever fires,
-   and the map would sit still while the whole kiosk page rubber-banded. */
+/* touch-action: none so the pinch reaches the map. Without it Chromium claims
+   the gesture for its own scroll/zoom before the pointer stream gets going,
+   and the map would sit still while the whole kiosk page rubber-banded. It
+   goes on the container as well as the canvas: touch-action is read from the
+   element the contact STARTS on, and the gesture is bound to the container. */
+#navp-live { touch-action: none; }
+/* ...but these two scroll with a finger, and they sit inside that container.
+   touch-action is inherited by hit-testing, not by the cascade, so they have
+   to claim vertical panning back or the plan list and the search results
+   become unscrollable on a panel with no wheel. */
+.navplan, .nsx-results { touch-action: pan-y; }
 #navp-canvas { flex: 1; min-width: 0; background: #070a0f; touch-action: none; }
 
 /* NAV zoom — big enough for fingers, riding the map's right edge */

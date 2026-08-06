@@ -1497,8 +1497,16 @@
   function navClampZ(z) { return Math.max(NAV_ZMIN, Math.min(NAV_ZMAX, z)); }
   function navSetZoom(zOrNull) {
     navZoom = zOrNull === null ? null : navClampZ(zOrNull);
-    $('navp-fit').classList.toggle('on', navZoom === null);
-    if (navTimer) navTick();
+    var fit = $('navp-fit');
+    fit.classList.toggle('on', navZoom === null);
+    // Show the level while it is being flown manually. On a panel with no
+    // console this is the only way to tell a gesture that was not detected
+    // from one that was detected and then failed to redraw.
+    fit.textContent = navZoom === null ? 'FIT' : 'Z' + navZoom;
+    // Repaint unconditionally. Gating on navTimer meant a zoom change made
+    // between polls sat invisible until the next tick, which reads exactly
+    // like the control being dead.
+    navTick();
   }
   $('navp-zin').addEventListener('click', function () {
     navSetZoom((navZoom === null ? navLastZ : navZoom) + 1);
@@ -1520,7 +1528,11 @@
   // wired on pointerdown (see wireHold), and a touchstart/touchmove version of
   // this never fired a single handler on the real hardware.
   (function () {
-    var cv = $('navp-canvas');
+    // Bound on the map CONTAINER, not the canvas. The canvas is one child among
+    // overlays and the rail, and anything sitting over it — a hidden panel that
+    // is not quite hidden, a stray padding box — silently eats the gesture.
+    // The container is the whole map area and cannot be missed.
+    var cv = $('navp-live');
     var live = [];                      // active pointer ids, in contact order
     var pos = {};                       // id -> {x, y}
     var span0 = 0, z0 = 0, zLast = 0;
