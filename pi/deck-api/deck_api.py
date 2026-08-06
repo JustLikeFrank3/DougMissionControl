@@ -219,6 +219,10 @@ class Deck:
             # The SIM surface itself reads /api/sim far faster — see sim_state().
             "sim": {"link": False, "session": False, "aircraft": None,
                     "checked": None},
+            # The NAV flight plan: ordered {name, lat, lon}. Held here so a
+            # kiosk reload does not eat it; a deck-api restart does, which is
+            # acceptable for something rebuilt in a few taps.
+            "nav_plan": [],
             # Which copy of this file is actually running. `git pull` updates
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
@@ -637,6 +641,75 @@ def media_art(os_now: str) -> bytes | None:
             return r.read(2_000_000)
     except (urllib.error.URLError, OSError):
         return None
+
+
+_geo_cache: dict[str, list] = {}
+_geo_last = 0.0
+
+
+def geocode(q: str) -> list:
+    """Place search via OSM Nominatim, proxied for the panel.
+
+    Proxied rather than fetched by the browser because Nominatim's usage
+    policy wants a real identifying User-Agent, which browser fetch cannot
+    set. Cached per query, and paced to their 1 req/s ask — searches are
+    human-typed on a touch keyboard, so the pacing is invisible.
+    """
+    global _geo_last
+    q = q.strip()[:80]
+    if len(q) < 2:
+        return []
+    key = q.lower()
+    if key in _geo_cache:
+        return _geo_cache[key]
+    wait = 1.1 - (time.time() - _geo_last)
+    if wait > 0:
+        time.sleep(wait)
+    _geo_last = time.time()
+    url = ("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q="
+           + quote(q))
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "flightdeck-deck-api/0.1 (personal wall panel; single user)"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            raw = json.loads(r.read(256_000).decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return []
+    out = []
+    for hit in raw if isinstance(raw, list) else []:
+        try:
+            out.append({
+                # First comma-part is the place itself; the tail is the
+                # address chain, kept short for a 430 px rail.
+                "name": str(hit.get("display_name", "")).split(",")[0][:40],
+                "detail": ", ".join(str(hit.get("display_name", "")).split(",")[1:3]).strip()[:60],
+                "lat": float(hit["lat"]), "lon": float(hit["lon"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    _geo_cache[key] = out
+    return out
+
+
+def set_nav_plan(body: dict) -> tuple[int, dict]:
+    wpts = body.get("waypoints")
+    if not isinstance(wpts, list) or len(wpts) > 12:
+        return 400, {"ok": False, "reason": "waypoints must be a list of at most 12"}
+    clean = []
+    for w in wpts:
+        try:
+            lat, lon = float(w["lat"]), float(w["lon"])
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                raise ValueError
+            clean.append({"name": str(w.get("name", "WPT"))[:40] or "WPT",
+                          "lat": lat, "lon": lon})
+        except (KeyError, TypeError, ValueError):
+            return 400, {"ok": False, "reason": "each waypoint needs name, lat, lon"}
+
+    def apply(s):
+        s["nav_plan"] = clean
+    DECK.mutate(apply)
+    return 200, {"ok": True, "count": len(clean)}
 
 
 def sim_command(body: dict) -> tuple[int, dict]:
@@ -1094,6 +1167,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, sim_state())
 
+        if path == "/api/nav/geocode":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, {"results": geocode((query.get("q") or [""])[0])})
+
         # Media and squadrons ride the same fast-poll pattern as /api/sim and
         # stay off the SSE state for the same reasons.
         if path == "/api/media":
@@ -1137,6 +1215,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/sim/command":
             code, out = sim_command(body)
+            return self._json(code, out)
+
+        if path == "/api/nav/plan":
+            code, out = set_nav_plan(body)
             return self._json(code, out)
 
         if path == "/api/media/command":

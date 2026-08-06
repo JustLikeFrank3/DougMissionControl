@@ -451,3 +451,49 @@ html, body {
                   font-family: inherit; font-size: 26px; cursor: pointer; }
 .navzoom #navp-fit { font-size: 14px; letter-spacing: .14em; color: var(--mut); }
 .navzoom #navp-fit.on { color: var(--fg); box-shadow: inset 0 -3px 0 var(--acc); }
+
+/* NAV flight plan — the rail's waypoint list */
+.navplan { display: flex; flex-direction: column; gap: 6px; max-height: 208px;
+           overflow-y: auto; }
+.navrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+          border: 1px solid var(--ln); background: var(--pan); cursor: pointer; }
+.navrow.on { box-shadow: inset 3px 0 0 var(--acc); background: #141d29; }
+.navrow .n { width: 22px; font-size: 14px; color: var(--mut); flex: none; }
+.navrow.on .n { color: var(--acc); }
+.navrow .t { flex: 1; min-width: 0; font-size: 16px; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+.navrow .d { font-size: 13px; color: var(--mut); flex: none; }
+.navrow .x { flex: none; width: 34px; height: 34px; border: 0; background: transparent;
+             color: var(--mut); font-size: 16px; font-family: inherit; cursor: pointer; }
+.navrow .x:active { color: var(--rd); }
+.navplan .empty { font-size: 14px; color: var(--mut); padding: 10px 4px;
+                  line-height: 1.5; }
+.navadd { padding: 12px; border: 1px dashed var(--ln); background: transparent;
+          color: var(--cy); font-family: inherit; font-size: 15px;
+          letter-spacing: .12em; cursor: pointer; }
+
+/* Search overlay + on-screen keyboard */
+.navsearch { position: absolute; inset: 0; background: rgba(11, 15, 21, .96);
+             display: flex; flex-direction: column; padding: 18px 22px; gap: 12px; }
+.nsx-head { display: flex; gap: 12px; align-items: stretch; }
+.nsx-q { flex: 1; border: 1px solid var(--ln); background: #0b1016; padding: 12px 16px;
+         font-size: 24px; letter-spacing: .04em; min-height: 54px; }
+.nsx-close { width: 54px; border: 1px solid var(--ln); background: var(--pan);
+             color: var(--fg); font-size: 20px; font-family: inherit; cursor: pointer; }
+.nsx-results { flex: 1; min-height: 0; overflow-y: auto; display: flex;
+               flex-direction: column; gap: 6px; }
+.nsx-r { display: flex; flex-direction: column; gap: 2px; text-align: left;
+         padding: 10px 14px; border: 1px solid var(--ln); background: var(--pan);
+         color: var(--fg); font-family: inherit; cursor: pointer; }
+.nsx-r .t { font-size: 18px; }
+.nsx-r .s { font-size: 13px; color: var(--mut); }
+.nsx-msg { font-size: 15px; color: var(--mut); padding: 8px 2px; }
+.nsx-kbd { display: flex; flex-direction: column; gap: 8px; }
+.nsx-kbd .krow { display: flex; gap: 8px; justify-content: center; }
+.nsx-kbd button { min-width: 56px; height: 58px; border: 1px solid var(--ln);
+                  background: var(--pan); color: var(--fg); font-family: inherit;
+                  font-size: 20px; cursor: pointer; }
+.nsx-kbd button:active { background: #1d2836; }
+.nsx-kbd button.wide { min-width: 120px; font-size: 15px; letter-spacing: .12em; }
+.nsx-kbd button.space { flex: 1; max-width: 420px; }
+.nsx-kbd button.go { color: var(--cy); border-color: var(--cy); }

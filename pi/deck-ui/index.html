@@ -208,7 +208,9 @@
              the steer arrow is derived from observed position and track. -->
         <div class="navmap" id="navp-live" hidden>
           <div class="navrail">
-            <div class="navwpts" id="navp-wpts"></div>
+            <!-- The flight plan: ordered, tap to target, ✕ to drop. -->
+            <div class="navplan" id="navp-plan"></div>
+            <button class="navadd" id="navp-add">+ ADD WAYPOINT</button>
             <div class="navsteer">
               <svg viewBox="0 0 100 100" id="navp-arrow">
                 <circle cx="50" cy="50" r="46" class="ns-ring"/>
@@ -226,6 +228,17 @@
               <div class="simt-s" id="navp-alt"></div></div>
           </div>
           <canvas id="navp-canvas"></canvas>
+
+          <!-- Search overlay: type a place, tap a result, it joins the plan.
+               Full on-screen keyboard — this panel has no physical keys. -->
+          <div class="navsearch" id="navp-search" hidden>
+            <div class="nsx-head">
+              <div class="nsx-q" id="navp-q">&nbsp;</div>
+              <button class="nsx-close" id="navp-close">✕</button>
+            </div>
+            <div class="nsx-results" id="navp-results"></div>
+            <div class="nsx-kbd" id="navp-kbd"></div>
+          </div>
           <!-- Zoom: manual steps follow the aircraft; FIT hands framing back
                to the auto-fit (aircraft + waypoint + trail). -->
           <div class="navzoom">

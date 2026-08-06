@@ -316,23 +316,12 @@
      (true track) — fly the arrow to the top and the waypoint arrives.
      Nothing here is commanded state, and there are no map tiles: a vector
      trail on dark is cheaper for the Pi and more EFIS anyway. */
-  // Waypoint sets by region; the set nearest the aircraft wins, so
-  // teleporting across the country re-arms the panel without a deploy.
-  var NAV_SETS = [
-    { name: 'orlando', wpts: [
-      { id: 'MK',    t: 'MAGIC KGDM', lat: 28.4205, lon: -81.5812 },
-      { id: 'EPCOT', t: 'EPCOT',      lat: 28.3747, lon: -81.5494 },
-      { id: 'MCO',   t: 'MCO',        lat: 28.4294, lon: -81.3090 }
-    ] },
-    { name: 'nyc', wpts: [
-      { id: 'LADY', t: 'LADY LIBERTY', lat: 40.6892, lon: -74.0445 },
-      { id: 'ESB',  t: 'EMPIRE STATE', lat: 40.7484, lon: -73.9857 },
-      { id: 'JRB',  t: 'WALL ST HELI', lat: 40.7013, lon: -74.0090 }
-    ] }
-  ];
-  var NAV_WPTS = NAV_SETS[0].wpts;   // repointed per position in paintNav
-  var navSetName = NAV_SETS[0].name;
-  var navSel = NAV_WPTS[0].id;
+  // The flight plan is the operator's, not ours: an ordered list of
+  // {name, lat, lon} held by deck-api (so a kiosk reload keeps it), edited
+  // from the panel via search. The selected entry is the steer target.
+  var navPlan = [];
+  var navSelIdx = 0;
+  var navPlanSig = null;
   var navTrail = [];               // {t, lat, lon} — browser memory only
   var navTimer = null;
   var navZoom = null;              // null = auto-fit; integer = manual slippy z
@@ -392,61 +381,145 @@
     var cut = Date.now() - 45 * 60000;
     while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
 
-    // Whichever region's first waypoint is nearest owns the panel now.
-    var best = NAV_SETS[0], bestD = Infinity;
-    NAV_SETS.forEach(function (set) {
-      var d = navDistBrg(r.lat, r.lon, set.wpts[0].lat, set.wpts[0].lon).dist;
-      if (d < bestD) { bestD = d; best = set; }
-    });
-    if (best.name !== navSetName) {
-      navSetName = best.name;
-      NAV_WPTS = best.wpts;
-      navSel = NAV_WPTS[0].id;
-      navTrail = [];               // a new region is a new flight
-      navWptsBuilt = false;
-      $('navp-wpts').innerHTML = '';
+    if (navSelIdx >= navPlan.length) navSelIdx = Math.max(0, navPlan.length - 1);
+    var wpt = navPlan[navSelIdx] || null;
+
+    if (wpt) {
+      var nav = navDistBrg(r.lat, r.lon, wpt.lat, wpt.lon);
+      $('navp-brg').textContent = ('00' + Math.round(nav.brg)).slice(-3) + '°T · ' +
+        (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
+      $('navp-ete').textContent = fmtEte(nav.dist, r.gs_kt) + ' · ' + wpt.name;
+      $('navp-arrow-g').style.transform =
+        'rotate(' + ((nav.brg - (r.trk_true || 0) + 360) % 360) + 'deg)';
+      $('nav-nav').textContent = wpt.name.slice(0, 12) + ' ' +
+        (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
+    } else {
+      $('navp-brg').textContent = '—';
+      $('navp-ete').textContent = 'no waypoints';
+      $('navp-arrow-g').style.transform = 'rotate(0deg)';
+      $('nav-nav').textContent = 'moving map';
     }
-
-    var wpt = null;
-    for (var i = 0; i < NAV_WPTS.length; i++) if (NAV_WPTS[i].id === navSel) wpt = NAV_WPTS[i];
-    var nav = navDistBrg(r.lat, r.lon, wpt.lat, wpt.lon);
-
-    $('navp-brg').textContent = ('00' + Math.round(nav.brg)).slice(-3) + '°T · ' +
-      (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
-    $('navp-ete').textContent = fmtEte(nav.dist, r.gs_kt) + ' · to ' + wpt.t;
     $('navp-trk').textContent = ('00' + (r.trk_true || 0)).slice(-3) + '°T · ' + r.gs_kt + ' kt';
     $('navp-alt').textContent = r.alt_ft + ' ft · ' + r.ias_kt + ' kt ias';
-    $('navp-arrow-g').style.transform = 'rotate(' + ((nav.brg - (r.trk_true || 0) + 360) % 360) + 'deg)';
-    $('nav-nav').textContent = wpt.id + ' ' +
-      (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
 
     drawNavMap(r, wpt);
-    renderNavWpts(r);
+    renderNavPlan(r);
   }
 
-  var navWptsBuilt = false;
-  function renderNavWpts(r) {
-    var box = $('navp-wpts');
-    if (!navWptsBuilt) {
-      navWptsBuilt = true;
-      NAV_WPTS.forEach(function (w) {
-        var b = document.createElement('button');
-        b.className = 'navwpt';
-        b.dataset.wpt = w.id;
-        b.innerHTML = '<span class="t"></span><span class="s"></span>';
-        b.querySelector('.t').textContent = w.id;
-        b.addEventListener('click', function () { navSel = w.id; navTick(); });
-        box.appendChild(b);
+  /* The plan list. Rebuilt when the plan itself changes; the per-row live
+     distances update every paint without rebuilding the DOM. */
+  function renderNavPlan(r) {
+    var box = $('navp-plan');
+    var sig = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
+    if (sig !== navPlanSig) {
+      navPlanSig = sig;
+      box.innerHTML = '';
+      if (!navPlan.length) {
+        var e = document.createElement('div');
+        e.className = 'empty';
+        e.textContent = 'No waypoints. ADD searches the real map — type a place, tap a result.';
+        box.appendChild(e);
+      }
+      navPlan.forEach(function (w, i) {
+        var row = document.createElement('div');
+        row.className = 'navrow';
+        row.innerHTML = '<span class="n"></span><span class="t"></span>' +
+                        '<span class="d"></span><button class="x">✕</button>';
+        row.querySelector('.n').textContent = (i + 1);
+        row.querySelector('.t').textContent = w.name;
+        row.addEventListener('click', function () { navSelIdx = i; navTick(); });
+        row.querySelector('.x').addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var next = navPlan.slice(0, i).concat(navPlan.slice(i + 1));
+          post('/api/nav/plan', { waypoints: next });
+        });
+        box.appendChild(row);
       });
     }
-    [].forEach.call(box.children, function (b) {
-      var w = null;
-      for (var i = 0; i < NAV_WPTS.length; i++) if (NAV_WPTS[i].id === b.dataset.wpt) w = NAV_WPTS[i];
-      var d = navDistBrg(r.lat, r.lon, w.lat, w.lon).dist;
-      b.querySelector('.s').textContent =
-        (d >= 10 ? Math.round(d) : d.toFixed(1)) + ' nm';
-      b.classList.toggle('on', b.dataset.wpt === navSel);
+    [].forEach.call(box.querySelectorAll('.navrow'), function (row, i) {
+      row.classList.toggle('on', i === navSelIdx);
+      if (r && navPlan[i]) {
+        var d = navDistBrg(r.lat, r.lon, navPlan[i].lat, navPlan[i].lon).dist;
+        row.querySelector('.d').textContent =
+          (d >= 10 ? Math.round(d) : d.toFixed(1)) + ' nm';
+      }
     });
+  }
+
+  /* Search overlay + on-screen keyboard. Geocoding runs through deck-api's
+     Nominatim proxy; a tapped result is appended to the plan. */
+  var navQ = '';
+
+  function navSearchOpen(on) {
+    $('navp-search').hidden = !on;
+    if (on) { navQ = ''; navQPaint(); $('navp-results').innerHTML = ''; }
+  }
+
+  function navQPaint() {
+    $('navp-q').textContent = navQ.length ? navQ : ' ';
+  }
+
+  function navSearchGo() {
+    if (navQ.trim().length < 2) return;
+    var res = $('navp-results');
+    res.innerHTML = '<div class="nsx-msg">searching…</div>';
+    fetch('/api/nav/geocode?q=' + encodeURIComponent(navQ.trim()), { cache: 'no-store' })
+      .then(function (x) { return x.json(); })
+      .then(function (d) {
+        var hits = (d && d.results) || [];
+        res.innerHTML = '';
+        if (!hits.length) {
+          res.innerHTML = '<div class="nsx-msg">nothing found — OSM knows places, not brands; try adding a city</div>';
+          return;
+        }
+        hits.forEach(function (h) {
+          var b = document.createElement('button');
+          b.className = 'nsx-r';
+          b.innerHTML = '<span class="t"></span><span class="s"></span>';
+          b.querySelector('.t').textContent = h.name;
+          b.querySelector('.s').textContent = h.detail || (h.lat.toFixed(4) + ', ' + h.lon.toFixed(4));
+          b.addEventListener('click', function () {
+            var next = navPlan.concat([{ name: h.name.toUpperCase(), lat: h.lat, lon: h.lon }]);
+            post('/api/nav/plan', { waypoints: next }).then(function () {
+              navSelIdx = next.length - 1;   // new waypoint becomes the target
+              navSearchOpen(false);
+            });
+          });
+          res.appendChild(b);
+        });
+      })
+      .catch(function () {
+        res.innerHTML = '<div class="nsx-msg">search failed — no internet from the Pi?</div>';
+      });
+  }
+
+  function navKbdBuild() {
+    var rows = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+    var kbd = $('navp-kbd');
+    rows.forEach(function (line) {
+      var kr = document.createElement('div');
+      kr.className = 'krow';
+      line.split('').forEach(function (ch) {
+        var k = document.createElement('button');
+        k.textContent = ch;
+        k.addEventListener('click', function () { navQ += ch; navQPaint(); });
+        kr.appendChild(k);
+      });
+      kbd.appendChild(kr);
+    });
+    var last = document.createElement('div');
+    last.className = 'krow';
+    [['SPACE', 'space', function () { navQ += ' '; }],
+     ['⌫', 'wide', function () { navQ = navQ.slice(0, -1); }],
+     ['CLEAR', 'wide', function () { navQ = ''; }],
+     ['SEARCH', 'wide go', navSearchGo]].forEach(function (def) {
+      var k = document.createElement('button');
+      k.textContent = def[0];
+      k.className = def[1];
+      k.addEventListener('click', function () { def[2](); navQPaint(); });
+      last.appendChild(k);
+    });
+    kbd.appendChild(last);
   }
 
   /* OpenStreetMap raster tiles under the overlays, dimmed so the EFIS
@@ -494,8 +567,9 @@
       // that is what the operator asked for by taking the wheel.
       latC = r.lat; lonC = r.lon; z = navZoom;
     } else {
-      // Auto: fit aircraft + selected waypoint + trail, north up, min 6 nm.
-      var lats = [r.lat, wpt.lat], lons = [r.lon, wpt.lon];
+      // Auto: fit aircraft + the whole route + trail, north up, min 6 nm.
+      var lats = [r.lat], lons = [r.lon];
+      navPlan.forEach(function (w) { lats.push(w.lat); lons.push(w.lon); });
       navTrail.forEach(function (p) { lats.push(p.lat); lons.push(p.lon); });
       latC = (Math.min.apply(0, lats) + Math.max.apply(0, lats)) / 2;
       lonC = (Math.min.apply(0, lons) + Math.max.apply(0, lons)) / 2;
@@ -578,22 +652,32 @@
       }, '#56cfe1', 2.5);
     }
 
-    // Every waypoint, the selected one tied to the aircraft by a course line.
-    NAV_WPTS.forEach(function (w) {
+    // The route: legs between waypoints in plan order, the selected one tied
+    // to the aircraft by a dashed course line, diamonds numbered like a chart.
+    if (navPlan.length > 1) {
+      casedLine(function () {
+        navPlan.forEach(function (w, i) {
+          var q = px(w.lat, w.lon);
+          if (i === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
+        });
+      }, '#8fa2b8', 2);
+    }
+    if (wpt) {
+      casedLine(function () {
+        var q = px(wpt.lat, wpt.lon);
+        g.moveTo(me.x, me.y); g.lineTo(q.x, q.y);
+      }, '#ff7ad9', 2.5, [8, 8]);
+    }
+    navPlan.forEach(function (w, i) {
       var q = px(w.lat, w.lon);
-      var on = w.id === navSel;
+      var on = i === navSelIdx;
       var color = on ? '#ff7ad9' : '#aebfd4';
-      if (on) {
-        casedLine(function () {
-          g.moveTo(me.x, me.y); g.lineTo(q.x, q.y);
-        }, color, 2.5, [8, 8]);
-      }
       g.fillStyle = '#070a0f';
       g.beginPath();
       g.moveTo(q.x, q.y - 9); g.lineTo(q.x + 9, q.y); g.lineTo(q.x, q.y + 9);
       g.lineTo(q.x - 9, q.y); g.closePath(); g.fill();
       g.strokeStyle = color; g.lineWidth = 2.5; g.stroke(); g.lineWidth = 1;
-      casedText(w.id, q.x + 13, q.y + 4, color);
+      casedText((i + 1) + ' ' + w.name.slice(0, 14), q.x + 13, q.y + 4, color);
     });
 
     // The aircraft, rotated to its observed true track.
@@ -1032,6 +1116,7 @@
     renderEvals(s);
     renderStrip(s);
     renderSimNav(s);
+    navPlan = s.nav_plan || [];   // deck-api owns the plan; SSE delivers it
 
     var ws = s.workstation || {};
     var boot = s.boot || {};
@@ -1197,6 +1282,11 @@
     navSetZoom((navZoom === null ? navLastZ : navZoom) - 1);
   });
   $('navp-fit').addEventListener('click', function () { navSetZoom(null); });
+
+  // Flight-plan search overlay + its on-screen keyboard.
+  navKbdBuild();
+  $('navp-add').addEventListener('click', function () { navSearchOpen(true); });
+  $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
 
   // Surface navigation. Applied locally first so a tap feels instant on a
   // touch panel; the SSE frame confirms it a moment later.
