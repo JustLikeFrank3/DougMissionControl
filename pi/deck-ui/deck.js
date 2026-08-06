@@ -300,7 +300,6 @@
     });
     simPoll(active === 'sim');
     npPoll(active === 'deck');
-    sqdPoll(active === 'squadrons');
   }
 
   /* ── now-playing widget (DECK rail) ────────────────────────────────────
@@ -363,73 +362,10 @@
     });
   });
 
-  /* ── SQUADRONS ─────────────────────────────────────────────────────────
-     No telemetry API exists for this title, so the surface claims only what
-     is observable from outside: process, start time, focus. Macros are
-     open-loop keystrokes — the agent refuses them unless the game owns the
-     foreground window, and nothing here ever renders an in-game state. */
-  var sqdTimer = null, sqdMacroSig = null;
-
-  function sqdPoll(on) {
-    if (on && !sqdTimer) { sqdTick(); sqdTimer = setInterval(sqdTimer2, 2000); }
-    else if (!on && sqdTimer) { clearInterval(sqdTimer); sqdTimer = null; }
-  }
-  function sqdTimer2() { sqdTick(); }
-
-  function sqdTick() {
-    fetch('/api/squadrons', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(paintSqd)
-      .catch(function () { paintSqd({ available: false, running: false }); });
-  }
-
-  function paintSqd(q) {
-    var pill = $('sqd-pill');
-    var running = !!q.running;
-    pill.textContent = !q.available ? 'NO LINK' : running ? (q.focused ? 'RUNNING · FOCUSED' : 'RUNNING') : 'NOT RUNNING';
-    pill.classList.toggle('on', running);
-    $('sqd-state').textContent = running ? 'RUNNING' : 'DOWN';
-    $('sqd-state').className = 'simt-v ' + (running ? 'sim-on' : 'sim-off');
-    $('sqd-since').textContent = running && q.since
-      ? 'since ' + fmtClock(q.since) : '';
-    $('nav-squadrons').textContent = !q.available ? '—' : running ? 'running' : 'ready';
-    $('sqd-launch').disabled = !q.available || running;
-
-    var macros = q.macros || [];
-    var sig = macros.map(function (m) { return m.id + m.key; }).join(',');
-    var grid = $('sqd-macros');
-    if (sig !== sqdMacroSig) {
-      sqdMacroSig = sig;
-      grid.innerHTML = '';
-      macros.forEach(function (m) {
-        var b = document.createElement('button');
-        b.className = 'sqd-m';
-        b.innerHTML = '<span class="t"></span><span class="k"></span><i class="fb"></i>';
-        b.querySelector('.t').textContent = m.label;
-        b.querySelector('.k').textContent = m.key + (m.hint ? ' · ' + m.hint : '');
-        b.addEventListener('click', function () {
-          post('/api/squadrons/macro', { id: m.id }).then(function (r) {
-            if (r && r.sent) {
-              b.classList.remove('sent'); void b.offsetWidth; b.classList.add('sent');
-            } else {
-              var note = $('sqd-macnote');
-              note.textContent = 'REFUSED · ' + ((r && r.reason) || 'no reply').toUpperCase();
-              setTimeout(sqdNoteReset, 4000);
-            }
-          });
-        });
-        grid.appendChild(b);
-      });
-    }
-    [].forEach.call(grid.querySelectorAll('.sqd-m'), function (b) {
-      b.disabled = !running;
-    });
-  }
-
-  var sqdNoteHtml = null;
-  function sqdNoteReset() {
-    if (sqdNoteHtml !== null) $('sqd-macnote').innerHTML = sqdNoteHtml;
-  }
+  /* SQUADRONS surface: tried and removed. Open-loop SendInput keystrokes
+     never reached the game (games read raw scancodes), which made it exactly
+     the blind macro deck the sim brief warns against. The DECK boot tile
+     remains the launch path. */
 
   /* ── SIM ───────────────────────────────────────────────────────────────
      Polled directly rather than carried on the SSE state. Gear travel takes
@@ -911,12 +847,6 @@
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
 
-  wireHold($('sqd-launch'), function () {
-    post('/api/squadrons/launch', {}).then(function () {
-      setTimeout(sqdTick, 1500);   // observe, don't assume
-    });
-  });
-  sqdNoteHtml = $('sqd-macnote').innerHTML;
 
   // Same hold-to-confirm as the boot tiles. wireHold already refuses a
   // disabled element, so a control the aircraft has not got cannot be fired.

@@ -80,7 +80,6 @@ internal static class Program
         _sim.StateReceived += OnStateReceived;
 
         var media = new MediaBridge();
-        var apps = new AppsBridge();
 
         _api = new HttpApi(Port, token)
         {
@@ -93,13 +92,6 @@ internal static class Program
             {
                 ["sent"] = await media.CommandAsync(a),
             },
-            Apps = () => new JsonObject { ["squadrons"] = apps.Snapshot() },
-            AppsLaunch = () =>
-            {
-                var (ok, reason) = apps.Launch();
-                return new JsonObject { ["ok"] = ok, ["reason"] = reason };
-            },
-            AppsMacro = apps.Macro,
         };
 
         _api.Start();

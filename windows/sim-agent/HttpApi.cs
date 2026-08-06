@@ -45,9 +45,6 @@ internal sealed class HttpApi : IDisposable
     public Func<Task<JsonObject>> Media { get; init; } = () => Task.FromResult(new JsonObject());
     public Func<(byte[] Bytes, string Id)> MediaArt { get; init; } = () => (Array.Empty<byte>(), "");
     public Func<string, Task<JsonObject>> MediaCommand { get; init; } = _ => Task.FromResult(new JsonObject());
-    public Func<JsonObject> Apps { get; init; } = () => new JsonObject();
-    public Func<JsonObject> AppsLaunch { get; init; } = () => new JsonObject();
-    public Func<string, JsonObject> AppsMacro { get; init; } = _ => new JsonObject();
 
     public HttpApi(int port, string token)
     {
@@ -177,23 +174,6 @@ internal sealed class HttpApi : IDisposable
                 return;
             }
 
-            // ── apps: squadrons session + open-loop macros ──
-            case ("GET", "/apps"):
-                await WriteJsonAsync(stream, "200 OK", Apps());
-                return;
-
-            case ("POST", "/apps/squadrons/launch"):
-                await WriteJsonAsync(stream, "200 OK", AppsLaunch());
-                return;
-
-            case ("POST", "/apps/squadrons/macro"):
-            {
-                var ab = ParseBody(req);
-                if (ab is null) { await BadBody(stream); return; }
-                await WriteJsonAsync(stream, "200 OK",
-                    AppsMacro(ab["id"]?.ToString() ?? ""));
-                return;
-            }
 
             case ("POST", "/command"):
                 var body = ParseBody(req);

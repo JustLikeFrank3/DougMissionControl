@@ -172,7 +172,9 @@ except OSError:
     BUILD = {"file": __file__, "mtime": "unknown", "ui": "unknown"}
 
 # media is gone as a surface — now-playing lives as a widget on DECK's rail.
-SURFACES = ("deck", "evals", "squadrons", "sim")
+# squadrons came and went: without a telemetry API the surface was a blind
+# macro deck, and its SendInput keystrokes never reached the game anyway.
+SURFACES = ("deck", "evals", "sim")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
     DEFAULT_SURFACE = "evals"
@@ -633,19 +635,6 @@ def media_art(os_now: str) -> bytes | None:
             return r.read(2_000_000)
     except (urllib.error.URLError, OSError):
         return None
-
-
-def squadrons_state(os_now: str) -> dict:
-    """Session truth for a title with no telemetry API. Everything here is
-    observable from outside the game: the process, its start time, focus.
-    Nothing in-game is ever claimed."""
-    if os_now != "windows" or not SIM_TOKEN:
-        return {"available": False, "running": False,
-                "reason": None if SIM_TOKEN else "SIM_AGENT_TOKEN unset"}
-    got = _ws_json(_sim_url("/apps"))
-    if got is None:
-        return {"available": False, "running": False, "reason": "no link"}
-    return {"available": True, **(got.get("squadrons") or {})}
 
 
 def sim_command(body: dict) -> tuple[int, dict]:
@@ -1118,10 +1107,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": "no art"})
             return self._send(200, art, "image/jpeg")
 
-        if path == "/api/squadrons":
-            if not self._authorised(query):
-                return self._json(403, {"error": "forbidden"})
-            return self._json(200, squadrons_state(DECK.state["workstation"]["os"]))
 
         if path.startswith("/api/"):
             return self._json(404, {"error": "not found"})
@@ -1158,17 +1143,6 @@ class Handler(BaseHTTPRequestHandler):
                 if SIM_TOKEN else None
             return self._json(200 if got else 502, got or {"sent": False})
 
-        if path == "/api/squadrons/launch":
-            got = _ws_json(_sim_url("/apps/squadrons/launch"), {}) if SIM_TOKEN else None
-            return self._json(200 if got else 502,
-                              got or {"ok": False, "reason": "no link"})
-
-        if path == "/api/squadrons/macro":
-            got = _ws_json(_sim_url("/apps/squadrons/macro"),
-                           {"id": str(body.get("id") or "")}) if SIM_TOKEN else None
-            return self._json(200 if got else 502,
-                              got or {"sent": False, "open_loop": True,
-                                      "reason": "no link"})
 
         if path == "/api/abort":
             ok, msg = fire_abort()
