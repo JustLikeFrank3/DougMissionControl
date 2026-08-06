@@ -41,11 +41,17 @@ until curl -sf -o /dev/null --max-time 3 "$G/api/health";   do sleep 5; done
 while true; do
     chromium \
         --password-store=basic \
+        --ozone-platform=wayland \
         --kiosk \
         --noerrdialogs \
         --disable-infobars \
         --disable-session-crashed-bubble \
         "$DECK/" &
+    # --ozone-platform on the command line, NOT trusted to the profile: this
+    # session is Wayland-only, and the flag used to live in chromium's Local
+    # State as a chrome://flags preference — so a wiped or fresh profile made
+    # chromium try X11 and die with "Missing X server or $DISPLAY". A kiosk
+    # must survive losing its profile.
     CHROME_PID=$!
 
     fails=0
