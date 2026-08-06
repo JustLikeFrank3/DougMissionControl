@@ -26,9 +26,18 @@ d.handle_log_line("[windows] other OS came up after WOL — requesting reboot in
 check("chained reboot stays >= KICK", phase(), 4)
 d.handle_log_line("[windows] windows is up — deck online")
 check("deck online -> OS UP", phase(), 5)
-check("run closed", inflight(), False)
+# A windows run with a launch intent now holds the door for the greeting's
+# callbacks instead of closing at OS UP.
+check("run stays open awaiting callbacks", inflight(), True)
+check("awaiting stamp set", d.DECK.state["boot"]["os_up_at"] is not None, True)
+d.AGENT_TOKEN = "test-token"      # the callbacks authenticate with this
+check("bad token rejected", d.greeting_phase({"token": "nope", "phase": "logon"})[0], 403)
+d.greeting_phase({"token": "test-token", "phase": "logon"})
+check("greeting logon -> LOGON", phase(), 6)
+d.greeting_phase({"token": "test-token", "phase": "launched"})
+check("launched closes the run", inflight(), False)
 check("result ok", result(), "ok")
-check("last_boot recorded", d.DECK.state["last_boot"]["reached_phase"], 5)
+check("last_boot recorded", d.DECK.state["last_boot"]["reached_phase"], 7)
 
 print("\n-- already up --")
 d.DECK.begin("windows", "plain")

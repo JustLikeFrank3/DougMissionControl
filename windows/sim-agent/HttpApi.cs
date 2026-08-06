@@ -42,6 +42,8 @@ internal sealed class HttpApi : IDisposable
     public Func<JsonObject> Health { get; init; } = () => new JsonObject();
     public Func<JsonObject?> State { get; init; } = () => null;
     public Func<JsonObject, Task<JsonObject>> Command { get; init; } = _ => Task.FromResult(new JsonObject());
+    public Func<JsonObject> Monitor { get; init; } = () => new JsonObject();
+    public Func<string, JsonObject> MonitorSwitch { get; init; } = _ => new JsonObject();
     public Func<Task<JsonObject>> Media { get; init; } = () => Task.FromResult(new JsonObject());
     public Func<(byte[] Bytes, string Id)> MediaArt { get; init; } = () => (Array.Empty<byte>(), "");
     public Func<string, Task<JsonObject>> MediaCommand { get; init; } = _ => Task.FromResult(new JsonObject());
@@ -145,6 +147,19 @@ internal sealed class HttpApi : IDisposable
                 return;
 
             // ── media: system-wide now-playing, art behind its own path ──
+            case ("GET", "/monitor"):
+                await WriteJsonAsync(stream, "200 OK", Monitor());
+                return;
+
+            case ("POST", "/monitor"):
+            {
+                var mb = ParseBody(req);
+                if (mb is null) { await BadBody(stream); return; }
+                await WriteJsonAsync(stream, "200 OK",
+                    MonitorSwitch(mb["input"]?.ToString() ?? ""));
+                return;
+            }
+
             case ("GET", "/media"):
                 await WriteJsonAsync(stream, "200 OK", await Media());
                 return;

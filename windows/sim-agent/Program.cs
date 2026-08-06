@@ -80,6 +80,7 @@ internal static class Program
         _sim.StateReceived += OnStateReceived;
 
         var media = new MediaBridge();
+        var ddc = new DdcBridge();
 
         _api = new HttpApi(Port, token)
         {
@@ -92,6 +93,8 @@ internal static class Program
             {
                 ["sent"] = await media.CommandAsync(a),
             },
+            Monitor = ddc.Snapshot,
+            MonitorSwitch = ddc.Switch,
         };
 
         _api.Start();

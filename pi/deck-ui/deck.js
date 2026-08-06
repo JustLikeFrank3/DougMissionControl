@@ -15,8 +15,8 @@
     { n: 'KICK',     s: 'WOL · ssh · agent' },
     { n: 'PING',     s: 'icmp' },
     { n: 'OS UP',    s: 'probe answers' },
-    { n: 'LOGON',    s: 'needs hook' },
-    { n: 'LAUNCHED', s: 'needs hook' }
+    { n: 'LOGON',    s: 'greeting calls back' },
+    { n: 'LAUNCHED', s: 'app started' }
   ];
 
   var $ = function (id) { return document.getElementById(id); };
@@ -59,13 +59,15 @@
       if (p < reached) el.classList.add('done');
       else if (p === reached) el.classList.add(failed ? 'fail' : (boot.in_flight ? 'now' : 'done'));
       else el.classList.add('pending');
-      // 6 and 7 are unreachable until the Windows greeting calls back. Marked
-      // distinctly from merely-unreached phases, so "phase 4 / 5" against a
-      // seven-node rail reads as a stated scope limit, not an off-by-two.
+      // Phases beyond this run's reach — a linux boot has no greeting to
+      // call back, a plain windows boot launches nothing. Dashed and named,
+      // so the rail states its scope instead of looking short.
       if (p > observableMax && p > reached) {
         el.classList.remove('pending');
         el.classList.add('unwired');
-        el.querySelector('.s').textContent = 'not wired';
+        el.querySelector('.s').textContent = 'not in this run';
+      } else {
+        el.querySelector('.s').textContent = PHASES[p - 1].s;
       }
     });
 
@@ -307,6 +309,47 @@
     simPoll(active === 'sim');
     npPoll(active === 'deck');
     navPoll(active === 'nav');
+    monPoll(active === 'deck');
+  }
+
+  /* ── shared monitor (DDC via the Windows agent) ────────────────────────
+     The pill shows the input the monitor REPORTS, read back over DDC —
+     never the commanded one. A switch that the monitor ignored shows up as
+     the pill not moving, which is the truth. */
+  var monTimer = null;
+
+  function monPoll(on) {
+    if (on && !monTimer) { monTick(); monTimer = setInterval(monTick, 5000); }
+    else if (!on && monTimer) { clearInterval(monTimer); monTimer = null; }
+  }
+
+  function monTick() {
+    fetch('/api/monitor', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(paintMon)
+      .catch(function () { paintMon({ available: false, reason: 'deck-api unreachable' }); });
+  }
+
+  function paintMon(d) {
+    d = d || {};
+    var mons = d.monitors || [];
+    var first = mons[0] || {};
+    var pill = $('mon-pill');
+    var ok = d.available && mons.length > 0 && first.ddc;
+    pill.textContent = !d.available ? 'NO LINK'
+      : !mons.length ? 'NO MONITOR'
+      : !first.ddc ? 'NO DDC'
+      : (first.input === 'hdmi1' ? 'MAC · HDMI1'
+        : first.input === 'hdmi2' ? 'PC · HDMI2'
+        : 'INPUT ' + first.input_raw);
+    pill.className = 'h-pill ' + (ok ? 'ok' : 'off');
+    rows($('mon-rows'), [
+      ['panel', first.desc || (d.reason || '—')],
+      ['observed', ok ? (first.input || 'raw ' + first.input_raw) : '—']
+    ]);
+    var usable = !!d.available;
+    $('mon-mac').disabled = !usable;
+    $('mon-pc').disabled = !usable;
   }
 
   /* ── NAV ───────────────────────────────────────────────────────────────
@@ -1371,6 +1414,15 @@
   navKbdBuild();
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
+  // Shared-monitor input switch: hold to fire, same as every other command,
+  // then re-read soon after — the monitor's answer is the only confirmation.
+  wireHold($('mon-mac'), function () {
+    post('/api/monitor', { input: 'hdmi1' }).then(function () { setTimeout(monTick, 1500); });
+  });
+  wireHold($('mon-pc'), function () {
+    post('/api/monitor', { input: 'hdmi2' }).then(function () { setTimeout(monTick, 1500); });
+  });
+
   $('navp-plansbtn').addEventListener('click', function () { navPlansOpen(true); });
   $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
   $('navp-saveas').addEventListener('click', function () {

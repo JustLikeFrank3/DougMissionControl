@@ -107,10 +107,6 @@
         <div class="mid">
           <div class="lbl" id="track-lbl">NO BOOT IN FLIGHT</div>
           <div class="track" id="track"></div>
-          <div class="note">
-            Phases 6–7 need <code>jarvis-greeting.ps1</code> to call back; not wired
-            yet, so a run completes at <b>OS UP</b>.
-          </div>
 
           <div class="stats">
             <div class="stat" data-key="ws.gpu_temp_c" data-unit="°C" data-min-span="12">
@@ -146,8 +142,6 @@
               <span class="h-pill" id="ws-pill">—</span>
             </div>
             <div class="h-rows" id="ws-rows"></div>
-            <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
-                 data-key="ws.gpu_util_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
           </div>
           <div class="host">
             <div class="h-top">
@@ -155,17 +149,28 @@
               <span class="h-pill ok">ONLINE</span>
             </div>
             <div class="h-rows" id="pi-rows"></div>
-            <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
-                 data-key="pi.cpu_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
           </div>
           <!-- Liveness only: the mini runs no exporter, so this card claims
                nothing beyond a ping and which service doors are open. -->
           <div class="host">
             <div class="h-top">
-              <span class="h-name">DOUG MINI</span>
+              <span class="h-name">MINIDOUG4</span>
               <span class="h-pill" id="mini-pill">—</span>
             </div>
             <div class="h-rows" id="mini-rows"></div>
+          </div>
+          <!-- DDC/CI via the Windows agent. Pill shows the OBSERVED input,
+               read back from the monitor — never the commanded one. -->
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">SHARED MONITOR</span>
+              <span class="h-pill" id="mon-pill">—</span>
+            </div>
+            <div class="h-rows" id="mon-rows"></div>
+            <div class="simcmd">
+              <button class="simbtn" id="mon-mac">MAC · HDMI1<i class="hold"></i></button>
+              <button class="simbtn" id="mon-pc">PC · HDMI2<i class="hold"></i></button>
+            </div>
           </div>
           <div class="bar">
             <span id="conn">connecting…</span>

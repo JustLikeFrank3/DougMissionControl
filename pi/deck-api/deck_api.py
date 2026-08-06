@@ -72,7 +72,14 @@ PHASES = [
     "LAUNCHED",
 ]
 PHASE_OS_UP = 5
-PHASE_MAX_V01 = PHASE_OS_UP  # what v0.1 can observe without touching Windows
+PHASE_LOGON = 6      # greeting's callback at Windows logon
+PHASE_LAUNCHED = 7   # greeting's callback after starting the intent's app
+PHASE_MAX_V01 = PHASE_OS_UP  # all a linux-target run can observe
+# How long a Windows run waits at OS UP for the greeting to call back before
+# closing anyway. Auto-logon plus the greeting takes well under a minute; five
+# means the callback path is broken, and the run still closes "ok" — a missing
+# greeting is a missing observation, not a failed boot.
+CALLBACK_GRACE_S = 300
 
 
 def read_env(path: Path) -> dict:
@@ -212,7 +219,8 @@ class Deck:
                             "ip": WS_LAN, "agent": False},
             "boot": {"in_flight": False, "target": None, "intent": None,
                      "phase": 0, "phase_name": "IDLE", "started": None,
-                     "elapsed": 0, "result": None, "observable_max": PHASE_MAX_V01},
+                     "elapsed": 0, "result": None, "observable_max": PHASE_MAX_V01,
+                     "os_up_at": None},
             "last_boot": None,
             "pi": {"temp_c": None, "load": None, "mem_pct": None,
                    "uptime": None, "cpu_pct": None},
@@ -360,11 +368,20 @@ class Deck:
             self.set_surface(target, manual=False)
 
     def begin(self, target: str, intent: str) -> None:
+        # What this run can actually observe: linux ends at OS UP (nothing
+        # calls back from that boot); windows gets LOGON from the greeting,
+        # and LAUNCHED too when the intent starts an app.
+        if target == "windows":
+            omax = PHASE_LAUNCHED if intent in ("sim", "squadrons") else PHASE_LOGON
+        else:
+            omax = PHASE_OS_UP
+
         def apply(s):
             s["boot"].update({
                 "in_flight": True, "target": target, "intent": intent,
                 "phase": 1, "phase_name": PHASES[1], "started": time.time(),
-                "elapsed": 0, "result": None,
+                "elapsed": 0, "result": None, "observable_max": omax,
+                "os_up_at": None,
             })
 
         self.mutate(apply)
@@ -412,6 +429,48 @@ def tcp_ok(host: str, port: int, timeout: float = 2.0) -> bool:
 
 
 _no_ping = threading.Event()
+
+
+def os_up_reached(note: str) -> None:
+    """The target OS answered. Linux runs close here; Windows runs hold the
+    door open for the greeting's LOGON/LAUNCHED callbacks, with the poller
+    closing them out after CALLBACK_GRACE_S if the callbacks never come."""
+    b = DECK.state["boot"]
+    if not b["in_flight"]:
+        return
+    DECK.set_phase(PHASE_OS_UP)
+    if b["target"] == "windows" and b.get("observable_max", 5) > PHASE_OS_UP:
+        def apply(s):
+            if s["boot"]["in_flight"] and s["boot"]["os_up_at"] is None:
+                s["boot"]["os_up_at"] = time.time()
+        DECK.mutate(apply)
+    else:
+        DECK.finish("ok", note)
+
+
+def greeting_phase(body: dict) -> tuple[int, dict]:
+    """The greeting's callback: the only writer phases 6-7 ever have.
+
+    Authenticated with the boot-agent token, which the greeting can read off
+    its own disk — same trust domain as the machine doing the logging on.
+    """
+    token = str(body.get("token") or "")
+    if not AGENT_TOKEN or token != AGENT_TOKEN:
+        return 403, {"ok": False, "reason": "bad token"}
+    phase = str(body.get("phase") or "")
+    b = DECK.state["boot"]
+    if not b["in_flight"]:
+        return 200, {"ok": True, "note": "no run in flight — recorded nothing"}
+    if phase == "logon":
+        DECK.set_phase(PHASE_LOGON, "greeting: logged on")
+        if b.get("observable_max", 5) <= PHASE_LOGON:
+            DECK.finish("ok", "logged on — nothing to launch")
+        return 200, {"ok": True}
+    if phase == "launched":
+        DECK.set_phase(PHASE_LAUNCHED)
+        DECK.finish("ok", f"launched: {b.get('intent') or 'app'}")
+        return 200, {"ok": True}
+    return 400, {"ok": False, "reason": "phase must be logon or launched"}
 
 
 def tcp_open(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -1053,12 +1112,13 @@ def poll_once(prev_os):
     if boot["in_flight"]:
         target = boot["target"]
         reached = (target == "windows" and win) or (target == "linux" and lin)
-        if reached:
-            DECK.set_phase(PHASE_OS_UP)
-            # The orchestrator logs "deck online" itself; if journald is
-            # unreadable this is the only place the run gets closed out.
-            if not journal_alive():
-                DECK.finish("ok", f"{target} is up")
+        # A Windows run holding the door for greeting callbacks that never
+        # came: close it "ok" — a missing greeting is a missing observation,
+        # not a failed boot.
+        if boot.get("os_up_at") and time.time() - boot["os_up_at"] > CALLBACK_GRACE_S:
+            DECK.finish("ok", "closed at OS UP — no greeting callback")
+        elif reached:
+            os_up_reached(f"{target} is up")
         elif alive:
             DECK.set_phase(4)
         elif not boot_lock_held() and time.time() - (boot["started"] or 0) > 20:
@@ -1130,13 +1190,13 @@ def handle_log_line(line: str) -> None:
             break
 
     if "is up — deck online" in msg:
-        DECK.set_phase(PHASE_OS_UP)
-        DECK.finish("ok", f"{target or 'target'} is up — deck online")
+        os_up_reached(f"{target or 'target'} is up — deck online")
     elif "already up — nothing to do" in msg:
         DECK.finish("ok", "already up — nothing to do")
     elif "already up — launching" in msg:
-        DECK.set_phase(PHASE_OS_UP)
-        DECK.finish("ok", "already up — launch requested")
+        # Windows was already up and the greeting task was kicked — its
+        # callbacks are coming, so hold the door like any other windows run.
+        os_up_reached("already up — launch requested")
     elif msg.startswith("gave up after"):
         DECK.finish("failed", msg)
     elif "already running" in msg:
@@ -1266,6 +1326,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, sim_state())
 
+        if path == "/api/monitor":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            if DECK.state["workstation"]["os"] != "windows" or not SIM_TOKEN:
+                return self._json(200, {"available": False,
+                                        "reason": "the switcher lives on the Windows boot"})
+            got = _ws_json(_sim_url("/monitor"))
+            return self._json(200, {"available": bool(got), **(got or {})})
+
         if path == "/api/nav/geocode":
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
@@ -1303,6 +1372,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         url = urlparse(self.path)
         query = parse_qs(url.query)
+
+        # The greeting's phase callback authenticates itself with the
+        # boot-agent token in its body — it has never held DECK_TOKEN, so it
+        # cannot pass the blanket gate below and must be routed first.
+        if url.path == "/api/phase":
+            code, out = greeting_phase(self._body())
+            return self._json(code, out)
+
         if not self._authorised(query):
             return self._json(403, {"error": "forbidden"})
 
@@ -1323,6 +1400,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sim/command":
             code, out = sim_command(body)
             return self._json(code, out)
+
+        if path == "/api/monitor":
+            got = _ws_json(_sim_url("/monitor"),
+                           {"input": str(body.get("input") or "")}) if SIM_TOKEN else None
+            return self._json(200 if got else 502,
+                              got or {"ok": False, "reason": "no link to the workstation"})
 
         if path == "/api/nav/plan":
             code, out = set_nav_plan(body)

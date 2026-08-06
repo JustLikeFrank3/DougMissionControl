@@ -44,6 +44,22 @@ if ($intentRaw -match '^(\w+) (\d+)$') {
 }
 $launch = if ($bootProfile) { $LaunchProfiles[$bootProfile] } else { $null }
 
+# Phase callbacks to deck-api, so the panel's rail can show LOGON and
+# LAUNCHED as observed fact instead of stopping at OS UP. Authenticated with
+# the boot-agent token this machine already holds; failures are silent — the
+# greeting must never break because the Pi is down.
+function Send-Phase($phase) {
+    try {
+        $deckHost = ($PiHost -split '@')[-1]
+        $tok = (Get-Content 'C:\ProgramData\dualboot\boot-agent.token' -TotalCount 1).Trim()
+        if (-not $tok) { return }
+        $body = (@{ token = $tok; phase = $phase } | ConvertTo-Json -Compress)
+        Invoke-RestMethod -Uri "http://${deckHost}:8088/api/phase" -Method Post `
+            -ContentType 'application/json' -Body $body -TimeoutSec 3 | Out-Null
+    } catch { }
+}
+Send-Phase 'logon'
+
 # Let the audio stack finish coming up before speaking.
 Start-Sleep -Seconds 8
 
@@ -96,4 +112,9 @@ if ((Test-Path $fresh) -and (Get-Item $fresh).Length -gt 1kb) {
     $v.Speak($greeting)
 }
 
-if ($launch) { & $launch.cmd }
+if ($launch) {
+    & $launch.cmd
+    # Reported AFTER Start-Process returns: "the launch command was issued",
+    # which is all this script can honestly observe about the app.
+    Send-Phase 'launched'
+}
