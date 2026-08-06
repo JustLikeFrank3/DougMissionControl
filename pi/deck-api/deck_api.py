@@ -585,6 +585,36 @@ def sim_state() -> dict:
         return {"link": False, "session": False, "reason": "no link to the workstation"}
 
 
+def sim_command(body: dict) -> tuple[int, dict]:
+    """Forward one control command to the agent, verbatim.
+
+    `accepted` means the agent transmitted the event to the simulator. It
+    never means the aircraft did anything: that only ever shows up as
+    observed state moving, which is the only thing the panel renders. A
+    command MSFS declines — over the gear speed limit, on the ground, wrong
+    aircraft — comes back accepted and then simply never moves anything.
+    """
+    if not SIM_TOKEN:
+        return 503, {"accepted": False,
+                     "reason": "SIM_AGENT_TOKEN unset in /etc/flightsim/boot.env"}
+    payload = json.dumps({
+        "cmd_id": str(body.get("cmd_id") or ""),
+        "control": str(body.get("control") or ""),
+        "action": str(body.get("action") or ""),
+        "value": body.get("value"),
+    }).encode()
+    req = urllib.request.Request(
+        _sim_url("/command"), data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return 200, json.loads(r.read(64_000).decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return e.code, {"accepted": False, "reason": f"sim agent returned {e.code}"}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 502, {"accepted": False, "reason": "no link to the workstation"}
+
+
 _prev_cpu: tuple[int, int] | None = None
 
 
@@ -1032,6 +1062,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/launch":
             ok, msg = fire_launch()
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
+
+        if path == "/api/sim/command":
+            code, out = sim_command(body)
+            return self._json(code, out)
 
         if path == "/api/abort":
             ok, msg = fire_abort()

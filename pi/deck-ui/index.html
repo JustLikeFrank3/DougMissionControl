@@ -210,6 +210,10 @@
             <span class="sim-meta" id="sim-meta"></span>
           </div>
           <div class="sim-body">
+            <!-- Buttons hold to fire, like the boot tiles: a stray knuckle on a
+                 touch panel should not raise the gear. Each one names an
+                 explicit position rather than toggling, so a lost frame cannot
+                 invert what you asked for. -->
             <div class="sim-controls">
               <div class="simt wide" id="simt-gear">
                 <h3>LANDING GEAR</h3><span class="simt-u" id="simu-gear"></span>
@@ -217,22 +221,50 @@
                 <div class="simt-s" id="sims-gear"></div>
                 <div class="simbar"><i id="simb-gear"></i></div>
                 <div class="simwarn" id="simw-gear"></div>
+                <div class="simpend" id="simpd-gear"></div>
+                <div class="simcmd">
+                  <button class="simbtn" data-c="gear" data-a="set" data-v="down">DOWN<i class="hold"></i></button>
+                  <button class="simbtn" data-c="gear" data-a="set" data-v="up">UP<i class="hold"></i></button>
+                </div>
               </div>
               <div class="simt" id="simt-flaps">
                 <h3>FLAPS</h3><span class="simt-u" id="simu-flaps"></span>
                 <div class="simt-v" id="simv-flaps">—</div>
                 <div class="simt-s" id="sims-flaps"></div>
                 <div class="simpips" id="simp-flaps"></div>
+                <div class="simpend" id="simpd-flaps"></div>
+                <div class="simcmd">
+                  <button class="simbtn" data-c="flaps" data-a="decr">&minus;<i class="hold"></i></button>
+                  <button class="simbtn" data-c="flaps" data-a="incr">+<i class="hold"></i></button>
+                </div>
               </div>
               <div class="simt" id="simt-park"><h3>PARKING BRAKE</h3>
                 <div class="simt-v" id="simv-park">—</div>
-                <div class="simt-s" id="sims-park"></div></div>
+                <div class="simt-s" id="sims-park"></div>
+                <div class="simpend" id="simpd-park"></div>
+                <div class="simcmd">
+                  <button class="simbtn" data-c="parking_brake" data-a="set" data-v="set">SET<i class="hold"></i></button>
+                  <button class="simbtn" data-c="parking_brake" data-a="set" data-v="off">OFF<i class="hold"></i></button>
+                </div>
+              </div>
               <div class="simt" id="simt-lights"><h3>LANDING LIGHTS</h3>
                 <div class="simt-v" id="simv-lights">—</div>
-                <div class="simt-s" id="sims-lights"></div></div>
+                <div class="simt-s" id="sims-lights"></div>
+                <div class="simpend" id="simpd-lights"></div>
+                <div class="simcmd">
+                  <button class="simbtn" data-c="landing_lights" data-a="set" data-v="on">ON<i class="hold"></i></button>
+                  <button class="simbtn" data-c="landing_lights" data-a="set" data-v="off">OFF<i class="hold"></i></button>
+                </div>
+              </div>
               <div class="simt" id="simt-ap"><h3>AUTOPILOT</h3>
                 <div class="simt-v" id="simv-ap">—</div>
-                <div class="simt-s" id="sims-ap"></div></div>
+                <div class="simt-s" id="sims-ap"></div>
+                <div class="simpend" id="simpd-ap"></div>
+                <div class="simcmd">
+                  <button class="simbtn" data-c="ap_master" data-a="set" data-v="engaged">ENGAGE<i class="hold"></i></button>
+                  <button class="simbtn" data-c="ap_master" data-a="set" data-v="off">OFF<i class="hold"></i></button>
+                </div>
+              </div>
             </div>
             <div class="sim-reads">
               <div class="simt"><h3>IAS</h3><span class="simt-u">KT</span>

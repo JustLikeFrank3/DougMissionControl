@@ -370,3 +370,23 @@ html, body {
    2560x720 internally no matter what it is plugged into. An aspect-ratio query
    would fire on the physical viewport and reflow the tiles inside a box that
    never changed size. */
+
+/* Commands. Hold to fire, matching the boot tiles — the .hold sweep is the
+   confirm step. Each button names an explicit position; nothing here toggles,
+   so a dropped frame cannot invert what was asked for. */
+.simcmd { display: flex; gap: 8px; margin-top: 12px; }
+.simbtn { position: relative; overflow: hidden; flex: 1; padding: 9px 6px;
+          font-family: inherit; font-size: 14px; letter-spacing: .16em;
+          color: var(--fg); background: var(--pan2); border: 1px solid var(--ln);
+          cursor: pointer; }
+.simbtn.arming { border-color: var(--acc); }
+.simbtn[disabled] { opacity: .3; cursor: default; }
+
+/* PENDING is an overlay on the last observed state, never a stand-in for it.
+   It clears when the simulator actually moves, and turns to NO RESPONSE when
+   nothing moved before the timeout — the command failed, and the state on
+   screen is still the truth. */
+.simpend { min-height: 1.15em; margin-top: 6px; font-size: 13px;
+           letter-spacing: .16em; color: transparent; }
+.simpend.wait { color: var(--am); }
+.simpend.dead { color: var(--rd); }

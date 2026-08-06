@@ -315,10 +315,86 @@
       .catch(function () { paintSim({ link: false, reason: 'deck-api unreachable' }); });
   }
 
+  /* Commands. The panel NEVER draws the commanded position. A command puts
+     PENDING over the last observed state; only the state stream moves what is
+     displayed. If nothing moves before the timeout the panel says NO RESPONSE
+     and keeps showing the observed position — which is how a command the
+     simulator ignored reads as a failed command instead of a lie. */
+  var SIM_TIMEOUT = { gear: 9000, flaps: 5000, parking_brake: 3000,
+                      landing_lights: 3000, ap_master: 3000 };
+  var simPending = {};          // control -> { id, want, from, sent, dead, reason }
+  var simSeq = 0;
+  var simLast = null;
+
+  // The observed position of a control, in the same vocabulary the buttons use.
+  function simObserved(control, c) {
+    c = c || {};
+    if (control === 'gear') return c.gear ? c.gear.state : null;
+    if (control === 'flaps') return c.flaps ? String(c.flaps.index) : null;
+    if (control === 'parking_brake') return c.parking_brake ? c.parking_brake.state : null;
+    if (control === 'landing_lights') return c.landing_lights ? c.landing_lights.state : null;
+    if (control === 'ap_master') return c.ap_master ? c.ap_master.state : null;
+    return null;
+  }
+
+  function simSend(control, action, value) {
+    var c = (simLast && simLast.controls) || {};
+    var id = 'c-' + (++simSeq);
+    // `from` is what it looked like when we asked — the only way to tell that
+    // an incr/decr moved, since we cannot know the target detent up front.
+    simPending[control] = { id: id, want: value || null,
+                            from: simObserved(control, c),
+                            sent: Date.now(), dead: false, reason: null };
+    post('/api/sim/command',
+         { cmd_id: id, control: control, action: action, value: value })
+      .then(function (r) {
+        var p = simPending[control];
+        if (!p || p.id !== id) return;
+        if (!r || !r.accepted) {
+          p.dead = true;
+          p.reason = (r && r.reason) || 'no reply';
+        } else if (r.noop) {
+          // Already in the requested position: the agent transmitted nothing,
+          // so nothing is going to move and PENDING would hang forever.
+          delete simPending[control];
+        }
+      });
+  }
+
+  function simRenderPending(key, control, c) {
+    var el = $('simpd-' + key);
+    var p = simPending[control];
+    if (!p) { el.className = 'simpend'; el.textContent = ''; return; }
+
+    var now = simObserved(control, c);
+    var moved = p.want ? (now === p.want) : (now !== null && now !== p.from);
+    if (moved) { delete simPending[control]; el.className = 'simpend'; el.textContent = ''; return; }
+
+    var age = Date.now() - p.sent;
+    if (p.dead) {
+      el.className = 'simpend dead';
+      el.textContent = 'REJECTED · ' + String(p.reason).toUpperCase();
+      if (age > 6000) delete simPending[control];
+      return;
+    }
+    var limit = SIM_TIMEOUT[control] || 4000;
+    if (age > limit) {
+      el.className = 'simpend dead';
+      el.textContent = 'NO RESPONSE · SHOWING OBSERVED';
+      if (age > limit + 6000) delete simPending[control];
+      return;
+    }
+    el.className = 'simpend wait';
+    el.textContent = 'PENDING' + (p.want ? ' · ' + p.want.toUpperCase() : '');
+  }
+
   // Absent from `controls` means the aircraft has not got it — skids instead of
   // wheels, no flaps. Grey it and name it; never render a dead control.
   function simAvail(key, present) {
     $('simt-' + key).classList.toggle('na', !present);
+    [].forEach.call($('simt-' + key).querySelectorAll('.simbtn'), function (b) {
+      b.disabled = !present;
+    });
     if (!present) {
       $('simv-' + key).textContent = 'NOT FITTED';
       var s = $('sims-' + key); if (s) s.textContent = '';
@@ -352,6 +428,7 @@
     $('sim-ph-s').innerHTML = fault ? d.reason : simPhProse;
     if (!live) return;
 
+    simLast = st;
     $('sim-live').classList.toggle('stale', Date.now() - simLastOk > 1500);
     $('sim-ac').textContent = st.aircraft || '(no aircraft)';
     $('sim-meta').textContent = 'SEQ ' + st.seq;
@@ -408,6 +485,12 @@
     $('simv-ias').textContent = r.ias_kt;
     $('simv-alt').textContent = r.alt_ft;
     $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
+
+    simRenderPending('gear', 'gear', c);
+    simRenderPending('flaps', 'flaps', c);
+    simRenderPending('park', 'parking_brake', c);
+    simRenderPending('lights', 'landing_lights', c);
+    simRenderPending('ap', 'ap_master', c);
   }
 
   // The strip's SIM sub-label, from the ordinary state poll. Losing the agent
@@ -672,6 +755,14 @@
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
+
+  // Same hold-to-confirm as the boot tiles. wireHold already refuses a
+  // disabled element, so a control the aircraft has not got cannot be fired.
+  [].forEach.call(document.querySelectorAll('.simbtn'), function (b) {
+    wireHold(b, function () {
+      simSend(b.dataset.c, b.dataset.a, b.dataset.v || null);
+    });
+  });
 
   // Surface navigation. Applied locally first so a tap feels instant on a
   // touch panel; the SSE frame confirms it a moment later.
