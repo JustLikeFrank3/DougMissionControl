@@ -51,9 +51,20 @@ internal static class Normalize
     public static string GearStateFromPct(double pct) =>
         pct >= DownPct ? "down" : pct <= UpPct ? "up" : "transit";
 
-    /// <summary>Flap detent count. See [Q2]: adjust here, not in SimVars.cs.</summary>
+    /// <summary>
+    /// Number of flap handle positions, counting the clean position.
+    ///
+    /// FLAPS NUM HANDLE POSITIONS reports the HIGHEST INDEX, not the count, so
+    /// this adds one. Observed directly on an A320neo: the variable read 4
+    /// while FLAPS_INCR walked the handle 0,1,2,3,4 and stopped — five
+    /// positions. A King Air reads 2 for UP/APPROACH/DOWN, and the brief
+    /// expects 3 detents on a Baron that reports 2. All three agree.
+    ///
+    /// Left raw this understates every aircraft by one, which also made
+    /// Resolve reject the last detent as an invalid value.
+    /// </summary>
     public static int Detents(double numHandlePositions) =>
-        (int)Math.Max(0, Math.Round(numHandlePositions));
+        (int)Math.Max(0, Math.Round(numHandlePositions)) + 1;
 
     public static double Heading(double deg)
     {

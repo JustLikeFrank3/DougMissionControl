@@ -226,10 +226,15 @@ internal static class Program
             case "parking_brake":
                 if (action == "toggle") return Send(Event.ParkingBrakes);
                 if (action != "set") return Invalid("unsupported action");
+                // Explicit, not the toggle-with-differ-guard this used to be:
+                // PARKING_BRAKE_SET was confirmed to honour a 1/0 parameter on
+                // an A320neo (--probe-events). Same reasoning as the landing
+                // lights — a dropped frame can then fail to move the brake, but
+                // never invert it.
                 return value switch
                 {
-                    "set" => On(s.BrakeParkingPosition) ? Noop : Send(Event.ParkingBrakes),
-                    "off" => On(s.BrakeParkingPosition) ? Send(Event.ParkingBrakes) : Noop,
+                    "set" => Send(Event.ParkingBrakeSet, 1),
+                    "off" => Send(Event.ParkingBrakeSet, 0),
                     _ => Invalid("invalid value"),
                 };
 

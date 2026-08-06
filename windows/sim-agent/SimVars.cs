@@ -27,11 +27,13 @@
 //   [Q3] FLAPS NUM HANDLE POSITIONS — the Baron G58 should read 3 (UP /
 //        APPROACH / DOWN). If it reads 4 because UP is counted separately,
 //        subtract one in Normalize.Detents, not here. STILL OPEN.
-//   [Q3] PARKING_BRAKES is toggle-only in this list. The agent gets explicit
-//        set/off semantics by comparing against observed state before
-//        transmitting (SimBridge callers use the differ-guard in Program).
-//        If SimvarWatcher confirms PARKING_BRAKE_SET accepts a 1/0 parameter,
-//        add it below and switch parking brake to the explicit path.
+//   [Q3] RESOLVED — PARKING_BRAKE_SET does honour a 1/0 parameter. Confirmed by
+//        experiment (--probe-events) on an A320neo: SET 1 drove BRAKE PARKING
+//        POSITION to 1, SET 0 back to 0. Parking brake now uses the explicit
+//        path rather than a toggle with a differ-guard.
+//        The first attempt ran against a Bell 407 and appeared to show the
+//        event dead — but the PARKING_BRAKES control could not move that brake
+//        either, because a 407 has none. Hence the control in --probe-events.
 //   [Q4] RESOLVED as unanswerable. There is no autothrottle CAPABILITY variable.
 //        AUTOTHROTTLE ACTIVE, AUTOPILOT THROTTLE ARM and AUTOPILOT MANAGED
 //        THROTTLE ACTIVE are all recognised by MSFS 2024 but all report present
@@ -148,7 +150,8 @@ internal static class SimVars
         (Event.FlapsIncr,        "FLAPS_INCR"),
         (Event.FlapsDecr,        "FLAPS_DECR"),
         (Event.FlapsSet,         "FLAPS_SET"),
-        (Event.ParkingBrakes,    "PARKING_BRAKES"),             // [Q3] toggle-only
+        (Event.ParkingBrakes,    "PARKING_BRAKES"),             // toggle, still mapped
+        (Event.ParkingBrakeSet,  "PARKING_BRAKE_SET"),          // [Q3] takes 1/0
         (Event.LandingLightsOn,  "LANDING_LIGHTS_ON"),          // explicit, so a
         (Event.LandingLightsOff, "LANDING_LIGHTS_OFF"),         // dropped frame
         (Event.ApMaster,         "AP_MASTER"),                  // can't invert state

@@ -39,6 +39,18 @@ if (-not (Test-Path "$MsfsSdk\SimConnect SDK\lib\managed\Microsoft.FlightSimulat
 }
 
 # --- Build -----------------------------------------------------------------
+# Stop any previous instance FIRST. On a re-run the logon task is already
+# running and its exe holds the very files publish is about to overwrite, so
+# publishing first fails with a file lock. Restarted at the end either way.
+if (Get-ScheduledTask -TaskName 'FlightDeckSimAgent' -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName 'FlightDeckSimAgent' -ErrorAction SilentlyContinue
+    # The task reports stopped before the process has actually exited.
+    for ($i = 0; $i -lt 20 -and (Get-Process flightdeck-sim-agent -ErrorAction SilentlyContinue); $i++) {
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Host 'Stopped the running FlightDeckSimAgent task'
+}
+
 New-Item -ItemType Directory -Force $appDir | Out-Null
 & dotnet publish "$PSScriptRoot\sim-agent\FlightDeckSimAgent.csproj" `
     -c Release -o $appDir -p:MsfsSdk="$MsfsSdk"
