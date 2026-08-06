@@ -875,6 +875,27 @@ def nav_plans_op(body: dict) -> tuple[int, dict]:
     return 400, {"ok": False, "reason": "action must be save, load or delete"}
 
 
+def _monitor_url(method: str, payload: dict | None = None) -> dict | None:
+    """Monitor DDC through whichever agent the booted OS is running.
+
+    Windows answers via the sim agent, Linux via media-agent.py, and both
+    publish the identical shape — so SCREENS never learns which OS is
+    holding the video cables. The workstation is always in one or the other,
+    which is exactly why both need covering.
+    """
+    os_now = DECK.state["workstation"]["os"]
+    if os_now == "windows" and SIM_TOKEN:
+        url = _sim_url("/monitor")
+    elif os_now == "linux" and LINUX_MEDIA_TOKEN:
+        url = (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/monitor"
+               f"?token={quote(LINUX_MEDIA_TOKEN)}")
+    else:
+        return None
+    # DDC is slow on both sides: ddcutil probes I2C buses, dxva2 waits on the
+    # panel. 20 s beats the default 3 s, which would have timed out honest work.
+    return _ws_json(url, payload, timeout=20)
+
+
 def sim_command(body: dict) -> tuple[int, dict]:
     """Forward one control command to the agent, verbatim.
 
@@ -1336,12 +1357,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/monitor":
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
-            if DECK.state["workstation"]["os"] != "windows" or not SIM_TOKEN:
-                return self._json(200, {"available": False,
-                                        "reason": "the switcher lives on the Windows boot"})
-            got = _ws_json(_sim_url("/monitor"))
+            got = _monitor_url("GET")
             return self._json(200, {"available": bool(got),
                                     "default_inputs": MON_DEFAULT_INPUTS,
+                                    "reason": None if got else
+                                    "no agent answering on the booted OS",
                                     **(got or {})})
 
         if path == "/api/nav/geocode":
@@ -1414,9 +1434,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = {"input": str(body.get("input") or "")}
             if isinstance(body.get("index"), int):
                 payload["index"] = body["index"]
-            got = _ws_json(_sim_url("/monitor"), payload) if SIM_TOKEN else None
+            got = _monitor_url("POST", payload)
             return self._json(200 if got else 502,
-                              got or {"ok": False, "reason": "no link to the workstation"})
+                              got or {"ok": False, "reason": "no agent answering"})
 
         if path == "/api/nav/plan":
             code, out = set_nav_plan(body)
