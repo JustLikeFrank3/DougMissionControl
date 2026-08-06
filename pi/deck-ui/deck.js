@@ -421,6 +421,36 @@
     });
   }
 
+  /* OpenStreetMap raster tiles under the overlays, dimmed so the EFIS
+     symbology stays legible on top of real roads, lakes and theme parks.
+     One kiosk is comfortably inside OSM's tile usage policy; attribution is
+     drawn on the map as required. No internet degrades gracefully: missing
+     tiles simply do not draw and the overlays stand alone on dark.
+     Projection is Web Mercator throughout so tiles and trail agree. */
+  var TILE = 256;
+  var navTiles = {};             // url -> Image
+  var navTileOrder = [];         // insertion order, for crude eviction
+
+  function navWorld(lat, lon, z) {
+    var n = TILE * Math.pow(2, z);
+    var rad = lat * Math.PI / 180;
+    return {
+      x: (lon + 180) / 360 * n,
+      y: (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n
+    };
+  }
+
+  function navTile(url) {
+    var img = navTiles[url];
+    if (img) return img;
+    img = new Image();
+    img.src = url;
+    navTiles[url] = img;
+    navTileOrder.push(url);
+    if (navTileOrder.length > 300) delete navTiles[navTileOrder.shift()];
+    return img;
+  }
+
   function drawNavMap(r, wpt) {
     var cv = $('navp-canvas');
     if (cv.width !== cv.clientWidth || cv.height !== cv.clientHeight) {
@@ -431,66 +461,102 @@
     g.clearRect(0, 0, W, H);
 
     // Fit aircraft + selected waypoint + trail, north up, min 6 nm span.
-    var pts = [{ x: 0, y: 0 }, navXY(wpt.lat, wpt.lon, r.lat, r.lon)];
-    navTrail.forEach(function (p) { pts.push(navXY(p.lat, p.lon, r.lat, r.lon)); });
-    var minX = 0, maxX = 0, minY = 0, maxY = 0;
-    pts.forEach(function (p) {
-      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-    });
-    var span = Math.max(maxX - minX, maxY - minY, 6) * 1.3;
-    var scale = Math.min(W, H) / span;
-    var cx = W / 2 - (minX + maxX) / 2 * scale;
-    var cy = H / 2 + (minY + maxY) / 2 * scale;
-    function px(p) { return { x: cx + p.x * scale, y: cy - p.y * scale }; }
+    var lats = [r.lat, wpt.lat], lons = [r.lon, wpt.lon];
+    navTrail.forEach(function (p) { lats.push(p.lat); lons.push(p.lon); });
+    var latC = (Math.min.apply(0, lats) + Math.max.apply(0, lats)) / 2;
+    var lonC = (Math.min.apply(0, lons) + Math.max.apply(0, lons)) / 2;
+    var spanNm = Math.max(
+      (Math.max.apply(0, lats) - Math.min.apply(0, lats)) * NM_PER_DEG,
+      (Math.max.apply(0, lons) - Math.min.apply(0, lons)) * NM_PER_DEG *
+        Math.cos(latC * Math.PI / 180),
+      6) * 1.3;
+
+    // Integer slippy zoom whose scale best fits that span — the map steps
+    // between zoom levels as the flight closes in, like any slippy map.
+    var mPerPx = spanNm * 1852 / Math.min(W, H);
+    var z = Math.floor(Math.log(156543.03 * Math.cos(latC * Math.PI / 180) / mPerPx) / Math.LN2);
+    z = Math.max(8, Math.min(15, z));
+
+    var c = navWorld(latC, lonC, z);
+    var ox = c.x - W / 2, oy = c.y - H / 2;
+    function px(lat, lon) {
+      var w = navWorld(lat, lon, z);
+      return { x: w.x - ox, y: w.y - oy };
+    }
+
+    // Tiles, then a dark wash so the symbology owns the foreground.
+    var maxT = Math.pow(2, z);
+    for (var tx = Math.floor(ox / TILE); tx <= Math.floor((ox + W) / TILE); tx++) {
+      for (var ty = Math.floor(oy / TILE); ty <= Math.floor((oy + H) / TILE); ty++) {
+        if (ty < 0 || ty >= maxT) continue;
+        var wx = ((tx % maxT) + maxT) % maxT;
+        var img = navTile('https://tile.openstreetmap.org/' + z + '/' + wx + '/' + ty + '.png');
+        if (img.complete && img.naturalWidth > 0) {
+          g.drawImage(img, tx * TILE - ox, ty * TILE - oy);
+        }
+      }
+    }
+    g.fillStyle = 'rgba(7, 10, 15, 0.45)';
+    g.fillRect(0, 0, W, H);
+
+    var me = px(r.lat, r.lon);
+    var scalePxNm = 1852 / (156543.03 * Math.cos(latC * Math.PI / 180) / Math.pow(2, z));
 
     // Range rings around the aircraft at a tidy step.
     var steps = [1, 2, 5, 10, 20, 50, 100];
     var ring = steps[0];
-    for (var i = 0; i < steps.length; i++) if (steps[i] * scale < Math.min(W, H) / 2.2) ring = steps[i];
-    var me = px({ x: 0, y: 0 });
-    g.strokeStyle = '#1b2532'; g.fillStyle = '#5d6b7d'; g.font = '12px ' + 'monospace';
+    for (var i = 0; i < steps.length; i++) {
+      if (steps[i] * scalePxNm < Math.min(W, H) / 2.2) ring = steps[i];
+    }
+    g.strokeStyle = 'rgba(90, 110, 135, 0.5)'; g.fillStyle = '#8fa2b8';
+    g.font = '12px monospace';
     for (var n = 1; n <= 2; n++) {
-      g.beginPath(); g.arc(me.x, me.y, ring * n * scale, 0, 7); g.stroke();
-      g.fillText(ring * n + ' nm', me.x + 6, me.y - ring * n * scale + 14);
+      g.beginPath(); g.arc(me.x, me.y, ring * n * scalePxNm, 0, 7); g.stroke();
+      g.fillText(ring * n + ' nm', me.x + 6, me.y - ring * n * scalePxNm + 14);
     }
 
     // Trail — where we have actually been.
     if (navTrail.length > 1) {
-      g.strokeStyle = '#2c6f80'; g.lineWidth = 2; g.beginPath();
+      g.strokeStyle = '#56cfe1'; g.lineWidth = 2.5; g.beginPath();
       navTrail.forEach(function (p, idx) {
-        var q = px(navXY(p.lat, p.lon, r.lat, r.lon));
+        var q = px(p.lat, p.lon);
         if (idx === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
       });
       g.stroke(); g.lineWidth = 1;
     }
 
-    // Every waypoint, selected one connected by a course line.
+    // Every waypoint, the selected one tied to the aircraft by a course line.
     NAV_WPTS.forEach(function (w) {
-      var q = px(navXY(w.lat, w.lon, r.lat, r.lon));
+      var q = px(w.lat, w.lon);
       var on = w.id === navSel;
       if (on) {
-        g.strokeStyle = '#56cfe1'; g.setLineDash([6, 6]);
+        g.strokeStyle = '#d95bb8'; g.setLineDash([7, 7]); g.lineWidth = 2;
         g.beginPath(); g.moveTo(me.x, me.y); g.lineTo(q.x, q.y); g.stroke();
-        g.setLineDash([]);
+        g.setLineDash([]); g.lineWidth = 1;
       }
-      g.strokeStyle = on ? '#56cfe1' : '#5d6b7d';
+      g.strokeStyle = on ? '#d95bb8' : '#8fa2b8'; g.lineWidth = 2;
       g.beginPath();
-      g.moveTo(q.x, q.y - 7); g.lineTo(q.x + 7, q.y); g.lineTo(q.x, q.y + 7);
-      g.lineTo(q.x - 7, q.y); g.closePath(); g.stroke();
-      g.fillStyle = on ? '#56cfe1' : '#5d6b7d';
-      g.fillText(w.id, q.x + 11, q.y + 4);
+      g.moveTo(q.x, q.y - 8); g.lineTo(q.x + 8, q.y); g.lineTo(q.x, q.y + 8);
+      g.lineTo(q.x - 8, q.y); g.closePath(); g.stroke();
+      g.lineWidth = 1;
+      g.fillStyle = on ? '#d95bb8' : '#8fa2b8';
+      g.font = 'bold 13px monospace';
+      g.fillText(w.id, q.x + 12, q.y + 4);
     });
 
     // The aircraft, rotated to its observed true track.
     g.save();
     g.translate(me.x, me.y);
     g.rotate((r.trk_true || 0) * Math.PI / 180);
-    g.fillStyle = '#e2e9f2';
+    g.fillStyle = '#ffffff'; g.strokeStyle = '#0b0f15';
     g.beginPath();
-    g.moveTo(0, -11); g.lineTo(8, 11); g.lineTo(0, 6); g.lineTo(-8, 11);
-    g.closePath(); g.fill();
+    g.moveTo(0, -12); g.lineTo(9, 12); g.lineTo(0, 6); g.lineTo(-9, 12);
+    g.closePath(); g.fill(); g.stroke();
     g.restore();
+
+    // Required by the tile usage policy, and honest besides.
+    g.fillStyle = 'rgba(226, 233, 242, 0.55)'; g.font = '11px monospace';
+    g.fillText('© OpenStreetMap contributors', W - 205, H - 8);
   }
 
   /* ── now-playing widget (DECK rail) ────────────────────────────────────
