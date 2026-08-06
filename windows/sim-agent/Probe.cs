@@ -57,6 +57,11 @@ internal static class Probe
         ("GEAR TOTAL PCT EXTENDED",  "Number"),
         ("GEAR POSITION",            "Enum"),
         ("GEAR ANIMATION POSITION",  "Percent"),
+        // [Q4] hunting a capability variable for autothrottle. None of these is
+        // documented as one; a row that comes back UNRECOGNIZED has answered.
+        ("AUTOTHROTTLE ACTIVE",              "Bool"),
+        ("AUTOPILOT THROTTLE ARM",           "Bool"),
+        ("AUTOPILOT MANAGED THROTTLE ACTIVE", "Bool"),
     };
 
     private static readonly (string Name, string Unit)[] Rows =
@@ -139,6 +144,110 @@ internal static class Probe
         sim.Dispose();
         Print();
         return Errors.Any(e => e is not null) ? 2 : 0;
+    }
+
+    /// <summary>
+    /// [Q3] Does PARKING_BRAKE_SET honour a 1/0 parameter, or is PARKING_BRAKES
+    /// the only way in? Mapping an event name proves nothing — SimConnect will
+    /// happily map a name the simulator ignores — so this transmits SET 1, reads
+    /// BRAKE PARKING POSITION back, transmits SET 0 and reads again. Only the
+    /// observed variable moving counts as an answer.
+    ///
+    /// Leaves the brake as it found it: the last transmit is always the clear.
+    /// </summary>
+    public static int RunEvents()
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        SimConnect sim;
+        try
+        {
+            sim = new SimConnect("FlightDeckEventProbe", IntPtr.Zero, 0, wait, 0);
+        }
+        catch (COMException ex)
+        {
+            Console.Error.WriteLine($"cannot reach a simulator: {ex.Message}");
+            return 1;
+        }
+
+        double? parking = null;
+        var problems = new List<string>();
+        sim.OnRecvException += (_, d) => problems.Add(((SIMCONNECT_EXCEPTION)d.dwException).ToString());
+        sim.OnRecvSimobjectData += (_, d) =>
+        {
+            if ((Request)d.dwRequestID == Request.State) parking = ((OneDouble)d.dwData[0]).Value;
+        };
+
+        sim.AddToDataDefinition(Definition.State, "BRAKE PARKING POSITION", "Bool",
+            SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+        sim.RegisterDataDefineStruct<OneDouble>(Definition.State);
+        sim.RequestDataOnSimObject(Request.State, Definition.State,
+            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SIM_FRAME,
+            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 5, 0);
+
+        sim.MapClientEventToSimEvent(Event.ParkingBrakeSet, "PARKING_BRAKE_SET");
+        sim.AddClientEventToNotificationGroup(Group.Main, Event.ParkingBrakeSet, false);
+        // The control. If PARKING_BRAKES cannot move this aircraft's brake
+        // either, the airframe has no working parking brake and the whole
+        // experiment is inconclusive rather than negative — a helicopter on
+        // skids would otherwise "prove" PARKING_BRAKE_SET broken.
+        sim.MapClientEventToSimEvent(Event.ParkingBrakes, "PARKING_BRAKES");
+        sim.AddClientEventToNotificationGroup(Group.Main, Event.ParkingBrakes, false);
+        sim.SetNotificationGroupPriority(Group.Main, SimConnect.SIMCONNECT_GROUP_PRIORITY_HIGHEST);
+
+        void Pump(int ms)
+        {
+            var end = DateTime.UtcNow.AddMilliseconds(ms);
+            while (DateTime.UtcNow < end)
+            {
+                if (wait.WaitOne(50)) sim.ReceiveMessage();
+            }
+        }
+
+        void Fire(Event e, uint v) => sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER,
+            e, v, Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+        void Send(uint v) => Fire(Event.ParkingBrakeSet, v);
+
+        Pump(1500);
+        var before = parking;
+        Console.WriteLine($"baseline BRAKE PARKING POSITION : {before?.ToString("F0") ?? "no data"}");
+
+        Send(1);
+        Pump(1800);
+        var set = parking;
+        Console.WriteLine($"after PARKING_BRAKE_SET 1       : {set?.ToString("F0") ?? "no data"}");
+
+        Send(0);
+        Pump(1800);
+        var clear = parking;
+        Console.WriteLine($"after PARKING_BRAKE_SET 0       : {clear?.ToString("F0") ?? "no data"}");
+
+        // Control: can ANYTHING move this brake?
+        Fire(Event.ParkingBrakes, 0);
+        Pump(1800);
+        var toggled = parking;
+        Console.WriteLine($"after PARKING_BRAKES (toggle)   : {toggled?.ToString("F0") ?? "no data"}");
+        var toggleWorks = toggled is not null && clear is not null
+                          && Math.Abs(toggled.Value - clear.Value) > 0.5;
+        if (toggleWorks)
+        {
+            Fire(Event.ParkingBrakes, 0);   // put it back where we found it
+            Pump(1200);
+            Console.WriteLine($"restored                        : {parking?.ToString("F0") ?? "no data"}");
+        }
+
+        Console.WriteLine();
+        if (problems.Count > 0) Console.WriteLine("exceptions: " + string.Join(", ", problems.Distinct()));
+
+        var setWorks = set is > 0.5 && clear is < 0.5;
+        if (setWorks)
+            Console.WriteLine("[Q3] PARKING_BRAKE_SET honours its parameter — switch to the explicit path");
+        else if (toggleWorks)
+            Console.WriteLine("[Q3] PARKING_BRAKE_SET did nothing while PARKING_BRAKES worked — keep the toggle and the differ-guard");
+        else
+            Console.WriteLine("[Q3] INCONCLUSIVE — neither event moved this aircraft's brake, so it has none. Retest on an aeroplane.");
+
+        sim.Dispose();
+        return setWorks ? 0 : toggleWorks ? 2 : 3;
     }
 
     private static void OnException(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data)

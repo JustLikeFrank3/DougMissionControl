@@ -141,12 +141,6 @@ internal sealed class HttpApi : IDisposable
                 await StreamEventsAsync(stream);
                 return;
 
-            // Debug view, not part of the contract. Served from here so it is
-            // same-origin with /state — see PreviewPage.cs.
-            case ("GET", "/preview"):
-                await WriteAsync(stream, "200 OK", "text/html; charset=utf-8", PreviewPage.Html);
-                return;
-
             case ("POST", "/command"):
                 JsonObject? body;
                 try { body = JsonNode.Parse(req.Body) as JsonObject; }

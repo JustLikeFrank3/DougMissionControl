@@ -32,9 +32,12 @@
 //        transmitting (SimBridge callers use the differ-guard in Program).
 //        If SimvarWatcher confirms PARKING_BRAKE_SET accepts a 1/0 parameter,
 //        add it below and switch parking brake to the explicit path.
-//   [Q4] There is no capability SimVar for autothrottle on this airframe class.
-//        capabilities.autothrottle is reported false and is not read from the
-//        sim. Confirm or find the right variable before any autothrottle work.
+//   [Q4] RESOLVED as unanswerable. There is no autothrottle CAPABILITY variable.
+//        AUTOTHROTTLE ACTIVE, AUTOPILOT THROTTLE ARM and AUTOPILOT MANAGED
+//        THROTTLE ACTIVE are all recognised by MSFS 2024 but all report present
+//        engagement, not fitment, so each reads false on an aircraft that has an
+//        autothrottle and is not using it. capabilities.autothrottle is
+//        published as null — unknown — rather than a fabricated false.
 
 using System.Runtime.InteropServices;
 
@@ -60,6 +63,7 @@ internal enum Event
     FlapsDecr,
     FlapsSet,
     ParkingBrakes,
+    ParkingBrakeSet,
     LandingLightsOn,
     LandingLightsOff,
     ApMaster,

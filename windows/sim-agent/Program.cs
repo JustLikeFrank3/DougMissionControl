@@ -44,6 +44,7 @@ internal static class Program
         // Step 0 instrument: dump every SimVar live and exit. No token, no
         // listener — it only reads, so it can run while the agent is running.
         if (args.Contains("--probe")) return Probe.Run();
+        if (args.Contains("--probe-events")) return Probe.RunEvents();
 
         string token;
         try

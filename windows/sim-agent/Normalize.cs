@@ -68,7 +68,14 @@ internal static class Normalize
         ["gear_retractable"] = Flag(c.IsGearRetractable),
         ["flap_detents"] = Flag(c.FlapsAvailable) ? Detents(c.FlapsNumHandlePositions) : 0,
         ["autopilot"] = Flag(c.AutopilotAvailable),
-        ["autothrottle"] = false,   // [Q4] not read from the sim; do not trust yet
+        // [Q4] RESOLVED as unanswerable: MSFS 2024 exposes no capability
+        // variable for autothrottle. AUTOTHROTTLE ACTIVE, AUTOPILOT THROTTLE
+        // ARM and AUTOPILOT MANAGED THROTTLE ACTIVE are all recognised but all
+        // describe present engagement, not fitment — each reads false on an
+        // aircraft that has one and simply is not using it. null says unknown
+        // rather than asserting absence, and stays falsy for any consumer that
+        // gates a control on it.
+        ["autothrottle"] = null,
         ["speedbrake"] = Flag(c.SpoilerAvailable),
     };
 
