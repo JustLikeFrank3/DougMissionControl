@@ -158,6 +158,15 @@
             <svg class="spark" viewBox="0 0 340 44" preserveAspectRatio="none"
                  data-key="pi.cpu_pct" data-unit="%" data-lo="0" data-hi="100"></svg>
           </div>
+          <!-- Liveness only: the mini runs no exporter, so this card claims
+               nothing beyond a ping and which service doors are open. -->
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">DOUG MINI</span>
+              <span class="h-pill" id="mini-pill">—</span>
+            </div>
+            <div class="h-rows" id="mini-rows"></div>
+          </div>
           <div class="bar">
             <span id="conn">connecting…</span>
             <span id="win">60 min · in memory</span>

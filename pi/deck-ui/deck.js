@@ -1251,6 +1251,18 @@
       ['uptime', pi.uptime != null ? fmtAgo(Date.now() / 1000 - pi.uptime) : '—']
     ]);
 
+    // The mini: liveness and open doors, nothing invented beyond them.
+    var mini = s.mini || {};
+    $('mini-pill').textContent = mini.up ? 'ONLINE' : 'OFFLINE';
+    $('mini-pill').className = 'h-pill ' + (mini.up ? 'ok' : 'off');
+    var doors = [mini.ssh ? 'ssh' : null, mini.screen ? 'screen share' : null]
+      .filter(Boolean).join(' · ');
+    rows($('mini-rows'), [
+      ['address', mini.ip || '—'],
+      ['services', mini.up ? (doors || 'none visible') : '—'],
+      ['last seen', mini.up ? 'now' : fmtAgo(mini.last_alive)]
+    ]);
+
     var log = $('log');
     log.innerHTML = '';
     (s.events || []).slice(0, 9).forEach(function (e) {

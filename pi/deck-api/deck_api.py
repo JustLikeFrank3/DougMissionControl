@@ -122,6 +122,9 @@ AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 # normal operation, so neither is reported as a fault.
 SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
 SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
+# The Mac mini. Liveness only — it runs no exporter, so the card claims
+# nothing beyond what a ping and two TCP handshakes can observe.
+MAC_LAN = cfg("MAC_LAN", "192.168.68.68")
 # Now-playing under Linux, when someone builds the endpoint: same /media shape
 # on this port. Absent is fine — the widget reads "no source".
 LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
@@ -223,6 +226,9 @@ class Deck:
             # kiosk reload does not eat it; a deck-api restart does, which is
             # acceptable for something rebuilt in a few taps.
             "nav_plan": [],
+            # The Mac mini: ping + service-port observations, nothing deeper.
+            "mini": {"up": False, "ssh": False, "screen": False,
+                     "ip": MAC_LAN, "last_alive": None},
             # Which copy of this file is actually running. `git pull` updates
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
@@ -406,6 +412,29 @@ def tcp_ok(host: str, port: int, timeout: float = 2.0) -> bool:
 
 
 _no_ping = threading.Event()
+
+
+def tcp_open(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def fetch_mini() -> dict:
+    """The Mac mini's card: liveness and which doors are open, nothing more.
+
+    macOS uses a randomized WiFi MAC, so the DHCP address can in principle
+    drift — MAC_LAN in boot.env is the one knob to turn if it does.
+    """
+    up = pingable(MAC_LAN)
+    return {"up": up,
+            "ssh": up and tcp_open(MAC_LAN, 22),
+            "screen": up and tcp_open(MAC_LAN, 5900),
+            "ip": MAC_LAN,
+            "last_alive": time.time() if up else
+                DECK.state.get("mini", {}).get("last_alive")}
 
 
 def pingable(host: str) -> bool:
@@ -996,6 +1025,7 @@ def poll_once(prev_os):
     changed = os_now != prev_os
     ws_telemetry, source = fetch_telemetry(os_now)
     sim_link = fetch_sim_link(os_now)
+    mini = fetch_mini()
 
     def apply(s):
         w = s["workstation"]
@@ -1006,6 +1036,7 @@ def poll_once(prev_os):
         w["os"] = os_now
         w["agent"] = agent
         s["sim"] = sim_link
+        s["mini"] = mini
         s["pi"] = read_pi_metrics()
         # Latest reading only. The browser holds the rolling window.
         s["telemetry"] = {"ts": time.time(), "source": source,
