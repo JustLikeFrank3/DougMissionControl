@@ -99,11 +99,16 @@ html, body {
 .body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
 .body-plain { grid-template-columns: 1fr; place-items: center; }
 
-.rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+/* min-height:0 on all three columns: without it a flex column sizes to its
+   content and silently overflows the 648 px the strip leaves, which is what
+   cut LIVE and the foot line in half. */
+.rail  { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;
+         min-height: 0; overflow: hidden; }
 .mid   { padding: 16px 22px; border-left: 1px solid var(--ln);
          display: flex; flex-direction: column; gap: 11px; }
 .right { padding: 16px 20px; border-left: 1px solid var(--ln);
-         display: flex; flex-direction: column; gap: 10px; }
+         display: flex; flex-direction: column; gap: 10px;
+         min-height: 0; overflow: hidden; }
 
 /* ── EVALS ─────────────────────────────────────────────────────────────── */
 
@@ -174,7 +179,9 @@ html, body {
   display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;
   cursor: pointer;
 }
-.tile { height: 158px; }                 /* ~22 mm at this panel's ~180 ppi */
+/* ~20 mm at this panel's ~180 ppi — still a comfortable touch target, and
+   four of them plus the state card now fit the rail without clipping. */
+.tile { height: 146px; }
 .abort { height: 96px; border-color: var(--rd); color: var(--rd); }
 
 .tile .glyph {
@@ -201,7 +208,7 @@ html, body {
 
 .tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
 
-.foot { font-size: 15px; color: var(--mut); margin-top: auto; }
+.foot { flex: none; font-size: 15px; color: var(--mut); margin-top: auto; }
 
 /* ── centre ────────────────────────────────────────────────────────────── */
 
@@ -243,9 +250,13 @@ html, body {
 
 /* ── right ─────────────────────────────────────────────────────────────── */
 
+/* Three host cards share what is left after the label and the status bar.
+   flex-basis 0 makes them divide the space rather than each demanding its
+   content height and pushing the bar off the bottom. */
 .host {
-  background: var(--pan); border: 1px solid var(--ln); padding: 14px 16px; flex: 1;
-  display: flex; flex-direction: column; gap: 10px;
+  background: var(--pan); border: 1px solid var(--ln); padding: 14px 16px;
+  flex: 1 1 0; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; gap: 8px;
 }
 .h-top { display: flex; justify-content: space-between; align-items: center; }
 .h-name { font-size: 21px; letter-spacing: .04em; }
@@ -260,7 +271,8 @@ html, body {
 .h-rows .k { color: var(--mut); }
 .h-rows .v { color: var(--fg); }
 
-.bar { display: flex; justify-content: space-between; font-size: 14px; color: var(--mut); }
+.bar { flex: none; display: flex; justify-content: space-between;
+       font-size: 14px; color: var(--mut); }
 .bar .live { color: var(--gr); }
 .bar .dead { color: var(--rd); }
 

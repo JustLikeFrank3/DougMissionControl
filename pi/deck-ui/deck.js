@@ -1366,7 +1366,7 @@
     $('abort').hidden = !boot.in_flight;
     $('foot').textContent = boot.in_flight
       ? 'a WOL packet already sent cannot be recalled'
-      : 'hold to arm · voice triggers land here too';
+      : 'hold to arm';
 
     // Workstation — only what the existing probes can honestly say.
     $('ws-pill').textContent = look.pill;
