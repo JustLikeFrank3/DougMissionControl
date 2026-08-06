@@ -45,8 +45,22 @@ internal static class Probe
         ("PLANE HEADING DEGREES MAGNETIC", "Radians"),
     };
 
+    // GEAR TOTAL PCT EXTENDED reported 1.0% on an aircraft sitting on the
+    // runway with its gear plainly down, and the dual-unit check ruled out a
+    // unit error. These are the alternative gear readouts, probed together so
+    // whichever one actually tracks the gear can be picked on evidence.
+    // Unrecognised names show as ERROR on their own row, which is itself an
+    // answer. Whatever wins here replaces the variable in SimVars.cs.
+    private static readonly (string Name, string Unit)[] Candidates =
+    {
+        ("GEAR TOTAL PCT EXTENDED",  "Percent"),
+        ("GEAR TOTAL PCT EXTENDED",  "Number"),
+        ("GEAR POSITION",            "Enum"),
+        ("GEAR ANIMATION POSITION",  "Percent"),
+    };
+
     private static readonly (string Name, string Unit)[] Rows =
-        SimVars.StateVars.Concat(SimVars.CapsVars).Concat(Ambiguous).ToArray();
+        SimVars.StateVars.Concat(SimVars.CapsVars).Concat(Ambiguous).Concat(Candidates).ToArray();
 
     private static double? Find(string name, string unit)
     {
@@ -197,7 +211,7 @@ internal static class Probe
     private static string Derive(string name, double v) => name switch
     {
         "GEAR HANDLE POSITION" => v > 0.5 ? "handle down" : "handle up",
-        "GEAR TOTAL PCT EXTENDED" => $"state \"{Normalize.GearState(Normalize.GearPct(v))}\" at pct {Normalize.GearPct(v):F1}",
+        "GEAR TOTAL PCT EXTENDED" => $"pct {v:F1}  -> would read \"{Normalize.GearStateFromPct(v)}\"  (REJECTED, see [Q1])",
         "FLAPS NUM HANDLE POSITIONS" => $"detents {Normalize.Detents(v)}",
         // No "looks like radians" hints here: a small value is not evidence of
         // anything, as [Q2] proved. The Verdict block below settles units by
@@ -209,6 +223,9 @@ internal static class Probe
         "AUTOPILOT MASTER" => v > 0.5 ? "engaged" : "off",
         "AIRSPEED INDICATED" => $"ias_kt {v:F0}",
         "INDICATED ALTITUDE" => $"alt_ft {v:F0}",
+        "GEAR CENTER POSITION" or "GEAR LEFT POSITION" or "GEAR RIGHT POSITION"
+            or "GEAR ANIMATION POSITION" => $"pct {v:F1}  -> would read \"{Normalize.GearStateFromPct(v)}\"",
+        "GEAR POSITION" => $"enum {v:F0}  (0=unknown 1=up 2=down, per docs)",
         _ => v > 0.5 ? "true" : "false",
     };
 }

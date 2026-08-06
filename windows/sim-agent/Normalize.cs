@@ -20,21 +20,35 @@ internal static class Normalize
     private const double UpPct = 0.5;
 
     /// <summary>
-    /// GEAR TOTAL PCT EXTENDED as a true 0..100 percent.
-    ///
-    /// [Q1] RESOLVED against a live MSFS 2024 session: requesting "Percent" and
-    /// "Percent Over 100" simultaneously returned 1.0000 and 0.0100 — exactly
-    /// 100x apart — so SimConnect honours the unit and "Percent" really is
-    /// 0..100. No scaling needed.
-    ///
-    /// This deliberately does NOT try to auto-detect the range. The earlier
-    /// "if it is under 1.0 it must be a fraction" guard read a genuine 1.0%
-    /// as 100% and published "down" for an almost fully retracted gear —
-    /// precisely the lie about observed state this agent exists to prevent.
+    /// Published gear percent: the LEAST extended leg. Conservative on purpose —
+    /// the panel should show the gear as still moving until the slowest leg has
+    /// finished, never the other way round.
     /// </summary>
-    public static double GearPct(double raw) => raw;
+    public static double GearPct(SimStateRaw s) =>
+        Math.Min(s.GearLeftPct, Math.Min(s.GearCenterPct, s.GearRightPct));
 
-    public static string GearState(double pct) =>
+    /// <summary>
+    /// Gear state from the three leg positions. Down requires EVERY leg down,
+    /// up requires every leg up, and anything else is transit — including the
+    /// asymmetric case a single total percentage could never represent.
+    ///
+    /// See [Q1] in SimVars.cs for why the brief's GEAR TOTAL PCT EXTENDED is
+    /// not used: it reports ~1% on an aircraft whose gear is fully down.
+    ///
+    /// Caveat worth re-probing per airframe: this assumes all three variables
+    /// are meaningful. Should an aircraft with no centre gear report a constant
+    /// 0 there, this reads transit forever — visibly wrong, and safe, rather
+    /// than a confident lie. Verified correct on the Beechcraft King Air.
+    /// </summary>
+    public static string GearState(SimStateRaw s)
+    {
+        var min = GearPct(s);
+        var max = Math.Max(s.GearLeftPct, Math.Max(s.GearCenterPct, s.GearRightPct));
+        return min >= DownPct ? "down" : max <= UpPct ? "up" : "transit";
+    }
+
+    /// <summary>Single-percentage form, for the probe's candidate comparison.</summary>
+    public static string GearStateFromPct(double pct) =>
         pct >= DownPct ? "down" : pct <= UpPct ? "up" : "transit";
 
     /// <summary>Flap detent count. See [Q2]: adjust here, not in SimVars.cs.</summary>
@@ -68,11 +82,10 @@ internal static class Normalize
 
         if (Flag(c.IsGearRetractable))
         {
-            var pct = GearPct(s.GearTotalPctExtended);
             controls["gear"] = new JsonObject
             {
-                ["state"] = GearState(pct),
-                ["pct"] = Math.Round(pct, 1),
+                ["state"] = GearState(s),
+                ["pct"] = Math.Round(GearPct(s), 1),
                 ["handle"] = Flag(s.GearHandlePosition) ? "down" : "up",
             };
         }
@@ -131,8 +144,8 @@ internal static class Normalize
     /// make "on change" meaningless.
     /// </summary>
     public static bool ControlsDiffer(SimStateRaw a, SimStateRaw b) =>
-        GearState(GearPct(a.GearTotalPctExtended)) != GearState(GearPct(b.GearTotalPctExtended))
-        || Math.Abs(GearPct(a.GearTotalPctExtended) - GearPct(b.GearTotalPctExtended)) >= 0.5
+        GearState(a) != GearState(b)
+        || Math.Abs(GearPct(a) - GearPct(b)) >= 0.5
         || Flag(a.GearHandlePosition) != Flag(b.GearHandlePosition)
         || (int)Math.Round(a.FlapsHandleIndex) != (int)Math.Round(b.FlapsHandleIndex)
         || Math.Abs(a.TrailingEdgeFlapsLeftAngleDeg - b.TrailingEdgeFlapsLeftAngleDeg) >= 0.5
