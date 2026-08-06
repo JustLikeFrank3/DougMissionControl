@@ -9,12 +9,19 @@ assumes no prior context.
 
 **Flight Deck** is a 2560 × 720 Corsair XENEON Edge touch panel on a Raspberry
 Pi 4B (`Node1`, user `fvm3`), running as a Wayland client under the Pi's
-existing labwc session. It has four surfaces — DECK, EVALS, MEDIA, SIM — behind
-a persistent 72 px navigation strip. DECK and EVALS work today; SIM is an empty
-placeholder reading *no link*. That placeholder is what this brief fills.
+existing labwc session. It has five surfaces — DECK, EVALS, NAV, SIM, SCREENS —
+behind a persistent 72 px navigation strip. All but SIM work today.
 
-Repo: `JustLikeFrank3/dualbootautomationproject`, branch
-`claude/multi-os-boot-dashboard-5qgfio`. Design notes in `docs/DESIGN.md`.
+**The Pi half of SIM is already built and waiting.** `deck-api` calls this
+agent, `deck.js` polls `/api/sim` and paints the controls, and NAV draws its
+moving map from the position this agent reports. Nothing on the Pi needs
+writing. The SIM chip reads *no link* for exactly one reason: nothing is
+answering on :9109. **This brief builds the thing that answers.**
+
+Repo: `JustLikeFrank3/dualbootautomationproject`, branch `main` — that is where
+the Pi-side work lives. (An older `claude/multi-os-boot-dashboard-5qgfio`
+branch still exists on the remote but is well behind; do not build against it.)
+Design notes in `docs/DESIGN.md`.
 
 | Host | Address | Runs |
 |---|---|---|
@@ -132,6 +139,35 @@ WebSocket `/stream` or SSE `/events`, emitting the `/state` shape on change.
 Readouts at ≥ 4 Hz; controls on change. Polling at 4 Hz is an acceptable v1
 fallback if push is awkward.
 
+### Also on :9109 — not SimConnect, but this agent owns them
+
+The workstation is always in one OS or the other, so the Pi needs the same two
+services from whichever is booted. Under Linux `linux/media-agent.py` serves
+them on :9110; under Windows **this agent serves them on :9109**, behind the
+same token. `deck-api` calls them at `/media`, `/media/art` and `/monitor` and
+does not reshape the replies, so the payloads must match the Linux agent
+exactly — read `linux/media-agent.py` as the contract, it is short and its
+docstrings say which shapes are shared.
+
+- **`GET /media`** — now-playing for the MEDIA widget. `{"active": false}` when
+  nothing is playing; otherwise `active`, `playing`, `title`, `artist`,
+  `album`, `app`, `position_s`, `duration_s`, `art_id`, and a `can` block of
+  `play_pause` / `next` / `prev`. Windows source is the SMTC
+  (`GlobalSystemMediaTransportControlsSessionManager`), the analogue of
+  `playerctl`.
+- **`GET /media/art`** — raw cover-art bytes for the current `art_id`, or 404.
+- **`GET /monitor`** — `{"monitors": [...]}`, one entry per display, each with
+  `index`, `desc`, `position`, `ddc`, `input_raw`, `input`, `inputs`. This
+  drives the SCREENS surface. **`POST /monitor`** switches an input:
+  `{"input": "...", "index": n}` (`index < 0` means all) → `{"ok", "input",
+  "monitors": [{"index", "desc", "sent"}]}`. `sent` means the DDC write
+  returned success — the read-back is the only proof anything moved. Windows
+  reaches DDC/CI through dxva2; unlike the sim endpoints this one is slow, and
+  `deck-api` already allows it 20 s.
+
+These are independent of MSFS: they must keep answering when no simulator is
+running, which is also why they cannot live behind the SimConnect session.
+
 ## The rule that matters most
 
 **The UI never renders the commanded state — only the observed one.**
@@ -149,11 +185,17 @@ gear already up — show as a failed command instead of a lie.
 
 ## Expected to disappear
 
-The agent starts with Windows and MSFS and vanishes on every reboot into
-Linux. **That is normal operation, not an error.** deck-api treats its loss as
-`SIM OFFLINE`, the strip shows SIM as *no link*, and the sim episode closes so
-the panel returns to the wallboard. Do not add retry alarms or failure states
-for this.
+The agent starts with Windows and vanishes on every reboot into Linux. **That
+is normal operation, not an error.** deck-api treats its loss as `SIM OFFLINE`,
+the strip shows SIM as *no link*, and the sim episode closes so the panel
+returns to the wallboard. Do not add retry alarms or failure states for this.
+
+Distinguish the two absences. The *agent* runs whenever Windows is up — MEDIA
+and SCREENS depend on it and have nothing to do with the simulator. The
+*SimConnect session* comes and goes with MSFS: with the agent up and MSFS down,
+`/health` answers with `sim.connected` false and `/state` returns **503**, which
+deck-api reads as "up, but holding no session". Never exit the process because
+MSFS is not running.
 
 ## Do not
 
@@ -179,6 +221,9 @@ for this.
 5. A command the sim ignores shows `NO RESPONSE`, not a false state.
 6. The other four controls toggle and read back; IAS / ALT / HDG update.
 7. Killing the agent puts the panel into `SIM OFFLINE` with no error state.
+8. With MSFS closed but the agent running, `/state` returns 503 and MEDIA and
+   SCREENS keep working — the Windows-side payloads matching what
+   `linux/media-agent.py` serves from the other boot.
 
 One correctly bidirectional GEAR control is worth more than twenty blind
 macro buttons. Prove the loop on gear before adding anything else.
