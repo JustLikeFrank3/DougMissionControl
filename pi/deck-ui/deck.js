@@ -442,6 +442,9 @@
   var navTrail = [];               // {t, lat, lon} — browser memory only
   var navTimer = null;
   var navZoom = null;              // null = auto-fit; integer = manual slippy z
+  // Manual zoom range. The auto-fit stops at 15; manual goes one closer, which
+  // is the level that shows taxiways.
+  var NAV_ZMIN = 8, NAV_ZMAX = 16;
   var navLastZ = 12;               // whatever the auto-fit last chose
 
   function navPoll(on) {
@@ -1470,9 +1473,9 @@
 
   // NAV zoom. Steps start from wherever the auto-fit currently sits, so the
   // first tap nudges rather than jumps; FIT hands framing back to auto.
+  function navClampZ(z) { return Math.max(NAV_ZMIN, Math.min(NAV_ZMAX, z)); }
   function navSetZoom(zOrNull) {
-    navZoom = zOrNull === null ? null
-      : Math.max(8, Math.min(16, zOrNull));
+    navZoom = zOrNull === null ? null : navClampZ(zOrNull);
     $('navp-fit').classList.toggle('on', navZoom === null);
     if (navTimer) navTick();
   }
@@ -1483,6 +1486,52 @@
     navSetZoom((navZoom === null ? navLastZ : navZoom) - 1);
   });
   $('navp-fit').addEventListener('click', function () { navSetZoom(null); });
+
+  // Pinch to zoom. The map only ever draws integer slippy zooms, so the
+  // gesture is measured continuously and committed each time it crosses a
+  // level — the same stepping the auto-fit does as a flight closes in.
+  //
+  // The base zoom is captured once, at touchdown, and every move is measured
+  // against THAT. Reading the current zoom each move would ratchet: each
+  // committed step would become the new baseline and a slow steady pinch
+  // would run away to the clamp.
+  (function () {
+    var cv = $('navp-canvas');
+    var span0 = 0, z0 = 0, zLast = 0;
+
+    function span(t) {
+      var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    cv.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      span0 = span(e.touches);
+      // Starting from the auto-fit's current level means the first pinch
+      // nudges from what is on screen, exactly like the +/- buttons.
+      z0 = zLast = (navZoom === null ? navLastZ : navZoom);
+    }, { passive: false });
+
+    cv.addEventListener('touchmove', function (e) {
+      if (e.touches.length !== 2 || !span0) return;
+      e.preventDefault();
+      var now = span(e.touches);
+      if (now < 8) return;              // fingers together: ratio goes wild
+      // Clamp before comparing, not after. Tracking the requested level past
+      // the limit would mean a pinch that overshot had to be given back the
+      // overshoot before the map moved again.
+      var z = navClampZ(Math.round(z0 + Math.log(now / span0) / Math.LN2));
+      if (z !== zLast) {
+        zLast = z;
+        navSetZoom(z);                  // drops FIT back off
+      }
+    }, { passive: false });
+
+    function end(e) { if (e.touches.length < 2) span0 = 0; }
+    cv.addEventListener('touchend', end);
+    cv.addEventListener('touchcancel', end);
+  })();
 
   // Flight-plan search overlay + its on-screen keyboard.
   navKbdBuild();

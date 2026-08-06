@@ -440,7 +440,10 @@ html, body {
 .ns-cap { font-size: 12px; letter-spacing: .22em; color: var(--mut); }
 .navrail .simt { flex: 1; }
 .simt-v.sm2 { font-size: 34px; }
-#navp-canvas { flex: 1; min-width: 0; background: #070a0f; }
+/* touch-action: none so the pinch reaches the canvas. Without it Chromium
+   claims the gesture for its own scroll/zoom before touchmove ever fires,
+   and the map would sit still while the whole kiosk page rubber-banded. */
+#navp-canvas { flex: 1; min-width: 0; background: #070a0f; touch-action: none; }
 
 /* NAV zoom — big enough for fingers, riding the map's right edge */
 .navmap { position: relative; }
