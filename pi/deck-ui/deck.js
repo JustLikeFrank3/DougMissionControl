@@ -856,6 +856,13 @@
     });
   });
 
+  // The AUTO sub-nav button is static HTML, so the dynamic-button wiring in
+  // renderEvalsNav never touches it — and no revision ever wired it, which
+  // made pinning a board a one-way door: you could leave the playlist but
+  // not return to it.
+  $('evals-nav').querySelector('[data-view="auto"]')
+    .addEventListener('click', function () { pickView('auto'); });
+
   // Surface navigation. Applied locally first so a tap feels instant on a
   // touch panel; the SSE frame confirms it a moment later.
   [].forEach.call(document.querySelectorAll('[data-surface]'), function (btn) {
