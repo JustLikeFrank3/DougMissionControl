@@ -509,3 +509,19 @@ html, body {
   background: #0b1016; }
 .navplan::-webkit-scrollbar-thumb, .nsx-results::-webkit-scrollbar-thumb {
   background: #2a3648; border: 4px solid #0b1016; border-radius: 11px; }
+
+/* ── SCREENS ───────────────────────────────────────────────────────────── */
+/* One card per physical monitor, inputs as hold-buttons. The pill is the
+   input the monitor REPORTS over DDC read-back, never the commanded one. */
+.dsp { display: flex; gap: 20px; padding: 24px; width: 100%; height: 100%;
+       align-items: stretch; justify-content: center; }
+.dspcard { flex: 1; max-width: 780px; background: var(--pan);
+           border: 1px solid var(--ln); padding: 22px 24px;
+           display: flex; flex-direction: column; gap: 14px; }
+.dspcard .h-name { font-size: 26px; }
+.dspcard .h-pill { font-size: 17px; }
+.dsp-desc { color: var(--mut); font-size: 15px; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; }
+.dsp-btns { margin-top: auto; display: grid; gap: 10px;
+            grid-template-columns: repeat(5, 1fr); }
+.dsp-btns .simbtn { padding: 16px 4px; font-size: 15px; }

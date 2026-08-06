@@ -25,8 +25,14 @@ internal sealed class DdcBridge
 {
     private const byte VCP_INPUT = 0x60;
 
+    // The fleet's actual panels: two HP 32f (HDMI x2 + VGA, no DP) and a
+    // Samsung G9 arriving (DP x2 + HDMI). Every input is offered on every
+    // card; the observed read-back is what says which ones a panel honours.
     public static readonly Dictionary<string, uint> Inputs = new()
     {
+        ["vga"] = 0x01,
+        ["dp1"] = 0x0F,
+        ["dp2"] = 0x10,
         ["hdmi1"] = 0x11,
         ["hdmi2"] = 0x12,
     };
@@ -76,10 +82,11 @@ internal sealed class DdcBridge
         return found;
     }
 
-    /// <summary>Every physical monitor with its OBSERVED current input.</summary>
+    /// <summary>Every physical monitor, indexed, with its OBSERVED input.</summary>
     public JsonObject Snapshot()
     {
         var monitors = new JsonArray();
+        var idx = 0;
         foreach (var m in Enumerate())
         {
             uint current = 0, max = 0;
@@ -88,6 +95,7 @@ internal sealed class DdcBridge
             var name = Inputs.FirstOrDefault(kv => kv.Value == (current & 0xFF)).Key;
             monitors.Add(new JsonObject
             {
+                ["index"] = idx++,
                 ["desc"] = m.szPhysicalMonitorDescription?.Trim() ?? "",
                 ["ddc"] = readable,
                 // Raw and translated both: a vendor-deviant code stays visible.
@@ -100,28 +108,37 @@ internal sealed class DdcBridge
     }
 
     /// <summary>
-    /// Command every monitor to the named input. "sent" per monitor means the
-    /// DDC write returned success — the read-back on the next snapshot is the
-    /// only proof the monitor actually moved.
+    /// Command ONE monitor (by enumeration index) to the named input, or every
+    /// monitor when index is -1. "sent" means the DDC write returned success —
+    /// the read-back on the next snapshot is the only proof anything moved.
     /// </summary>
-    public JsonObject Switch(string input)
+    public JsonObject Switch(string input, int index)
     {
         if (!Inputs.TryGetValue(input, out var code))
-            return new JsonObject { ["ok"] = false, ["reason"] = "input must be hdmi1 or hdmi2" };
+            return new JsonObject { ["ok"] = false, ["reason"] = "input must be one of " + string.Join("/", Inputs.Keys) };
 
         var results = new JsonArray();
         var any = false;
+        var idx = 0;
         foreach (var m in Enumerate())
         {
-            var sent = SetVCPFeature(m.hPhysicalMonitor, VCP_INPUT, code);
-            any |= sent;
-            results.Add(new JsonObject
+            var mine = index < 0 || idx == index;
+            if (mine)
             {
-                ["desc"] = m.szPhysicalMonitorDescription?.Trim() ?? "",
-                ["sent"] = sent,
-            });
+                var sent = SetVCPFeature(m.hPhysicalMonitor, VCP_INPUT, code);
+                any |= sent;
+                results.Add(new JsonObject
+                {
+                    ["index"] = idx,
+                    ["desc"] = m.szPhysicalMonitorDescription?.Trim() ?? "",
+                    ["sent"] = sent,
+                });
+            }
+            idx++;
             DestroyPhysicalMonitor(m.hPhysicalMonitor);
         }
+        if (results.Count == 0)
+            return new JsonObject { ["ok"] = false, ["reason"] = $"no monitor at index {index}" };
         return new JsonObject { ["ok"] = any, ["input"] = input, ["monitors"] = results };
     }
 }

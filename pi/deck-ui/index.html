@@ -27,6 +27,9 @@
         <button class="navb" data-surface="sim">
           <span class="t">SIM</span><span class="s" id="nav-sim">no link</span>
         </button>
+        <button class="navb" data-surface="displays">
+          <span class="t">SCREENS</span><span class="s" id="nav-displays">ddc</span>
+        </button>
       </nav>
 
       <div class="status" id="status">
@@ -159,19 +162,6 @@
             </div>
             <div class="h-rows" id="mini-rows"></div>
           </div>
-          <!-- DDC/CI via the Windows agent. Pill shows the OBSERVED input,
-               read back from the monitor — never the commanded one. -->
-          <div class="host">
-            <div class="h-top">
-              <span class="h-name">SHARED MONITOR</span>
-              <span class="h-pill" id="mon-pill">—</span>
-            </div>
-            <div class="h-rows" id="mon-rows"></div>
-            <div class="simcmd">
-              <button class="simbtn" id="mon-mac">MAC · HDMI1<i class="hold"></i></button>
-              <button class="simbtn" id="mon-pc">PC · HDMI2<i class="hold"></i></button>
-            </div>
-          </div>
           <div class="bar">
             <span id="conn">connecting…</span>
             <span id="win">60 min · in memory</span>
@@ -279,6 +269,22 @@
             <button id="navp-zout">&minus;</button>
           </div>
         </div>
+      </section>
+
+      <!-- ─────────── SCREENS ───────────
+           One card per physical monitor, switched over DDC/CI by the Windows
+           agent. Pills show the input each monitor REPORTS on read-back,
+           never the commanded one. -->
+      <section class="surface body-plain" data-name="displays">
+        <div class="placeholder" id="dsp-ph">
+          <div class="ph-pill" id="dsp-pill">NO LINK</div>
+          <div class="ph-t">SCREENS</div>
+          <div class="ph-s" id="dsp-ph-s">
+            Monitor input switching rides DDC/CI over the Windows boot's video
+            cables — when that machine is away, nobody can throw the switches.
+          </div>
+        </div>
+        <div class="dsp" id="dsp-live" hidden></div>
       </section>
 
       <!-- ─────────── SIM ─────────── -->

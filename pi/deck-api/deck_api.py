@@ -186,7 +186,7 @@ except OSError:
 # macro deck, and its SendInput keystrokes never reached the game anyway.
 # nav rides the sim agent's /state (lat/lon/gs/track readouts) via /api/sim —
 # no new endpoint, the pass-through already carries it.
-SURFACES = ("deck", "evals", "nav", "sim")
+SURFACES = ("deck", "evals", "nav", "sim", "displays")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
     DEFAULT_SURFACE = "evals"
@@ -1402,8 +1402,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(code, out)
 
         if path == "/api/monitor":
-            got = _ws_json(_sim_url("/monitor"),
-                           {"input": str(body.get("input") or "")}) if SIM_TOKEN else None
+            payload = {"input": str(body.get("input") or "")}
+            if isinstance(body.get("index"), int):
+                payload["index"] = body["index"]
+            got = _ws_json(_sim_url("/monitor"), payload) if SIM_TOKEN else None
             return self._json(200 if got else 502,
                               got or {"ok": False, "reason": "no link to the workstation"})
 

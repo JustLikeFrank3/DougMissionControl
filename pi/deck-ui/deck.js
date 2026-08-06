@@ -309,47 +309,81 @@
     simPoll(active === 'sim');
     npPoll(active === 'deck');
     navPoll(active === 'nav');
-    monPoll(active === 'deck');
+    dspPoll(active === 'displays');
   }
 
-  /* ── shared monitor (DDC via the Windows agent) ────────────────────────
-     The pill shows the input the monitor REPORTS, read back over DDC —
-     never the commanded one. A switch that the monitor ignored shows up as
-     the pill not moving, which is the truth. */
-  var monTimer = null;
+  /* ── SCREENS (DDC via the Windows agent) ───────────────────────────────
+     One card per physical monitor. Each pill shows the input that monitor
+     REPORTS on read-back — never the commanded one. A switch a panel
+     ignored shows up as the pill not moving, which is the truth. */
+  var DSP_INPUTS = [
+    ['vga', 'VGA'], ['hdmi1', 'HDMI 1'], ['hdmi2', 'HDMI 2'],
+    ['dp1', 'DP 1'], ['dp2', 'DP 2']
+  ];
+  var dspTimer = null, dspSig = null;
 
-  function monPoll(on) {
-    if (on && !monTimer) { monTick(); monTimer = setInterval(monTick, 5000); }
-    else if (!on && monTimer) { clearInterval(monTimer); monTimer = null; }
+  function dspPoll(on) {
+    if (on && !dspTimer) { dspTick(); dspTimer = setInterval(dspTick, 3000); }
+    else if (!on && dspTimer) { clearInterval(dspTimer); dspTimer = null; }
   }
 
-  function monTick() {
+  function dspTick() {
     fetch('/api/monitor', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
-      .then(paintMon)
-      .catch(function () { paintMon({ available: false, reason: 'deck-api unreachable' }); });
+      .then(paintDsp)
+      .catch(function () { paintDsp({ available: false, reason: 'deck-api unreachable' }); });
   }
 
-  function paintMon(d) {
+  function paintDsp(d) {
     d = d || {};
     var mons = d.monitors || [];
-    var first = mons[0] || {};
-    var pill = $('mon-pill');
-    var ok = d.available && mons.length > 0 && first.ddc;
-    pill.textContent = !d.available ? 'NO LINK'
-      : !mons.length ? 'NO MONITOR'
-      : !first.ddc ? 'NO DDC'
-      : (first.input === 'hdmi1' ? 'MAC · HDMI1'
-        : first.input === 'hdmi2' ? 'PC · HDMI2'
-        : 'INPUT ' + first.input_raw);
-    pill.className = 'h-pill ' + (ok ? 'ok' : 'off');
-    rows($('mon-rows'), [
-      ['panel', first.desc || (d.reason || '—')],
-      ['observed', ok ? (first.input || 'raw ' + first.input_raw) : '—']
-    ]);
-    var usable = !!d.available;
-    $('mon-mac').disabled = !usable;
-    $('mon-pc').disabled = !usable;
+    var live = d.available && mons.length > 0;
+    $('dsp-ph').hidden = live;
+    $('dsp-live').hidden = !live;
+    $('dsp-pill').textContent = d.available ? 'NO MONITORS' : 'NO LINK';
+    $('nav-displays').textContent = live ? mons.length + ' via ddc'
+      : (d.available ? 'none' : 'no link');
+    if (!live) return;
+
+    var box = $('dsp-live');
+    var sig = mons.map(function (m) { return m.index + ':' + m.desc; }).join('|');
+    if (sig !== dspSig) {
+      dspSig = sig;
+      box.innerHTML = '';
+      mons.forEach(function (m) {
+        var card = document.createElement('div');
+        card.className = 'dspcard';
+        card.dataset.idx = m.index;
+        card.innerHTML =
+          '<div class="h-top"><span class="h-name"></span>' +
+          '<span class="h-pill dsp-obs">—</span></div>' +
+          '<div class="dsp-desc"></div><div class="dsp-btns"></div>';
+        card.querySelector('.h-name').textContent = 'MON ' + (m.index + 1);
+        card.querySelector('.dsp-desc').textContent = m.desc || 'unnamed panel';
+        var btns = card.querySelector('.dsp-btns');
+        DSP_INPUTS.forEach(function (inp) {
+          var b = document.createElement('button');
+          b.className = 'simbtn';
+          b.innerHTML = '<span></span><i class="hold"></i>';
+          b.querySelector('span').textContent = inp[1];
+          wireHold(b, function () {
+            post('/api/monitor', { input: inp[0], index: m.index })
+              .then(function () { setTimeout(dspTick, 1500); });
+          });
+          btns.appendChild(b);
+        });
+        box.appendChild(card);
+      });
+    }
+    mons.forEach(function (m) {
+      var card = box.querySelector('.dspcard[data-idx="' + m.index + '"]');
+      if (!card) return;
+      var pill = card.querySelector('.dsp-obs');
+      pill.textContent = !m.ddc ? 'NO DDC'
+        : (m.input && m.input !== 'other') ? m.input.toUpperCase()
+        : 'INPUT ' + m.input_raw;
+      pill.className = 'h-pill dsp-obs ' + (m.ddc ? 'ok' : 'off');
+    });
   }
 
   /* ── NAV ───────────────────────────────────────────────────────────────
@@ -1414,15 +1448,6 @@
   navKbdBuild();
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
-  // Shared-monitor input switch: hold to fire, same as every other command,
-  // then re-read soon after — the monitor's answer is the only confirmation.
-  wireHold($('mon-mac'), function () {
-    post('/api/monitor', { input: 'hdmi1' }).then(function () { setTimeout(monTick, 1500); });
-  });
-  wireHold($('mon-pc'), function () {
-    post('/api/monitor', { input: 'hdmi2' }).then(function () { setTimeout(monTick, 1500); });
-  });
-
   $('navp-plansbtn').addEventListener('click', function () { navPlansOpen(true); });
   $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
   $('navp-saveas').addEventListener('click', function () {
