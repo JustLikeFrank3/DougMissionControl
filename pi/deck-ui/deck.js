@@ -517,40 +517,57 @@
     for (var i = 0; i < steps.length; i++) {
       if (steps[i] * scalePxNm < Math.min(W, H) / 2.2) ring = steps[i];
     }
-    g.strokeStyle = 'rgba(90, 110, 135, 0.5)'; g.fillStyle = '#8fa2b8';
+    g.strokeStyle = 'rgba(140, 165, 195, 0.55)'; g.fillStyle = '#aebfd4';
     g.font = '12px monospace';
     for (var n = 1; n <= 2; n++) {
       g.beginPath(); g.arc(me.x, me.y, ring * n * scalePxNm, 0, 7); g.stroke();
       g.fillText(ring * n + ' nm', me.x + 6, me.y - ring * n * scalePxNm + 14);
     }
 
+    // Symbology is CASED — a dark outline under every line and glyph, the
+    // way charts stay readable over any terrain. Bare magenta on Florida
+    // green disappeared; magenta over a dark casing does not.
+    function casedLine(path, color, width, dash) {
+      [['#070a0f', width + 3.5], [color, width]].forEach(function (pass) {
+        g.strokeStyle = pass[0]; g.lineWidth = pass[1];
+        if (dash) g.setLineDash(pass[0] === color ? dash : []);
+        g.beginPath(); path(); g.stroke();
+      });
+      g.setLineDash([]); g.lineWidth = 1;
+    }
+    function casedText(txt, x, y, color, font) {
+      g.font = font || 'bold 13px monospace';
+      g.lineWidth = 3.5; g.strokeStyle = '#070a0f'; g.strokeText(txt, x, y);
+      g.fillStyle = color; g.fillText(txt, x, y);
+      g.lineWidth = 1;
+    }
+
     // Trail — where we have actually been.
     if (navTrail.length > 1) {
-      g.strokeStyle = '#56cfe1'; g.lineWidth = 2.5; g.beginPath();
-      navTrail.forEach(function (p, idx) {
-        var q = px(p.lat, p.lon);
-        if (idx === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
-      });
-      g.stroke(); g.lineWidth = 1;
+      casedLine(function () {
+        navTrail.forEach(function (p, idx) {
+          var q = px(p.lat, p.lon);
+          if (idx === 0) g.moveTo(q.x, q.y); else g.lineTo(q.x, q.y);
+        });
+      }, '#56cfe1', 2.5);
     }
 
     // Every waypoint, the selected one tied to the aircraft by a course line.
     NAV_WPTS.forEach(function (w) {
       var q = px(w.lat, w.lon);
       var on = w.id === navSel;
+      var color = on ? '#ff7ad9' : '#aebfd4';
       if (on) {
-        g.strokeStyle = '#d95bb8'; g.setLineDash([7, 7]); g.lineWidth = 2;
-        g.beginPath(); g.moveTo(me.x, me.y); g.lineTo(q.x, q.y); g.stroke();
-        g.setLineDash([]); g.lineWidth = 1;
+        casedLine(function () {
+          g.moveTo(me.x, me.y); g.lineTo(q.x, q.y);
+        }, color, 2.5, [8, 8]);
       }
-      g.strokeStyle = on ? '#d95bb8' : '#8fa2b8'; g.lineWidth = 2;
+      g.fillStyle = '#070a0f';
       g.beginPath();
-      g.moveTo(q.x, q.y - 8); g.lineTo(q.x + 8, q.y); g.lineTo(q.x, q.y + 8);
-      g.lineTo(q.x - 8, q.y); g.closePath(); g.stroke();
-      g.lineWidth = 1;
-      g.fillStyle = on ? '#d95bb8' : '#8fa2b8';
-      g.font = 'bold 13px monospace';
-      g.fillText(w.id, q.x + 12, q.y + 4);
+      g.moveTo(q.x, q.y - 9); g.lineTo(q.x + 9, q.y); g.lineTo(q.x, q.y + 9);
+      g.lineTo(q.x - 9, q.y); g.closePath(); g.fill();
+      g.strokeStyle = color; g.lineWidth = 2.5; g.stroke(); g.lineWidth = 1;
+      casedText(w.id, q.x + 13, q.y + 4, color);
     });
 
     // The aircraft, rotated to its observed true track.
