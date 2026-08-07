@@ -388,6 +388,13 @@ html, body {
 .simt.na { opacity: .35; }
 .simt.na .simt-v { font-size: 22px; color: var(--mut); }
 
+/* AP bug steppers: four to a row, tap-to-fire. */
+.simcmd.steppers { display: flex; gap: 6px; }
+.simstep { flex: 1; padding: 10px 2px; border: 1px solid var(--ln);
+           background: #141d29; color: var(--fg); font-family: inherit;
+           font-size: 15px; letter-spacing: .02em; cursor: pointer; }
+.simstep:disabled { color: var(--mut); opacity: .45; cursor: default; }
+
 .sim-on  { color: var(--gr); }
 .sim-mid { color: var(--am); }
 .sim-off { color: var(--mut); }

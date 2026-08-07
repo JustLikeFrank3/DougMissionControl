@@ -369,6 +369,49 @@
                   <button class="simbtn" data-c="ap_master" data-a="set" data-v="off">OFF<i class="hold"></i></button>
                 </div>
               </div>
+              <!-- AP bugs. Steppers fire on TAP, not hold: nudging a bug one
+                   degree is not raising the gear, and each tap sets an
+                   absolute value computed from the observed position. -->
+              <div class="simt" id="simt-aphdg"><h3>AP HDG</h3><span class="simt-u">BUG</span>
+                <div class="simt-v" id="simv-aphdg">—</div>
+                <div class="simpend" id="simpd-aphdg"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_hdg" data-d="-10">&minus;10</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="-1">&minus;1</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="1">+1</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="10">+10</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apalt"><h3>AP ALT</h3><span class="simt-u">FT</span>
+                <div class="simt-v" id="simv-apalt">—</div>
+                <div class="simpend" id="simpd-apalt"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_alt" data-d="-1000">&minus;1000</button>
+                  <button class="simstep" data-c="ap_alt" data-d="-100">&minus;100</button>
+                  <button class="simstep" data-c="ap_alt" data-d="100">+100</button>
+                  <button class="simstep" data-c="ap_alt" data-d="1000">+1000</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apvs"><h3>AP V/S</h3><span class="simt-u">FPM</span>
+                <div class="simt-v" id="simv-apvs">—</div>
+                <div class="simpend" id="simpd-apvs"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_vs" data-d="-500">&minus;500</button>
+                  <button class="simstep" data-c="ap_vs" data-d="-100">&minus;100</button>
+                  <button class="simstep" data-c="ap_vs" data-d="100">+100</button>
+                  <button class="simstep" data-c="ap_vs" data-d="500">+500</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apspd"><h3>AP SPD</h3><span class="simt-u">KT</span>
+                <div class="simt-v" id="simv-apspd">—</div>
+                <div class="simpend" id="simpd-apspd"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_spd" data-d="-10">&minus;10</button>
+                  <button class="simstep" data-c="ap_spd" data-d="-1">&minus;1</button>
+                  <button class="simstep" data-c="ap_spd" data-d="1">+1</button>
+                  <button class="simstep" data-c="ap_spd" data-d="10">+10</button>
+                </div>
+              </div>
             </div>
             <div class="sim-gauges">
               <!-- Attitude: the horizon group rotates with bank and slides

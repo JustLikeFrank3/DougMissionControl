@@ -69,6 +69,10 @@ internal enum Event
     LandingLightsOn,
     LandingLightsOff,
     ApMaster,
+    HeadingBugSet,
+    ApAltVarSet,
+    ApVsVarSet,
+    ApSpdVarSet,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -99,6 +103,10 @@ internal struct SimStateRaw
     public double FuelTotalGal;
     public double PlanePitchDeg;
     public double PlaneBankDeg;
+    public double ApHdgDeg;
+    public double ApAltFt;
+    public double ApVsFpm;
+    public double ApSpdKt;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -172,6 +180,11 @@ internal static class SimVars
         ("FUEL TOTAL QUANTITY",            "Gallons"),
         ("PLANE PITCH DEGREES",            "Degrees"),           // radians natively
         ("PLANE BANK DEGREES",             "Degrees"),           // radians natively
+        // AP bug positions — commanded state, observed back from the sim.
+        ("AUTOPILOT HEADING LOCK DIR",     "Degrees"),
+        ("AUTOPILOT ALTITUDE LOCK VAR",    "Feet"),
+        ("AUTOPILOT VERTICAL HOLD VAR",    "Feet/minute"),
+        ("AUTOPILOT AIRSPEED HOLD VAR",    "Knots"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -217,5 +230,9 @@ internal static class SimVars
         (Event.LandingLightsOn,  "LANDING_LIGHTS_ON"),          // explicit, so a
         (Event.LandingLightsOff, "LANDING_LIGHTS_OFF"),         // dropped frame
         (Event.ApMaster,         "AP_MASTER"),                  // can't invert state
+        (Event.HeadingBugSet,    "HEADING_BUG_SET"),            // takes degrees
+        (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
+        (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm
+        (Event.ApSpdVarSet,      "AP_SPD_VAR_SET"),             // takes knots
     };
 }

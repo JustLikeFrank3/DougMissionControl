@@ -134,6 +134,12 @@ internal static class Normalize
             {
                 ["state"] = Flag(s.AutopilotMaster) ? "engaged" : "off",
             };
+            // One entry per bug: the command gate is ContainsKey(control), so
+            // each settable thing must be its own key.
+            controls["ap_hdg"] = new JsonObject { ["deg"] = (int)Math.Round(Heading(s.ApHdgDeg)) % 360 };
+            controls["ap_alt"] = new JsonObject { ["ft"] = (int)Math.Round(s.ApAltFt) };
+            controls["ap_vs"] = new JsonObject { ["fpm"] = (int)Math.Round(s.ApVsFpm) };
+            controls["ap_spd"] = new JsonObject { ["kt"] = (int)Math.Round(s.ApSpdKt) };
         }
 
         return controls;
@@ -211,5 +217,11 @@ internal static class Normalize
         || Math.Abs(a.TrailingEdgeFlapsLeftAngleDeg - b.TrailingEdgeFlapsLeftAngleDeg) >= 0.5
         || Flag(a.BrakeParkingPosition) != Flag(b.BrakeParkingPosition)
         || Flag(a.LightLanding) != Flag(b.LightLanding)
-        || Flag(a.AutopilotMaster) != Flag(b.AutopilotMaster);
+        || Flag(a.AutopilotMaster) != Flag(b.AutopilotMaster)
+        // Bug turns are control moves: publish them at once or the panel's
+        // steppers feel a half-second behind the finger.
+        || (int)Math.Round(a.ApHdgDeg) != (int)Math.Round(b.ApHdgDeg)
+        || (int)Math.Round(a.ApAltFt) != (int)Math.Round(b.ApAltFt)
+        || (int)Math.Round(a.ApVsFpm) != (int)Math.Round(b.ApVsFpm)
+        || (int)Math.Round(a.ApSpdKt) != (int)Math.Round(b.ApSpdKt);
 }

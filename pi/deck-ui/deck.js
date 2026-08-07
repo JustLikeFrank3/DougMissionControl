@@ -1051,6 +1051,12 @@
   var simLast = null;
 
   // The observed position of a control, in the same vocabulary the buttons use.
+  var AP_VARS = {
+    ap_hdg: { field: 'deg', min: 0, max: 359, wrap: true },
+    ap_alt: { field: 'ft', min: 0, max: 60000 },
+    ap_vs: { field: 'fpm', min: -8000, max: 8000 },
+    ap_spd: { field: 'kt', min: 0, max: 900 }
+  };
   function simObserved(control, c) {
     c = c || {};
     if (control === 'gear') return c.gear ? c.gear.state : null;
@@ -1058,6 +1064,8 @@
     if (control === 'parking_brake') return c.parking_brake ? c.parking_brake.state : null;
     if (control === 'landing_lights') return c.landing_lights ? c.landing_lights.state : null;
     if (control === 'ap_master') return c.ap_master ? c.ap_master.state : null;
+    var ap = AP_VARS[control];
+    if (ap) return c[control] ? String(c[control][ap.field]) : null;
     return null;
   }
 
@@ -1116,7 +1124,7 @@
   // wheels, no flaps. Grey it and name it; never render a dead control.
   function simAvail(key, present) {
     $('simt-' + key).classList.toggle('na', !present);
-    [].forEach.call($('simt-' + key).querySelectorAll('.simbtn'), function (b) {
+    [].forEach.call($('simt-' + key).querySelectorAll('.simbtn, .simstep'), function (b) {
       b.disabled = !present;
     });
     if (!present) {
@@ -1205,6 +1213,19 @@
     simSimple('lights', !!c.landing_lights, c.landing_lights ? c.landing_lights.state : '', 'on');
     simSimple('ap', !!c.ap_master, c.ap_master ? c.ap_master.state : '', 'engaged');
 
+    if (simAvail('aphdg', !!c.ap_hdg)) {
+      $('simv-aphdg').textContent = ('00' + c.ap_hdg.deg).slice(-3) + '°';
+    }
+    if (simAvail('apalt', !!c.ap_alt)) {
+      $('simv-apalt').textContent = c.ap_alt.ft;
+    }
+    if (simAvail('apvs', !!c.ap_vs)) {
+      $('simv-apvs').textContent = (c.ap_vs.fpm > 0 ? '+' : '') + c.ap_vs.fpm;
+    }
+    if (simAvail('apspd', !!c.ap_spd)) {
+      $('simv-apspd').textContent = c.ap_spd.kt;
+    }
+
     var r = st.readouts || {};
     $('simv-ias').textContent = r.ias_kt;
     $('simv-alt').textContent = r.alt_ft;
@@ -1227,6 +1248,10 @@
     simRenderPending('park', 'parking_brake', c);
     simRenderPending('lights', 'landing_lights', c);
     simRenderPending('ap', 'ap_master', c);
+    simRenderPending('aphdg', 'ap_hdg', c);
+    simRenderPending('apalt', 'ap_alt', c);
+    simRenderPending('apvs', 'ap_vs', c);
+    simRenderPending('apspd', 'ap_spd', c);
   }
 
   /* ── EFIS gauges: attitude + compass rose ────────────────────────────
@@ -1603,6 +1628,21 @@
   [].forEach.call(document.querySelectorAll('.simbtn'), function (b) {
     wireHold(b, function () {
       simSend(b.dataset.c, b.dataset.a, b.dataset.v || null);
+    });
+  });
+
+  // AP bug steppers. Absolute set computed from the observed value at tap
+  // time: a dropped command leaves the bug where it was, never double-steps.
+  [].forEach.call(document.querySelectorAll('.simstep'), function (b) {
+    b.addEventListener('click', function () {
+      var ctl = b.dataset.c;
+      var ap = AP_VARS[ctl];
+      var c = (simLast && simLast.controls) || {};
+      if (!c[ctl]) return;
+      var v = c[ctl][ap.field] + Number(b.dataset.d);
+      v = ap.wrap ? ((v % 360) + 360) % 360
+                  : Math.max(ap.min, Math.min(ap.max, v));
+      simSend(ctl, 'set', String(v));
     });
   });
 
