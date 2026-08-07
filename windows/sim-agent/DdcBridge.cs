@@ -144,7 +144,11 @@ internal sealed class DdcBridge
     // Physical monitor plus where its desktop rectangle sits, so the panel can
     // say "left"/"right" from geometry instead of from a hardcoded guess that
     // rots the moment the desk is rearranged.
-    private readonly record struct Found(PHYSICAL_MONITOR Mon, int X, int Y, int W, int H, bool Primary);
+    // Seq is the monitor's position within its HMONITOR's physical-monitor
+    // array. Cloned displays share one HMONITOR and therefore one desktop
+    // rectangle, so geometry alone cannot order them and Seq is the only
+    // stable tiebreak available.
+    private readonly record struct Found(PHYSICAL_MONITOR Mon, int X, int Y, int W, int H, bool Primary, int Seq);
 
     private static List<Found> Enumerate()
     {
@@ -159,12 +163,14 @@ internal sealed class DdcBridge
                     var info = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
                     var ok = GetMonitorInfo(hMon, ref info);
                     var r = info.rcMonitor;
+                    var seq = 0;
                     foreach (var p in phys)
                     {
                         found.Add(new Found(p,
                             ok ? r.Left : 0, ok ? r.Top : 0,
                             ok ? r.Right - r.Left : 0, ok ? r.Bottom - r.Top : 0,
-                            ok && (info.dwFlags & 1) != 0));   // MONITORINFOF_PRIMARY
+                            ok && (info.dwFlags & 1) != 0,   // MONITORINFOF_PRIMARY
+                            seq++));
                     }
                 }
             }
@@ -174,12 +180,38 @@ internal sealed class DdcBridge
         // (a G9 above a pair of HPs), not a single line. Rows are grouped by
         // vertical overlap rather than exact Y, since panels of different
         // heights rarely share a top edge.
-        found.Sort((a, b) =>
+        //
+        // This was one Sort whose comparator asked "do these two overlap
+        // vertically?". Overlap is NOT transitive — A can overlap B and B
+        // overlap C while A and C do not — so that comparator was not a strict
+        // weak ordering, and List.Sort's output depended on the order
+        // EnumDisplayMonitors happened to hand the monitors over, which it does
+        // not promise to keep stable between calls. Snapshot() and Switch()
+        // enumerate separately, so the two could settle on different orders and
+        // a card would command a monitor other than the one it was labelled
+        // for: the right-hand card throwing the left-hand monitor's input.
+        //
+        // Band the rows once, then sort on integer keys. Banding is transitive
+        // by construction, so the result is the same for a given set of
+        // rectangles no matter what order they arrive in.
+        var byRow = found.OrderBy(f => f.Y + f.H / 2).ThenBy(f => f.X)
+                         .ThenBy(f => f.Y).ThenBy(f => f.W).ThenBy(f => f.H)
+                         .ThenBy(f => f.Seq).ToList();
+        var band = new int[byRow.Count];
+        var bandIdx = 0;
+        var bandBottom = int.MinValue;
+        for (var i = 0; i < byRow.Count; i++)
         {
-            var sameRow = a.Y < b.Y + b.H / 2 && b.Y < a.Y + a.H / 2;
-            return sameRow ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y);
-        });
-        return found;
+            var f = byRow[i];
+            if (i == 0) bandBottom = f.Y + f.H;
+            else if (f.Y >= bandBottom) { bandIdx++; bandBottom = f.Y + f.H; }
+            else bandBottom = Math.Max(bandBottom, f.Y + f.H);
+            band[i] = bandIdx;
+        }
+        return byRow.Select((f, i) => (f, row: band[i]))
+                    .OrderBy(t => t.row).ThenBy(t => t.f.X).ThenBy(t => t.f.Y)
+                    .ThenBy(t => t.f.W).ThenBy(t => t.f.H).ThenBy(t => t.f.Seq)
+                    .Select(t => t.f).ToList();
     }
 
     /// <summary>Every physical monitor, indexed, with its OBSERVED input.</summary>
