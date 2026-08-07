@@ -129,7 +129,7 @@ internal static class Program
     /// has actually moved, and otherwise at the readout cadence, so "on change"
     /// keeps meaning something while IAS still updates smoothly.
     /// </summary>
-    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, string aircraft)
+    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, SimGpsRaw gps, string aircraft)
     {
         lock (PublishLock)
         {
@@ -138,7 +138,7 @@ internal static class Program
             if (!due && !moved) return;
 
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps);
+            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps, gps);
 
             _lastPublished = state;
             _lastPublishedAt = DateTime.UtcNow;
@@ -281,6 +281,28 @@ internal static class Program
                     "off" => On(s.AutopilotMaster) ? Send(Event.ApMaster) : Noop,
                     _ => Invalid("invalid value"),
                 };
+
+            case "ap_hdg":
+                if (action != "set") return Invalid("unsupported action");
+                if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
+                return Send(Event.HeadingBugSet, (uint)(((hdg % 360) + 360) % 360));
+
+            case "ap_alt":
+                if (action != "set") return Invalid("unsupported action");
+                if (!int.TryParse(value, out var alt) || alt < 0 || alt > 60000) return Invalid("invalid value");
+                return Send(Event.ApAltVarSet, (uint)alt);
+
+            case "ap_vs":
+                if (action != "set") return Invalid("unsupported action");
+                if (!int.TryParse(value, out var vs) || Math.Abs(vs) > 8000) return Invalid("invalid value");
+                // Negative climbs ride as two's complement — the sim reads the
+                // event's DWORD back as signed.
+                return Send(Event.ApVsVarSet, unchecked((uint)vs));
+
+            case "ap_spd":
+                if (action != "set") return Invalid("unsupported action");
+                if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
+                return Send(Event.ApSpdVarSet, (uint)spd);
 
             default:
                 return Invalid("unknown control");

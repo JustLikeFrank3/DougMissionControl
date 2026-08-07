@@ -337,7 +337,37 @@ html, body {
 .sim-controls { flex: 3; display: grid; gap: 14px;
                 grid-template-columns: 1.7fr 1fr 1fr 1fr 1fr; }
 .sim-reads { flex: 1.1; display: grid; gap: 14px;
+             grid-template-columns: 1fr 1fr;
              grid-template-rows: repeat(3, 1fr); }
+
+/* EFIS gauge pair. The svg is square inside a flexible tile; height rules. */
+.sim-gauges { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.gauge { position: relative; flex: 1; min-height: 0; display: grid;
+         place-items: center; background: var(--pan); border: 1px solid var(--ln); }
+.gauge h3 { position: absolute; top: 14px; left: 18px; font-size: 13px;
+            font-weight: 400; letter-spacing: .2em; color: var(--mut); }
+.gauge svg { height: 92%; aspect-ratio: 1; }
+.gauge-ring { fill: none; stroke: var(--ln); stroke-width: 2; }
+.ai-sky { fill: #16324a; }
+.ai-gnd { fill: #332613; }
+.ai-hzn { stroke: #e2e9f2; stroke-width: 2; }
+.ai-wings { fill: none; stroke: var(--am); stroke-width: 3.5; }
+.ai-dot { fill: var(--am); }
+.ai-ladder line { stroke: #cdd6e2; stroke-width: 1.4; }
+.ai-ladder text { fill: #cdd6e2; font-size: 9px; text-anchor: middle; }
+#simg-horizon { transition: transform .45s linear; transform-origin: 100px 100px; }
+#simg-rose { transition: transform .45s linear; transform-origin: 100px 100px; }
+.hsi-lubber { fill: var(--am); }
+.hsi-digital { fill: var(--fg); font-size: 26px; text-anchor: middle;
+               font-family: inherit; letter-spacing: .04em; }
+.rose-tick { stroke: var(--mut); stroke-width: 1.6; }
+.rose-tick.card { stroke: var(--fg); stroke-width: 2.2; }
+.rose-lbl { fill: var(--fg); font-size: 15px; text-anchor: middle; }
+.rose-lbl.minor { fill: var(--mut); font-size: 11px; }
+.gauge-na { position: absolute; inset: 0; display: none; place-items: center;
+            font-size: 13px; letter-spacing: .18em; color: var(--mut);
+            background: color-mix(in srgb, var(--pan) 72%, transparent); }
+.gauge.na .gauge-na { display: grid; }
 
 .simt { position: relative; min-height: 0; overflow: hidden;
         display: flex; flex-direction: column; justify-content: center;
@@ -348,12 +378,22 @@ html, body {
           letter-spacing: .16em; color: var(--mut); }
 .simt-v { font-size: 44px; line-height: 1.05; letter-spacing: .03em; }
 .simt-v.big { font-size: 56px; }
+/* Two engines on one line: "2410 / 2395" at 56px wraps, and a wrapped RPM
+   reads like two stacked instruments. */
+.simt-v.big.twin { font-size: 30px; }
 .simt-s { margin-top: 8px; min-height: 1.1em; font-size: 14px;
           letter-spacing: .06em; color: var(--mut); }
 
 /* Not fitted on this airframe — greyed and named, never a dead control. */
 .simt.na { opacity: .35; }
 .simt.na .simt-v { font-size: 22px; color: var(--mut); }
+
+/* AP bug steppers: four to a row, tap-to-fire. */
+.simcmd.steppers { display: flex; gap: 6px; }
+.simstep { flex: 1; padding: 10px 2px; border: 1px solid var(--ln);
+           background: #141d29; color: var(--fg); font-family: inherit;
+           font-size: 15px; letter-spacing: .02em; cursor: pointer; }
+.simstep:disabled { color: var(--mut); opacity: .45; cursor: default; }
 
 .sim-on  { color: var(--gr); }
 .sim-mid { color: var(--am); }
@@ -506,6 +546,8 @@ html, body {
           letter-spacing: .12em; cursor: pointer; }
 /* SAVE with an empty plan. Visibly unavailable beats silently inert. */
 .navadd:disabled { color: var(--mut); opacity: .45; cursor: default; }
+/* SYNC engaged: the sim's GPS owns the plan and the border says so. */
+.navadd.on { border-style: solid; border-color: var(--cy); color: var(--cy); }
 
 /* Search overlay + on-screen keyboard */
 .navsearch { position: absolute; inset: 0; background: rgba(11, 15, 21, .96);

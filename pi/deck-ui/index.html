@@ -218,6 +218,7 @@
               <button class="navadd" id="navp-add">+ ADD</button>
               <button class="navadd" id="navp-save">SAVE</button>
               <button class="navadd" id="navp-plansbtn">PLANS</button>
+              <button class="navadd" id="navp-sync">SYNC</button>
             </div>
             <div class="navsteer">
               <svg viewBox="0 0 100 100" id="navp-arrow">
@@ -370,6 +371,79 @@
                   <button class="simbtn" data-c="ap_master" data-a="set" data-v="off">OFF<i class="hold"></i></button>
                 </div>
               </div>
+              <!-- AP bugs. Steppers fire on TAP, not hold: nudging a bug one
+                   degree is not raising the gear, and each tap sets an
+                   absolute value computed from the observed position. -->
+              <div class="simt" id="simt-aphdg"><h3>AP HDG</h3><span class="simt-u">BUG</span>
+                <div class="simt-v" id="simv-aphdg">—</div>
+                <div class="simpend" id="simpd-aphdg"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_hdg" data-d="-10">&minus;10</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="-1">&minus;1</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="1">+1</button>
+                  <button class="simstep" data-c="ap_hdg" data-d="10">+10</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apalt"><h3>AP ALT</h3><span class="simt-u">FT</span>
+                <div class="simt-v" id="simv-apalt">—</div>
+                <div class="simpend" id="simpd-apalt"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_alt" data-d="-1000">&minus;1000</button>
+                  <button class="simstep" data-c="ap_alt" data-d="-100">&minus;100</button>
+                  <button class="simstep" data-c="ap_alt" data-d="100">+100</button>
+                  <button class="simstep" data-c="ap_alt" data-d="1000">+1000</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apvs"><h3>AP V/S</h3><span class="simt-u">FPM</span>
+                <div class="simt-v" id="simv-apvs">—</div>
+                <div class="simpend" id="simpd-apvs"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_vs" data-d="-500">&minus;500</button>
+                  <button class="simstep" data-c="ap_vs" data-d="-100">&minus;100</button>
+                  <button class="simstep" data-c="ap_vs" data-d="100">+100</button>
+                  <button class="simstep" data-c="ap_vs" data-d="500">+500</button>
+                </div>
+              </div>
+              <div class="simt" id="simt-apspd"><h3>AP SPD</h3><span class="simt-u">KT</span>
+                <div class="simt-v" id="simv-apspd">—</div>
+                <div class="simpend" id="simpd-apspd"></div>
+                <div class="simcmd steppers">
+                  <button class="simstep" data-c="ap_spd" data-d="-10">&minus;10</button>
+                  <button class="simstep" data-c="ap_spd" data-d="-1">&minus;1</button>
+                  <button class="simstep" data-c="ap_spd" data-d="1">+1</button>
+                  <button class="simstep" data-c="ap_spd" data-d="10">+10</button>
+                </div>
+              </div>
+            </div>
+            <div class="sim-gauges">
+              <!-- Attitude: the horizon group rotates with bank and slides
+                   with pitch; the wings stay fixed, like the real instrument. -->
+              <div class="gauge"><h3>ATT</h3>
+                <svg viewBox="0 0 200 200">
+                  <defs><clipPath id="ai-clip"><circle cx="100" cy="100" r="86"/></clipPath></defs>
+                  <g clip-path="url(#ai-clip)">
+                    <g id="simg-horizon">
+                      <rect x="-140" y="-380" width="480" height="480" class="ai-sky"/>
+                      <rect x="-140" y="100" width="480" height="480" class="ai-gnd"/>
+                      <line x1="-140" y1="100" x2="340" y2="100" class="ai-hzn"/>
+                      <g id="simg-ladder"></g>
+                    </g>
+                  </g>
+                  <circle cx="100" cy="100" r="86" class="gauge-ring"/>
+                  <path class="ai-wings" d="M40 100 L78 100 L86 108 L94 100 L106 100 L114 108 L122 100 L160 100"/>
+                  <circle cx="100" cy="100" r="2.6" class="ai-dot"/>
+                </svg>
+                <div class="gauge-na" id="simg-ai-na">NOT REPORTED</div>
+              </div>
+              <!-- Compass: the rose card turns under a fixed lubber line. -->
+              <div class="gauge"><h3>HDG</h3>
+                <svg viewBox="0 0 200 200">
+                  <circle cx="100" cy="100" r="86" class="gauge-ring"/>
+                  <g id="simg-rose"></g>
+                  <path class="hsi-lubber" d="M100 6 L94 22 L106 22 Z"/>
+                  <text x="100" y="108" class="hsi-digital" id="simg-hdg-txt">—</text>
+                </svg>
+              </div>
             </div>
             <div class="sim-reads">
               <div class="simt"><h3>IAS</h3><span class="simt-u">KT</span>
@@ -378,6 +452,12 @@
                 <div class="simt-v big" id="simv-alt">—</div></div>
               <div class="simt"><h3>HDG</h3><span class="simt-u">MAG</span>
                 <div class="simt-v big" id="simv-hdg">—</div></div>
+              <div class="simt"><h3>V/S</h3><span class="simt-u">FPM</span>
+                <div class="simt-v big" id="simv-vs">—</div></div>
+              <div class="simt"><h3>RPM</h3><span class="simt-u" id="simu-rpm"></span>
+                <div class="simt-v big" id="simv-rpm">—</div></div>
+              <div class="simt"><h3>FUEL</h3><span class="simt-u">GAL</span>
+                <div class="simt-v big" id="simv-fuel">—</div></div>
             </div>
           </div>
         </div>

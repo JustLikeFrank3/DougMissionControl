@@ -45,9 +45,9 @@ using System.Runtime.InteropServices;
 
 namespace FlightDeckSimAgent;
 
-internal enum Definition { State = 0, Caps = 1, Title = 2 }
+internal enum Definition { State = 0, Caps = 1, Title = 2, Gps = 3 }
 
-internal enum Request { State = 0, Caps = 1, Title = 2 }
+internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3 }
 
 internal enum Group { Main = 0 }
 
@@ -69,6 +69,10 @@ internal enum Event
     LandingLightsOn,
     LandingLightsOff,
     ApMaster,
+    HeadingBugSet,
+    ApAltVarSet,
+    ApVsVarSet,
+    ApSpdVarSet,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -93,6 +97,16 @@ internal struct SimStateRaw
     public double PlaneLonDeg;
     public double GroundSpeedKt;
     public double GpsTrueTrackDeg;
+    public double EngRpm1;
+    public double EngRpm2;
+    public double VerticalSpeedFpm;
+    public double FuelTotalGal;
+    public double PlanePitchDeg;
+    public double PlaneBankDeg;
+    public double ApHdgDeg;
+    public double ApAltFt;
+    public double ApVsFpm;
+    public double ApSpdKt;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -110,6 +124,25 @@ internal struct SimTitleRaw
 {
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
     public string Title;
+}
+
+// The GPS's view of the active flight plan. SimConnect exposes only the leg
+// being flown — prev and next — plus index/count; the full route is not
+// readable as SimVars. The panel accumulates legs as they sequence.
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct SimGpsRaw
+{
+    public double FlightPlanActive;
+    public double WpCount;
+    public double WpIndex;
+    public double NextLatDeg;
+    public double NextLonDeg;
+    public double PrevLatDeg;
+    public double PrevLonDeg;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    public string NextId;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+    public string PrevId;
 }
 
 internal static class SimVars
@@ -139,6 +172,19 @@ internal static class SimVars
         ("PLANE LONGITUDE",                "Degrees"),           // radians natively
         ("GROUND VELOCITY",                "Knots"),
         ("GPS GROUND TRUE TRACK",          "Degrees"),           // radians natively
+        // SIM readouts, second batch. Appended at the END, same rule as above.
+        // Not yet Step-0 verified against SimvarWatcher — flag here if wrong.
+        ("GENERAL ENG RPM:1",              "Rpm"),
+        ("GENERAL ENG RPM:2",              "Rpm"),               // 0 on singles
+        ("VERTICAL SPEED",                 "feet/minute"),
+        ("FUEL TOTAL QUANTITY",            "Gallons"),
+        ("PLANE PITCH DEGREES",            "Degrees"),           // radians natively
+        ("PLANE BANK DEGREES",             "Degrees"),           // radians natively
+        // AP bug positions — commanded state, observed back from the sim.
+        ("AUTOPILOT HEADING LOCK DIR",     "Degrees"),
+        ("AUTOPILOT ALTITUDE LOCK VAR",    "Feet"),
+        ("AUTOPILOT VERTICAL HOLD VAR",    "Feet/minute"),
+        ("AUTOPILOT AIRSPEED HOLD VAR",    "Knots"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -151,6 +197,25 @@ internal static class SimVars
     };
 
     public const string TitleVar = "TITLE";
+
+    // Doubles first, strings after — same order as SimGpsRaw's fields, and the
+    // strings are registered separately because their datum type differs.
+    public static readonly (string Name, string Unit)[] GpsVars =
+    {
+        ("GPS IS ACTIVE FLIGHT PLAN",   "Bool"),
+        ("GPS FLIGHT PLAN WP COUNT",    "Number"),
+        ("GPS FLIGHT PLAN WP INDEX",    "Number"),
+        ("GPS WP NEXT LAT",             "Degrees"),           // radians natively
+        ("GPS WP NEXT LON",             "Degrees"),           // radians natively
+        ("GPS WP PREV LAT",             "Degrees"),           // radians natively
+        ("GPS WP PREV LON",             "Degrees"),           // radians natively
+    };
+
+    public static readonly string[] GpsStringVars =
+    {
+        "GPS WP NEXT ID",
+        "GPS WP PREV ID",
+    };
 
     public static readonly (Event Id, string Name)[] ClientEvents =
     {
@@ -165,5 +230,9 @@ internal static class SimVars
         (Event.LandingLightsOn,  "LANDING_LIGHTS_ON"),          // explicit, so a
         (Event.LandingLightsOff, "LANDING_LIGHTS_OFF"),         // dropped frame
         (Event.ApMaster,         "AP_MASTER"),                  // can't invert state
+        (Event.HeadingBugSet,    "HEADING_BUG_SET"),            // takes degrees
+        (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
+        (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm
+        (Event.ApSpdVarSet,      "AP_SPD_VAR_SET"),             // takes knots
     };
 }

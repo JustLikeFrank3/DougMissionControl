@@ -439,6 +439,13 @@
   var navPlan = [];
   var navSelIdx = 0;
   var navPlanSig = null;
+  // SYNC: the sim's GPS dictates the plan. SimConnect only exposes the leg
+  // being flown — prev + next — so the route accumulates as legs sequence:
+  // departure and first waypoint at once, the rest as the flight reaches them.
+  var navSync = false;
+  try { navSync = localStorage.getItem('navSync') === '1'; } catch (e) { }
+  var navSyncWps = {};             // gps waypoint index -> {name, lat, lon}
+  var navSyncCount = 0;            // plan shape; a change means a new plan
   var navTrail = [];               // {t, lat, lon} — browser memory only
   // Implied ground speed above which the aircraft did not fly there, it was
   // put there. Comfortably above anything the sim's aircraft do, and far
@@ -484,6 +491,33 @@
     return 'ETE ' + (min >= 90 ? (min / 60).toFixed(1) + ' h' : Math.round(min) + ' min');
   }
 
+  /* Grow the plan from the GPS's observed legs. deck-api still owns the plan
+     — sync just becomes its author — so PLANS/SAVE/reloads all keep working. */
+  function navSyncFeed(g) {
+    if (!navSync || !g || !g.count) return;
+    if (g.count !== navSyncCount) { navSyncWps = {}; navSyncCount = g.count; }
+    var dirty = false;
+    [g.prev, g.next].forEach(function (w) {
+      if (!w || typeof w.lat !== 'number') return;
+      var name = (w.id || 'WP' + (w.i + 1)).slice(0, 12);
+      var cur = navSyncWps[w.i];
+      if (!cur || cur.lat !== w.lat || cur.lon !== w.lon) {
+        navSyncWps[w.i] = { name: name, lat: w.lat, lon: w.lon };
+        dirty = true;
+      }
+    });
+    // Steer what the GPS steers: the active leg's endpoint, by position in
+    // the assembled order rather than raw GPS index — early legs may be
+    // missing if sync was engaged mid-flight.
+    var order = Object.keys(navSyncWps).map(Number).sort(function (a, b) { return a - b; });
+    if (g.next && navSyncWps[g.next.i]) navSelIdx = order.indexOf(g.next.i);
+    if (!dirty) return;
+    var wps = order.map(function (k) { return navSyncWps[k]; });
+    var sig = wps.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
+    var cur = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
+    if (sig !== cur) post('/api/nav/plan', { waypoints: wps });
+  }
+
   function paintNav(d) {
     d = d || {};
     var st = d.session ? d.state : null;
@@ -521,6 +555,8 @@
     }
     var cut = Date.now() - 45 * 60000;
     while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
+
+    navSyncFeed(st.gps);
 
     if (navSelIdx >= navPlan.length) navSelIdx = Math.max(0, navPlan.length - 1);
     var wpt = navPlan[navSelIdx] || null;
@@ -1015,6 +1051,12 @@
   var simLast = null;
 
   // The observed position of a control, in the same vocabulary the buttons use.
+  var AP_VARS = {
+    ap_hdg: { field: 'deg', min: 0, max: 359, wrap: true },
+    ap_alt: { field: 'ft', min: 0, max: 60000 },
+    ap_vs: { field: 'fpm', min: -8000, max: 8000 },
+    ap_spd: { field: 'kt', min: 0, max: 900 }
+  };
   function simObserved(control, c) {
     c = c || {};
     if (control === 'gear') return c.gear ? c.gear.state : null;
@@ -1022,6 +1064,8 @@
     if (control === 'parking_brake') return c.parking_brake ? c.parking_brake.state : null;
     if (control === 'landing_lights') return c.landing_lights ? c.landing_lights.state : null;
     if (control === 'ap_master') return c.ap_master ? c.ap_master.state : null;
+    var ap = AP_VARS[control];
+    if (ap) return c[control] ? String(c[control][ap.field]) : null;
     return null;
   }
 
@@ -1080,7 +1124,7 @@
   // wheels, no flaps. Grey it and name it; never render a dead control.
   function simAvail(key, present) {
     $('simt-' + key).classList.toggle('na', !present);
-    [].forEach.call($('simt-' + key).querySelectorAll('.simbtn'), function (b) {
+    [].forEach.call($('simt-' + key).querySelectorAll('.simbtn, .simstep'), function (b) {
       b.disabled = !present;
     });
     if (!present) {
@@ -1169,16 +1213,114 @@
     simSimple('lights', !!c.landing_lights, c.landing_lights ? c.landing_lights.state : '', 'on');
     simSimple('ap', !!c.ap_master, c.ap_master ? c.ap_master.state : '', 'engaged');
 
+    if (simAvail('aphdg', !!c.ap_hdg)) {
+      $('simv-aphdg').textContent = ('00' + c.ap_hdg.deg).slice(-3) + '°';
+    }
+    if (simAvail('apalt', !!c.ap_alt)) {
+      $('simv-apalt').textContent = c.ap_alt.ft;
+    }
+    if (simAvail('apvs', !!c.ap_vs)) {
+      $('simv-apvs').textContent = (c.ap_vs.fpm > 0 ? '+' : '') + c.ap_vs.fpm;
+    }
+    if (simAvail('apspd', !!c.ap_spd)) {
+      $('simv-apspd').textContent = c.ap_spd.kt;
+    }
+
     var r = st.readouts || {};
     $('simv-ias').textContent = r.ias_kt;
     $('simv-alt').textContent = r.alt_ft;
     $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
+    // Second-batch readouts: an agent that predates them sends nothing, and
+    // a dash reads as "not reported" where 'undefined' would read as broken.
+    $('simv-vs').textContent = r.vs_fpm === undefined ? '—'
+      : (r.vs_fpm > 0 ? '+' : '') + r.vs_fpm;
+    // Twins report both engines; singles report rpm_2 = 0 and show one figure.
+    var rpmEl = $('simv-rpm');
+    rpmEl.textContent = r.rpm_1 === undefined ? '—'
+      : r.rpm_2 > 0 ? r.rpm_1 + ' / ' + r.rpm_2 : String(r.rpm_1);
+    rpmEl.className = 'simt-v big' + (r.rpm_2 > 0 ? ' twin' : '');
+    $('simu-rpm').textContent = r.rpm_2 > 0 ? 'ENG 1 / 2' : '';
+    $('simv-fuel').textContent = r.fuel_gal === undefined ? '—' : r.fuel_gal;
+    simPaintGauges(r);
 
     simRenderPending('gear', 'gear', c);
     simRenderPending('flaps', 'flaps', c);
     simRenderPending('park', 'parking_brake', c);
     simRenderPending('lights', 'landing_lights', c);
     simRenderPending('ap', 'ap_master', c);
+    simRenderPending('aphdg', 'ap_hdg', c);
+    simRenderPending('apalt', 'ap_alt', c);
+    simRenderPending('apvs', 'ap_vs', c);
+    simRenderPending('apspd', 'ap_spd', c);
+  }
+
+  /* ── EFIS gauges: attitude + compass rose ────────────────────────────
+     Drawn from readouts the agent may not send yet: the ATT gauge covers
+     itself with NOT REPORTED rather than freezing level, which on an
+     instrument would be a lie. */
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var AI_PX_PER_DEG = 2.2;      // pitch ladder scale
+  var simHdgCum = 0, simHdgPrev = null;   // wrap-safe rose rotation
+
+  function simBuildGauges() {
+    var ladder = $('simg-ladder');
+    ladder.setAttribute('class', 'ai-ladder');
+    [-20, -10, 10, 20].forEach(function (deg) {
+      var y = 100 - deg * AI_PX_PER_DEG;
+      var w = Math.abs(deg) === 10 ? 16 : 26;
+      var ln = document.createElementNS(SVG_NS, 'line');
+      ln.setAttribute('x1', 100 - w); ln.setAttribute('x2', 100 + w);
+      ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+      ladder.appendChild(ln);
+      var tx = document.createElementNS(SVG_NS, 'text');
+      tx.setAttribute('x', 100 + w + 9); tx.setAttribute('y', y + 3);
+      tx.textContent = Math.abs(deg);
+      ladder.appendChild(tx);
+    });
+
+    var rose = $('simg-rose');
+    var CARD = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
+    for (var d = 0; d < 360; d += 10) {
+      var major = d % 30 === 0;
+      var tick = document.createElementNS(SVG_NS, 'line');
+      tick.setAttribute('class', 'rose-tick' + (CARD[d] !== undefined ? ' card' : ''));
+      tick.setAttribute('x1', 100); tick.setAttribute('x2', 100);
+      tick.setAttribute('y1', 14); tick.setAttribute('y2', major ? 26 : 21);
+      tick.setAttribute('transform', 'rotate(' + d + ' 100 100)');
+      rose.appendChild(tick);
+      if (major) {
+        var lbl = document.createElementNS(SVG_NS, 'text');
+        var card = CARD[d] !== undefined;
+        lbl.setAttribute('class', 'rose-lbl' + (card ? '' : ' minor'));
+        lbl.setAttribute('x', 100); lbl.setAttribute('y', card ? 42 : 39);
+        lbl.setAttribute('transform', 'rotate(' + d + ' 100 100)');
+        lbl.textContent = card ? CARD[d] : String(d / 10);
+        rose.appendChild(lbl);
+      }
+    }
+  }
+
+  function simPaintGauges(r) {
+    var ai = $('simg-horizon').closest('.gauge');
+    var att = r.pitch_deg !== undefined && r.bank_deg !== undefined;
+    ai.classList.toggle('na', !att);
+    if (att) {
+      // Rotate about the wings, then slide along the rotated vertical — the
+      // order that keeps the horizon parallel to itself through a banked climb.
+      $('simg-horizon').style.transform =
+        'rotate(' + (-r.bank_deg) + 'deg) translateY(' + (r.pitch_deg * AI_PX_PER_DEG) + 'px)';
+    }
+    if (typeof r.hdg_mag === 'number') {
+      // Accumulate shortest-path deltas so 359→001 nudges 2° instead of
+      // unwinding the card 358° through the transition.
+      if (simHdgPrev !== null) {
+        var dlt = ((r.hdg_mag - simHdgPrev + 540) % 360) - 180;
+        simHdgCum += dlt;
+      } else { simHdgCum = r.hdg_mag; }
+      simHdgPrev = r.hdg_mag;
+      $('simg-rose').style.transform = 'rotate(' + (-simHdgCum) + 'deg)';
+      $('simg-hdg-txt').textContent = ('00' + r.hdg_mag).slice(-3);
+    }
   }
 
   // The strip's SIM sub-label, from the ordinary state poll. Losing the agent
@@ -1489,6 +1631,21 @@
     });
   });
 
+  // AP bug steppers. Absolute set computed from the observed value at tap
+  // time: a dropped command leaves the bug where it was, never double-steps.
+  [].forEach.call(document.querySelectorAll('.simstep'), function (b) {
+    b.addEventListener('click', function () {
+      var ctl = b.dataset.c;
+      var ap = AP_VARS[ctl];
+      var c = (simLast && simLast.controls) || {};
+      if (!c[ctl]) return;
+      var v = c[ctl][ap.field] + Number(b.dataset.d);
+      v = ap.wrap ? ((v % 360) + 360) % 360
+                  : Math.max(ap.min, Math.min(ap.max, v));
+      simSend(ctl, 'set', String(v));
+    });
+  });
+
   // The AUTO sub-nav button is static HTML, so the dynamic-button wiring in
   // renderEvalsNav never touches it — and no revision ever wired it, which
   // made pinning a board a one-way door: you could leave the playlist but
@@ -1596,6 +1753,7 @@
 
   // Flight-plan search overlay + its on-screen keyboard.
   navKbdBuild();
+  simBuildGauges();
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
   // SAVE sits next to ADD, not behind PLANS. Saving was reachable only by
@@ -1606,6 +1764,13 @@
     navSearchOpen(true, 'save');
   });
   $('navp-plansbtn').addEventListener('click', function () { navPlansOpen(true); });
+  $('navp-sync').classList.toggle('on', navSync);
+  $('navp-sync').addEventListener('click', function () {
+    navSync = !navSync;
+    navSyncWps = {}; navSyncCount = 0;   // re-observe from scratch each engage
+    try { localStorage.setItem('navSync', navSync ? '1' : '0'); } catch (e) { }
+    $('navp-sync').classList.toggle('on', navSync);
+  });
   $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
   $('navp-saveas').addEventListener('click', function () {
     navPlansOpen(false);
