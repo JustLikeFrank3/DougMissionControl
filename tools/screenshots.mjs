@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI = path.join(here, '..', 'pi', 'deck-ui');
 const OUT = path.join(here, '..', 'docs', 'img');
-const PORT = 8137;
+const PORT = Number(process.env.PORT || 8137);
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(name);
@@ -57,8 +57,17 @@ const FRAME = {
   surface: { active: 'deck', default: 'evals', previous: null, episode: 'boot',
              manual_in_episode: false,
              all: ['deck', 'evals', 'nav', 'sim', 'displays'] },
-  evals: { grafana: false, mode: null, url: null, checked: now, playlist: null,
-           view: 'auto', view_url: null, dashboards: [] },
+  // The jobContext surface is a frame around a Grafana wallboard that is NOT
+  // part of this repo. Rendering it against a stand-in shows what Flight Deck
+  // contributes — the sub-nav, AUTO pinning, the unreachable overlay — without
+  // passing off a picture of someone else's dashboards as our own.
+  evals: { grafana: true, mode: 'playlist', url: '/standin', checked: now,
+           playlist: 'jcmcp-wallboard-1', view: 'auto', view_url: '/standin',
+           dashboards: [
+             { uid: 'kiosk-evals',   title: 'Eval throughput' },
+             { uid: 'kiosk-latency', title: 'Latency' },
+             { uid: 'kiosk-cost',    title: 'Spend' },
+           ] },
   events: [
     { t: now - 4,   source: 'probe', text: 'workstation: booting -> windows', level: 'info' },
     { t: now - 37,  source: 'boot',  text: 'reboot requested', level: 'info' },
@@ -115,15 +124,31 @@ const server = createServer(async (req, res) => {
     // A short history, not one frame: the sparklines and the stat tiles plot
     // the rolling window, and a single sample draws nothing at all.
     const trace = [44, 45, 46, 45, 47, 49, 52, 50, 48, 47];
+    // Stamped per REQUEST, not at startup. --serve can sit for an hour; a
+    // timestamp frozen at boot makes the newest sample two minutes stale by
+    // the time a page loads, and the stat tiles correctly refuse to show a
+    // reading that old — which looks exactly like the gauges being broken.
+    const t0 = Math.floor(Date.now() / 1000);
     const body = trace.map((t, i) => 'data: ' + JSON.stringify({
       ...FRAME,
-      server_time: now - (trace.length - 1 - i) * 30,
-      telemetry: { ts: now - (trace.length - 1 - i) * 30, source: 'windows',
+      server_time: t0 - (trace.length - 1 - i) * 30,
+      telemetry: { ts: t0 - (trace.length - 1 - i) * 30, source: 'windows',
                    ws: { gpu_temp_c: t, gpu_util_pct: 8 + i * 2, vram_pct: 2.4 + i / 20 },
                    pi: {} },
     }) + '\n\n').join('');
     res.write(body);
     return;   // held open: closing it makes the page reconnect and re-render
+  }
+  if (url.pathname === '/standin') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    return res.end(`<!doctype html><meta charset=utf-8><style>
+      html,body{height:100%;margin:0;background:#0b0f15;color:#7f8da2;
+        font:14px ui-monospace,monospace;display:grid;place-items:center}
+      div{text-align:center;line-height:1.7}b{color:#e2e9f2;letter-spacing:.2em}
+    </style><div><b>GRAFANA WALLBOARD</b><br>
+      third-party, not part of this repo<br>
+      Flight Deck only frames it — the strip, the sub-nav and AUTO are ours
+    </div>`);
   }
   if (url.pathname === '/api/state')   return json(FRAME);
   if (url.pathname === '/api/sim')     return json(SIM);

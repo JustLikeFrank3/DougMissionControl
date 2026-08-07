@@ -8,26 +8,21 @@ import { distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
          isTeleport, zoomForSpan, TILE, ZMIN as NAV_ZMIN, ZMAX as NAV_ZMAX,
          NM_PER_DEG } from './js/geo.js';
 import { createSeries } from './js/series.js';
+import { $, rows, wireHold, post, getJSON, HOLD_MS } from './js/ui.js';
+import { PHASES, buildTrack, renderTrack,
+         setObservableMax, getObservableMax } from './js/track.js';
+import { drawSpark, drawAllSparks } from './js/spark.js';
+import { simBuildGauges, simPaintGauges } from './js/gauges.js';
+import { dspPoll, dspTick, paintDsp } from './js/screens.js';
+import { npPoll, npTick, paintNp } from './js/media.js';
 
 (function () {
   'use strict';
 
-  var HOLD_MS = 1500;
   var DECK_W = 2560, DECK_H = 720;
 
-  var PHASES = [
-    { n: 'TRIGGER',  s: 'deck-api' },
-    { n: 'PROBE',    s: ':9105 / :9106' },
-    { n: 'KICK',     s: 'WOL · ssh · agent' },
-    { n: 'PING',     s: 'icmp' },
-    { n: 'OS UP',    s: 'probe answers' },
-    { n: 'LOGON',    s: 'greeting calls back' },
-    { n: 'LAUNCHED', s: 'app started' }
-  ];
 
-  var $ = function (id) { return document.getElementById(id); };
   var state = null;
-  var observableMax = 5;
 
   /* ── scale to fit ─────────────────────────────────────────────────────
      On the Edge the viewport is exactly 2560x720 and this is a no-op. */
@@ -51,69 +46,6 @@ import { createSeries } from './js/series.js';
   window.addEventListener('load', fit);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(document.documentElement);
 
-  /* ── phase track ──────────────────────────────────────────────────────── */
-  function buildTrack() {
-    var track = $('track');
-    track.innerHTML = '';
-    PHASES.forEach(function (p, i) {
-      var el = document.createElement('div');
-      el.className = 'node pending';
-      el.dataset.phase = String(i + 1);
-      el.innerHTML = '<div class="dot"></div><div class="n"></div><div class="s"></div>';
-      el.querySelector('.n').textContent = p.n;
-      el.querySelector('.s').textContent = p.s;
-      track.appendChild(el);
-    });
-  }
-
-  function renderTrack(boot, last) {
-    var reached = boot.in_flight ? boot.phase
-                : (last ? last.reached_phase : 0);
-    var failed = !boot.in_flight && last && last.result !== 'ok';
-
-    [].forEach.call($('track').children, function (el) {
-      var p = Number(el.dataset.phase);
-      el.className = 'node';
-      if (p < reached) el.classList.add('done');
-      else if (p === reached) el.classList.add(failed ? 'fail' : (boot.in_flight ? 'now' : 'done'));
-      else el.classList.add('pending');
-      // Phases beyond this run's reach — a linux boot has no greeting to
-      // call back, a plain windows boot launches nothing. Dashed and named,
-      // so the rail states its scope instead of looking short.
-      if (p > observableMax && p > reached) {
-        el.classList.remove('pending');
-        el.classList.add('unwired');
-        el.querySelector('.s').textContent = 'not in this run';
-      } else {
-        el.querySelector('.s').textContent = PHASES[p - 1].s;
-      }
-    });
-
-    var lbl = $('track-lbl');
-    if (boot.in_flight) {
-      lbl.textContent = 'BOOTING → ' + String(boot.target || '').toUpperCase() +
-        '  ·  ' + (boot.intent || '') + '  ·  ' + fmtDur(boot.elapsed);
-    } else if (last) {
-      lbl.textContent = 'LAST BOOT  ·  ' + String(last.target || '').toUpperCase() +
-        '  ·  ' + (last.intent || '') + '  ·  ' + fmtDur(last.seconds) +
-        '  ·  ' + String(last.result || '').toUpperCase();
-    } else {
-      lbl.textContent = 'NO BOOT IN FLIGHT';
-    }
-  }
-
-  function rows(el, pairs) {
-    el.innerHTML = '';
-    pairs.forEach(function (p) {
-      var r = document.createElement('div');
-      r.className = 'row';
-      r.innerHTML = '<span class="k"></span><span class="v"></span>';
-      r.querySelector('.k').textContent = p[0];
-      r.querySelector('.v').textContent = p[1];
-      el.appendChild(r);
-    });
-  }
-
   /* ── rolling window ───────────────────────────────────────────────────────
      Lives here and nowhere else. deck-api sends the latest reading and keeps
      no history; this buffer is the only history that exists, and it dies with
@@ -127,128 +59,6 @@ import { createSeries } from './js/series.js';
   var TRACKED = [].map.call(document.querySelectorAll('[data-key]'), function (el) {
     return el.dataset.key;
   }).filter(function (v, i, a) { return a.indexOf(v) === i; });
-
-  /* ── sparkline ────────────────────────────────────────────────────────── */
-
-  function drawSpark(svg) {
-    // The stat tiles put data-key on the .stat div, not on their svg — so the
-    // svg's own key is undefined there and this looked up series.points(undefined),
-    // which is why every stat spark has read "no data — exporter not
-    // answering" since the day it shipped, healthy exporter or not. Fall back
-    // to the parent's key.
-    var key = svg.dataset.key ||
-      (svg.parentNode && svg.parentNode.dataset && svg.parentNode.dataset.key);
-    var data = series.points(key) || [];
-    var vb = svg.viewBox.baseVal;
-    var W = vb.width, H = vb.height;
-    var wide = svg.classList.contains('wide');
-    var padL = wide ? 34 : 0, padT = wide ? 16 : 4, padB = wide ? 6 : 4;
-    var padR = wide ? 62 : 4;
-
-    var pts = data.filter(function (p) { return p.v !== null; });
-    if (!pts.length) {
-      svg.innerHTML = '<text x="' + (W / 2) + '" y="' + (H / 2 + 4) +
-        '" text-anchor="middle">no data — exporter not answering</text>';
-      return;
-    }
-
-    // x always spans the full window, so a gap reads as a gap rather than
-    // the remaining data stretching to fill the box.
-    var now = Date.now() / 1000;
-    var t0 = now - WINDOW_S;
-
-    var lo = svg.dataset.lo !== undefined ? Number(svg.dataset.lo) : null;
-    var hi = svg.dataset.hi !== undefined ? Number(svg.dataset.hi) : null;
-    if (lo === null || hi === null) {
-      var vs = pts.map(function (p) { return p.v; });
-      lo = Math.min.apply(null, vs);
-      hi = Math.max.apply(null, vs);
-      var span = Number(svg.dataset.minSpan || 1);
-      if (hi - lo < span) {                    // don't dramatise flat data
-        var mid = (hi + lo) / 2;
-        lo = mid - span / 2; hi = mid + span / 2;
-      }
-      var pad = (hi - lo) * 0.12;
-      lo -= pad; hi += pad;
-    }
-
-    var X = function (t) { return padL + (W - padL - padR) * Math.max(0, Math.min(1, (t - t0) / WINDOW_S)); };
-    var Y = function (v) { return padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1)); };
-
-    // Split into contiguous runs so gaps break the line.
-    var runs = [], cur = [];
-    data.forEach(function (p) {
-      if (p.v === null) { if (cur.length) { runs.push(cur); cur = []; } }
-      else cur.push(p);
-    });
-    if (cur.length) runs.push(cur);
-
-    var out = [];
-    if (wide) {
-      [0.5, 0].forEach(function (f) {
-        var y = padT + (H - padT - padB) * f;
-        out.push('<path class="sk-g" d="M' + padL + ' ' + y.toFixed(1) +
-                 'H' + (W - padR) + '"/>');
-      });
-      out.push('<text x="0" y="' + (padT + 10) + '">' + Math.round(hi) + '</text>');
-      out.push('<text x="0" y="' + (H - padB) + '">' + Math.round(lo) + '</text>');
-    }
-
-    runs.forEach(function (run) {
-      var d = run.map(function (p, i) {
-        return (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p.v).toFixed(1);
-      }).join('');
-      if (run.length > 1) {
-        var base = (H - padB).toFixed(1);
-        out.push('<path class="sk-a" d="' + d +
-                 'L' + X(run[run.length - 1].t).toFixed(1) + ' ' + base +
-                 'L' + X(run[0].t).toFixed(1) + ' ' + base + 'Z"/>');
-      }
-      out.push('<path class="sk-l" d="' + d + '"/>');
-    });
-
-    var last = pts[pts.length - 1];
-    var fresh = (now - last.t) < 30;
-    if (fresh) {
-      out.push('<circle class="sk-d" cx="' + X(last.t).toFixed(1) +
-               '" cy="' + Y(last.v).toFixed(1) + '" r="' + (wide ? 4 : 3) + '"/>');
-    }
-    if (wide) {
-      out.push('<text class="now" x="' + (W - padR + 8) + '" y="' +
-               Y(last.v).toFixed(1) + '" dy="6">' +
-               fmtVal(last.v, svg.dataset.unit) + '</text>');
-    }
-
-    svg.innerHTML = out.join('');
-  }
-
-  function drawAllSparks() {
-    [].forEach.call(document.querySelectorAll('svg.spark'), drawSpark);
-
-    // A stale number in primary type is a lie readable from across the room —
-    // and this fires exactly when the workstation is down or rebooting, the one
-    // moment someone actually looks. Stale (> ~3 scrape intervals) dims the
-    // value AND stamps its age beside it in the same glance; a value older
-    // than two minutes stops being shown at all.
-    [].forEach.call(document.querySelectorAll('.stat'), function (el) {
-      var p = series.latest(el.dataset.key);
-      var v = el.querySelector('.v');
-      var age = p ? Date.now() / 1000 - p.t : Infinity;
-      var stale = age > 15;
-      v.className = 'v' + (stale ? ' stale' : '');
-      if (!p || age > 120) {
-        v.innerHTML = '—';
-      } else {
-        v.innerHTML =
-          (Math.abs(p.v) >= 100 ? Math.round(p.v) : Math.round(p.v * 10) / 10) +
-          '<span class="u">' + (el.dataset.unit || '') + '</span>' +
-          (stale ? '<span class="age">· ' + fmtAgo(p.t) + ' ago</span>' : '');
-      }
-    });
-
-    var mins = Math.round(WINDOW_S / 60);
-    $('win').textContent = mins + ' min · in memory';
-  }
 
   /* ── surfaces ─────────────────────────────────────────────────────────── */
 
@@ -267,120 +77,6 @@ import { createSeries } from './js/series.js';
     npPoll(active === 'deck');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
-  }
-
-  /* ── SCREENS (DDC via the Windows agent) ───────────────────────────────
-     One card per physical monitor. Each pill shows the input that monitor
-     REPORTS on read-back — never the commanded one. A switch a panel
-     ignored shows up as the pill not moving, which is the truth. */
-  var DSP_INPUTS = [
-    ['vga', 'VGA'], ['hdmi1', 'HDMI 1'], ['hdmi2', 'HDMI 2'],
-    ['dp1', 'DP 1'], ['dp2', 'DP 2']
-  ];
-  // Windows reports "Generic PnP Monitor" for these panels, so the model name
-  // is stated here rather than guessed from EDID. Only used when the monitor
-  // does not name itself.
-  var DSP_MODEL = 'HP32F';
-  var dspTimer = null, dspSig = null;
-  var dspDefaults = null;   // deck-api's stated fallback for silent panels
-
-  function dspPoll(on) {
-    if (on && !dspTimer) { dspTick(); dspTimer = setInterval(dspTick, 3000); }
-    else if (!on && dspTimer) { clearInterval(dspTimer); dspTimer = null; }
-  }
-
-  function dspTick() {
-    fetch('/api/monitor', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(paintDsp)
-      .catch(function () { paintDsp({ available: false, reason: 'deck-api unreachable' }); });
-  }
-
-  function paintDsp(d) {
-    d = d || {};
-    var mons = d.monitors || [];
-    var live = d.available && mons.length > 0;
-    $('dsp-ph').hidden = live;
-    $('dsp-live').hidden = !live;
-    $('dsp-pill').textContent = d.available ? 'NO MONITORS' : 'NO LINK';
-    $('nav-displays').textContent = live ? mons.length + ' via ddc'
-      : (d.available ? 'none' : 'no link');
-    if (!live) return;
-
-    dspDefaults = (d.default_inputs && d.default_inputs.length) ? d.default_inputs : null;
-
-    var box = $('dsp-live');
-    // position and size join the signature: the cards are ordered by desktop
-    // geometry, so a monitor moving or a display server appearing has to
-    // rebuild them, not just repaint the pills.
-    var sig = mons.map(function (m) {
-      return m.index + ':' + m.desc + ':' + (m.position || '') + ':' +
-        (m.w || '') + 'x' + (m.h || '') +
-        ':' + (m.inputs || dspDefaults || []).join(',');
-    }).join('|');
-    if (sig !== dspSig) {
-      dspSig = sig;
-      box.innerHTML = '';
-      mons.forEach(function (m) {
-        var card = document.createElement('div');
-        card.className = 'dspcard';
-        card.dataset.idx = m.index;
-        card.innerHTML =
-          '<div class="h-top"><span class="h-name"></span>' +
-          '<span class="h-pill dsp-obs">—</span></div>' +
-          '<div class="dsp-desc"></div><div class="dsp-btns"></div>';
-        // Name from the panel's own EDID model where it gives one — Windows
-        // says "Generic PnP Monitor" for plenty of screens, so fall back to
-        // the geometry-derived position rather than inventing a model.
-        var model = (m.desc && !/generic/i.test(m.desc)) ? m.desc : DSP_MODEL;
-        card.querySelector('.h-name').textContent =
-          (model ? model + ' ' : 'MON ') + (m.position || (m.index + 1));
-        // Every geometry field is optional. DRM knows the resolution without a
-        // display server, but only the display server knows where a panel sits
-        // on the desktop, and a Wayland compositor may refuse to say — so the
-        // agents send what they have. Build the line from the parts that
-        // arrived instead of assuming all of them did, which is what rendered
-        // a literal "at xundefined" for the Linux agent.
-        // The desktop x offset is deliberately NOT shown. It exists to sort the
-        // cards and to derive LEFT/RIGHT, and once the card is titled with that
-        // position it says nothing a person standing at the desk can use — "at
-        // x1920" is a fact about the framebuffer, not about the monitor.
-        var bits = [];
-        if (m.w && m.h) bits.push(m.w + '×' + m.h);
-        if (m.primary) bits.push('primary');
-        card.querySelector('.dsp-desc').textContent = bits.length ? bits.join(' · ') : '—';
-        var btns = card.querySelector('.dsp-btns');
-        // Inputs the panel DECLARED win; a panel that refuses to say (the HP
-        // 32f refuses outright) falls back to deck-api's configured default,
-        // which is an operator-stated fact rather than a guess from a model.
-        var allowed = m.inputs || dspDefaults;
-        var offer = DSP_INPUTS.filter(function (inp) {
-          return !allowed || allowed.indexOf(inp[0]) !== -1;
-        });
-        btns.style.gridTemplateColumns = 'repeat(' + offer.length + ', 1fr)';
-        offer.forEach(function (inp) {
-          var b = document.createElement('button');
-          b.className = 'simbtn';
-          b.innerHTML = '<span></span><i class="hold"></i>';
-          b.querySelector('span').textContent = inp[1];
-          wireHold(b, function () {
-            post('/api/monitor', { input: inp[0], index: m.index })
-              .then(function () { setTimeout(dspTick, 1500); });
-          });
-          btns.appendChild(b);
-        });
-        box.appendChild(card);
-      });
-    }
-    mons.forEach(function (m) {
-      var card = box.querySelector('.dspcard[data-idx="' + m.index + '"]');
-      if (!card) return;
-      var pill = card.querySelector('.dsp-obs');
-      pill.textContent = !m.ddc ? 'NO DDC'
-        : (m.input && m.input !== 'other') ? m.input.toUpperCase()
-        : 'INPUT ' + m.input_raw;
-      pill.className = 'h-pill dsp-obs ' + (m.ddc ? 'ok' : 'off');
-    });
   }
 
   /* ── NAV ───────────────────────────────────────────────────────────────
@@ -938,66 +634,6 @@ import { createSeries } from './js/series.js';
     g.fillText('© OpenStreetMap contributors', W - 205, H - 8);
   }
 
-  /* ── now-playing widget (DECK rail) ────────────────────────────────────
-     Observed playback only: the widget shows what the player reports, and a
-     transport tap is a command whose effect arrives in the next poll. Art is
-     fetched only when art_id changes — the JSON stays small. */
-  var npTimer = null, npArtId = null;
-
-  function npPoll(on) {
-    if (on && !npTimer) { npTick(); npTimer = setInterval(npTick, 2000); }
-    else if (!on && npTimer) { clearInterval(npTimer); npTimer = null; }
-  }
-
-  function npTick() {
-    fetch('/api/media', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(paintNp)
-      .catch(function () { paintNp({ active: false }); });
-  }
-
-  function paintNp(m) {
-    var np = $('np');
-    np.classList.toggle('idle', !m.active);
-    if (!m.active) {
-      $('np-title').textContent = 'no source';
-      $('np-artist').textContent = '';
-      $('np-time').textContent = '';
-      $('np-art').hidden = true; $('np-noart').hidden = false;
-      npArtId = null;
-    } else {
-      $('np-title').textContent = m.title || '(untitled)';
-      $('np-artist').textContent = m.artist || '';
-      $('np-time').textContent = (m.playing ? '▶ ' : '❚❚ ')
-        + fmtTime(m.position_s) + (m.duration_s ? ' / ' + fmtTime(m.duration_s) : '');
-      if (m.art_id && m.art_id !== npArtId) {
-        npArtId = m.art_id;
-        var img = $('np-art');
-        img.onload = function () { img.hidden = false; $('np-noart').hidden = true; };
-        img.onerror = function () { img.hidden = true; $('np-noart').hidden = false; };
-        img.src = '/api/media/art?v=' + m.art_id;
-      }
-      var can = m.can || {};
-      $('np-prev').disabled = !can.prev;
-      $('np-play').disabled = !can.play_pause;
-      $('np-next').disabled = !can.next;
-    }
-  }
-
-  [{ id: 'np-prev', a: 'prev' }, { id: 'np-play', a: 'play_pause' },
-   { id: 'np-next', a: 'next' }].forEach(function (b) {
-    $(b.id).addEventListener('click', function () {
-      post('/api/media/command', { action: b.a }).then(function () {
-        setTimeout(npTick, 350);   // let the player react, then re-observe
-      });
-    });
-  });
-
-  /* SQUADRONS surface: tried and removed. Open-loop SendInput keystrokes
-     never reached the game (games read raw scancodes), which made it exactly
-     the blind macro deck the sim brief warns against. The DECK boot tile
-     remains the launch path. */
-
   /* ── SIM ───────────────────────────────────────────────────────────────
      Polled directly rather than carried on the SSE state. Gear travel takes
      about five seconds end to end and deck-api's state poll runs at 2-5 s, so
@@ -1277,78 +913,6 @@ import { createSeries } from './js/series.js';
     }
   }
 
-  /* ── EFIS gauges: attitude + compass rose ────────────────────────────
-     Drawn from readouts the agent may not send yet: the ATT gauge covers
-     itself with NOT REPORTED rather than freezing level, which on an
-     instrument would be a lie. */
-  var SVG_NS = 'http://www.w3.org/2000/svg';
-  var AI_PX_PER_DEG = 2.2;      // pitch ladder scale
-  var simHdgCum = 0, simHdgPrev = null;   // wrap-safe rose rotation
-
-  function simBuildGauges() {
-    var ladder = $('simg-ladder');
-    ladder.setAttribute('class', 'ai-ladder');
-    [-20, -10, 10, 20].forEach(function (deg) {
-      var y = 100 - deg * AI_PX_PER_DEG;
-      var w = Math.abs(deg) === 10 ? 16 : 26;
-      var ln = document.createElementNS(SVG_NS, 'line');
-      ln.setAttribute('x1', 100 - w); ln.setAttribute('x2', 100 + w);
-      ln.setAttribute('y1', y); ln.setAttribute('y2', y);
-      ladder.appendChild(ln);
-      var tx = document.createElementNS(SVG_NS, 'text');
-      tx.setAttribute('x', 100 + w + 9); tx.setAttribute('y', y + 3);
-      tx.textContent = Math.abs(deg);
-      ladder.appendChild(tx);
-    });
-
-    var rose = $('simg-rose');
-    var CARD = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
-    for (var d = 0; d < 360; d += 10) {
-      var major = d % 30 === 0;
-      var tick = document.createElementNS(SVG_NS, 'line');
-      tick.setAttribute('class', 'rose-tick' + (CARD[d] !== undefined ? ' card' : ''));
-      tick.setAttribute('x1', 100); tick.setAttribute('x2', 100);
-      tick.setAttribute('y1', 14); tick.setAttribute('y2', major ? 26 : 21);
-      tick.setAttribute('transform', 'rotate(' + d + ' 100 100)');
-      rose.appendChild(tick);
-      if (major) {
-        var lbl = document.createElementNS(SVG_NS, 'text');
-        var card = CARD[d] !== undefined;
-        lbl.setAttribute('class', 'rose-lbl' + (card ? '' : ' minor'));
-        lbl.setAttribute('x', 100); lbl.setAttribute('y', card ? 42 : 39);
-        lbl.setAttribute('transform', 'rotate(' + d + ' 100 100)');
-        lbl.textContent = card ? CARD[d] : String(d / 10);
-        rose.appendChild(lbl);
-      }
-    }
-  }
-
-  function simPaintGauges(r) {
-    var ai = $('simg-horizon').closest('.gauge');
-    var att = r.pitch_deg !== undefined && r.bank_deg !== undefined;
-    ai.classList.toggle('na', !att);
-    if (att) {
-      // Rotate about the wings, then slide along the rotated vertical — the
-      // order that keeps the horizon parallel to itself through a banked climb.
-      $('simg-horizon').style.transform =
-        'rotate(' + (-r.bank_deg) + 'deg) translateY(' + (r.pitch_deg * AI_PX_PER_DEG) + 'px)';
-    }
-    if (typeof r.hdg_mag === 'number') {
-      // Accumulate shortest-path deltas so 359→001 nudges 2° instead of
-      // unwinding the card 358° through the transition.
-      if (simHdgPrev !== null) {
-        var dlt = ((r.hdg_mag - simHdgPrev + 540) % 360) - 180;
-        simHdgCum += dlt;
-      } else { simHdgCum = r.hdg_mag; }
-      simHdgPrev = r.hdg_mag;
-      $('simg-rose').style.transform = 'rotate(' + (-simHdgCum) + 'deg)';
-      $('simg-hdg-txt').textContent = ('00' + r.hdg_mag).slice(-3);
-    }
-  }
-
-  // The strip's SIM sub-label, from the ordinary state poll. Losing the agent
-  // is normal operation — it lives and dies with Windows — so this reads as an
-  // absence, not an alert.
   function renderSimNav(s) {
     var sim = s.sim || {};
     var el = $('nav-sim');
@@ -1471,7 +1035,7 @@ import { createSeries } from './js/series.js';
 
   function render(s) {
     state = s;
-    observableMax = (s.boot && s.boot.observable_max) || 5;
+    setObservableMax(s.boot && s.boot.observable_max);
 
     // The kiosk browser survives a deck-api restart, so newly installed
     // HTML/CSS/JS would otherwise sit on disk doing nothing until someone
@@ -1484,7 +1048,7 @@ import { createSeries } from './js/series.js';
 
     // Traces redraw only when a genuinely new sample lands, not on the 1 Hz
     // clock tick — the Pi 4B has better things to do with its CPU.
-    if (series.push(s, TRACKED)) drawAllSparks();
+    if (series.push(s, TRACKED)) drawAllSparks(series);
 
     var src = (s.telemetry && s.telemetry.source) || null;
     $('chart-lbl').textContent = 'GPU TEMPERATURE · °C' +
@@ -1513,7 +1077,7 @@ import { createSeries } from './js/series.js';
       $('state-pill').className = 'pill busy';
       $('state-os').textContent = fmtDur(boot.elapsed);
       $('state-meta').textContent =
-        'phase ' + boot.phase + ' / ' + observableMax + '  ·  ' + boot.phase_name;
+        'phase ' + boot.phase + ' / ' + getObservableMax() + '  ·  ' + boot.phase_name;
     } else {
       $('state-pill').textContent = look.pill;
       $('state-pill').className = 'pill ' + look.cls;
@@ -1587,45 +1151,6 @@ import { createSeries } from './js/series.js';
   }
 
   /* ── hold to arm ──────────────────────────────────────────────────────── */
-  function wireHold(el, fire) {
-    var raf = null, start = 0;
-
-    function tick() {
-      var pct = Math.min(1, (performance.now() - start) / HOLD_MS);
-      el.querySelector('.hold').style.width = (pct * 100) + '%';
-      if (pct >= 1) { stop(); fire(); return; }
-      raf = requestAnimationFrame(tick);
-    }
-
-    function begin(e) {
-      if (el.disabled) return;
-      e.preventDefault();
-      el.classList.add('arming');
-      start = performance.now();
-      raf = requestAnimationFrame(tick);
-    }
-
-    function stop() {
-      if (raf) cancelAnimationFrame(raf);
-      raf = null;
-      el.classList.remove('arming');
-      el.querySelector('.hold').style.width = '0';
-    }
-
-    el.addEventListener('pointerdown', begin);
-    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) {
-      el.addEventListener(t, stop);
-    });
-  }
-
-  function post(path, body) {
-    return fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
-    }).then(function (r) { return r.json(); }).catch(function () { return null; });
-  }
-
   // ── wiring ────────────────────────────────────────────────────────────
   // Guarded so that a crash in here can never stop connect() below from
   // running. The kiosk's only self-heal path is the ui-stamp check inside

@@ -182,6 +182,10 @@ search hits real OpenStreetMap data, plans are saved on the Pi, and the trail
 is where the aircraft has actually been. Pinch to zoom; FIT hands framing back
 to the auto-fit.
 
+The render below is **offline**, so the OpenStreetMap raster tiles are absent
+and only Flight Deck's own symbology is drawn — route, waypoints, aircraft,
+range rings. On the panel those sit over real map tiles.
+
 ![NAV](docs/img/nav.png)
 
 **SIM** — observed aircraft state and the controls that command it. The panel
@@ -189,7 +193,8 @@ never draws the commanded state: a tap shows PENDING over the last *observed*
 value, and only the simulator moving it changes what you see. That is what
 makes a command MSFS ignored look like a failed command instead of a lie.
 
-![SIM](docs/img/sim.png)
+*Not shown: SIM needs a live SimConnect session to render anything, and the
+offline harness only reaches its placeholder. Capture this one on the rig.*
 
 **SCREENS** — one card per monitor, named by its position on the desk, with a
 button per input the panel declares. DDC/CI over whichever OS is booted:
@@ -198,10 +203,11 @@ Windows answers through the sim agent, Linux through `media-agent.py`.
 ![SCREENS](docs/img/screens.png)
 
 **jobContext** — the pre-existing Grafana wallboard, framed as-is. Flight Deck
-provisions no dashboards and stores no eval data. Shown here with Grafana
-unreachable, which is the honest state on a machine that is not running it.
+provisions no dashboards, stores no eval data, and contributes only the strip,
+the sub-nav built from Grafana's own dashboard list, and AUTO pinning.
 
-![jobContext](docs/img/evals.png)
+*Not shown: the frame's contents are third-party software that is not part of
+this repo, and a screenshot of a stand-in would document nothing real.*
 
 ### Live telemetry, and only live
 
