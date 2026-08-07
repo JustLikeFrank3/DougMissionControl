@@ -182,9 +182,11 @@ search hits real OpenStreetMap data, plans are saved on the Pi, and the trail
 is where the aircraft has actually been. Pinch to zoom; FIT hands framing back
 to the auto-fit.
 
-The render below is **offline**, so the OpenStreetMap raster tiles are absent
-and only Flight Deck's own symbology is drawn — route, waypoints, aircraft,
-range rings. On the panel those sit over real map tiles.
+The render below was made on a host with no route to the tile server, so only
+Flight Deck's own symbology is drawn — route, waypoints, aircraft, range rings.
+Run `node tools/screenshots.mjs` anywhere with internet and the same image
+comes back with the OpenStreetMap raster underneath, exactly as the panel
+draws it.
 
 ![NAV](docs/img/nav.png)
 
@@ -193,8 +195,7 @@ never draws the commanded state: a tap shows PENDING over the last *observed*
 value, and only the simulator moving it changes what you see. That is what
 makes a command MSFS ignored look like a failed command instead of a lie.
 
-*Not shown: SIM needs a live SimConnect session to render anything, and the
-offline harness only reaches its placeholder. Capture this one on the rig.*
+![SIM](docs/img/sim.png)
 
 **SCREENS** — one card per monitor, named by its position on the desk, with a
 button per input the panel declares. DDC/CI over whichever OS is booted:

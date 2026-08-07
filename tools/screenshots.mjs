@@ -79,17 +79,32 @@ const FRAME = {
 };
 
 /* What the fast-polling surfaces fetch directly, outside the SSE frame. */
+/* The sim payload deck.js actually reads — control keys and units taken from
+   paintSim, not invented. An almost-right shape is worse than none: paintSim
+   paints what it recognises and then throws on what it does not, and simTick's
+   .catch repaints the whole surface as "NO LINK", so a missing field looks
+   exactly like a missing agent. */
 const SIM = { link: true, session: true, state: {
   aircraft: 'Beechcraft Baron G58', seq: 482,
-  readouts: { lat: 28.545, lon: -81.333, gs_kt: 0, trk_true: 358, alt_ft: 112,
-              ias_kt: 0, hdg_mag: 2, vs_fpm: 0, rpm: 0, fuel_gal: 146.6,
-              pitch_deg: 0, bank_deg: 0 },
+  readouts: { lat: 28.545, lon: -81.333, gs_kt: 142, trk_true: 214, alt_ft: 3200,
+              ias_kt: 148, hdg_mag: 212, vs_fpm: -240, rpm_1: 2400, rpm_2: 2395,
+              fuel_gal: 146.6, pitch_deg: -2.5, bank_deg: 8 },
   controls: {
     gear:           { state: 'DOWN', pct: 100, handle: 'DOWN' },
-    flaps:          { index: 0, count: 3, angle: 0 },
-    parking_brake:  { state: 'ON' },
-    landing_lights: { state: 'OFF' },
-    autopilot:      { state: 'OFF', hdg_bug: 0, alt_ft: 3000, vs_fpm: 0, spd_kt: 85 },
+    flaps:          { index: 1, detents: 3, angle_deg: 15 },
+    parking_brake:  { state: 'OFF' },
+    landing_lights: { state: 'ON' },
+    ap_master:      { state: 'ON' },
+    ap_hdg:         { deg: 212 },
+    ap_alt:         { ft: 3000 },
+    ap_vs:          { fpm: -500 },
+    ap_spd:         { kt: 145 },
+    com1:           { act: 124.300, sby: 119.100 },
+    com2:           { act: 121.900, sby: 118.750 },
+    nav1:           { act: 110.500, sby: 113.200 },
+    nav2:           { act: 112.300, sby: 115.900 },
+    xpdr:           { code: '4721', mode: 'alt' },
+    baro:           { inhg: 29.92 },
   } } };
 
 const MONITORS = { available: true, default_inputs: ['vga', 'hdmi1', 'hdmi2'],
@@ -138,6 +153,10 @@ const server = createServer(async (req, res) => {
     }) + '\n\n').join('');
     res.write(body);
     return;   // held open: closing it makes the page reconnect and re-render
+  }
+  if (url.pathname === '/switch') {
+    showSurface(url.searchParams.get('s') || 'deck');
+    res.writeHead(200); return res.end('ok');
   }
   if (url.pathname === '/standin') {
     res.writeHead(200, { 'Content-Type': 'text/html' });

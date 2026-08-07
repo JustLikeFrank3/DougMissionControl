@@ -658,10 +658,19 @@ import { npPoll, npTick, paintNp } from './js/media.js';
   }
 
   function simTick() {
+    // The catch covers the FETCH only. It used to wrap paintSim too, so any
+    // exception while painting — a field the agent stopped sending, a shape
+    // that drifted — was repainted as "NO LINK" and read as a missing agent.
+    // That sent me chasing a dead sim agent that was answering perfectly.
+    // A paint bug now surfaces as an unhandled rejection in the console, where
+    // it is a bug, and only a real network failure claims the link is down.
     fetch('/api/sim', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
-      .then(function (d) { simLastOk = Date.now(); paintSim(d); })
-      .catch(function () { paintSim({ link: false, reason: 'deck-api unreachable' }); });
+      .catch(function () {
+        paintSim({ link: false, reason: 'deck-api unreachable' });
+        return null;
+      })
+      .then(function (d) { if (d) { simLastOk = Date.now(); paintSim(d); } });
   }
 
   /* Commands. The panel NEVER draws the commanded position. A command puts
