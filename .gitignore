@@ -7,3 +7,6 @@ __pycache__/
 # .NET build output (windows/sim-agent)
 bin/
 obj/
+
+tmp_*.py
+tmp-*
