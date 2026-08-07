@@ -69,8 +69,12 @@ pi/setup-deck.sh         installs deck-api, repoints fauxmo at it
 pi/deck-api/deck_api.py  one entry point for every trigger; state + SSE
 pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
 pi/deck-ui/              the panel itself — index.html, deck.css, deck.js, selftest.html
-pi/deck-ui/js/           the panel's pure logic as ES modules (format, geo, series),
-                         imported by deck.js and unit-tested without a browser
+pi/deck-ui/js/           the panel as ES modules — deck.js is now just wiring:
+                           format, geo, series   pure logic, unit-tested in node
+                           ui                    $, rows, hold-to-arm, POST
+                           track, spark, gauges  drawing, given the state to draw
+                           nav, sim, screens, media   a surface each, owning its
+                                                 own state and its own listeners
 tools/screenshots.mjs    renders every surface at 2560x720 for the images above
 
 The Windows sim agent (docs/SIM-AGENT-BRIEF.md):
