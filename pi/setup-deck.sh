@@ -47,7 +47,12 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 say "Installing"
 install -d "$DEST" "$DEST/deck-ui"
 install -m 755 "${HERE}/deck-api/deck_api.py" "$DEST/deck_api.py"
-install -m 644 "${HERE}/deck-ui"/* "$DEST/deck-ui/"
+# -D and a find, not a glob: the UI is a directory tree now (js/ holds the
+# panel's modules) and a top-level glob would silently ship an index.html whose
+# imports 404.
+( cd "${HERE}/deck-ui" && find . -type f -print0 ) | while IFS= read -r -d "" f; do
+    install -D -m 644 "${HERE}/deck-ui/$f" "$DEST/deck-ui/$f"
+done
 sed -i 's/\r$//' "$DEST/deck_api.py"   # a CRLF checkout breaks the shebang
 echo "  $DEST"
 

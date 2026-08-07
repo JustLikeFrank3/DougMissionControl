@@ -176,7 +176,7 @@ def _ui_stamp() -> str:
     Publishing this lets the page notice and reload itself.
     """
     try:
-        newest = max(p.stat().st_mtime for p in UI_DIR.iterdir() if p.is_file())
+        newest = max(p.stat().st_mtime for p in UI_DIR.rglob('*') if p.is_file())
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(newest))
     except (OSError, ValueError):
         return "unknown"

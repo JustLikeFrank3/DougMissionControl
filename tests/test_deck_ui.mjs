@@ -1,0 +1,179 @@
+/* Unit tests for the panel's pure logic — the parts that decide what a number
+   means before anything is drawn. No DOM, no browser, no network: run with
+   `node tests/test_deck_ui.mjs`, or via tests/test_deck_ui.sh which skips
+   cleanly when node is not installed.
+
+   These cover the behaviours that have actually gone wrong on this panel:
+   a trail drawn across a relocate, a sparkline carrying a value through an
+   outage, and an ETE invented from a ground speed too small to divide by. */
+
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const UI = path.join(here, '..', 'pi', 'deck-ui', 'js');
+
+const fmt = await import(path.join(UI, 'format.js'));
+const geo = await import(path.join(UI, 'geo.js'));
+const { createSeries } = await import(path.join(UI, 'series.js'));
+
+let passed = 0;
+const failures = [];
+function test(name, fn) {
+  try { fn(); passed++; } catch (e) { failures.push(name + '\n     ' + e.message); }
+}
+
+/* ── format ─────────────────────────────────────────────────────────────── */
+
+test('fmtDur reads as seconds below a minute and m:ss above', () => {
+  assert.equal(fmt.fmtDur(0), '0 s');
+  assert.equal(fmt.fmtDur(37), '37 s');
+  assert.equal(fmt.fmtDur(60), '1:00');
+  assert.equal(fmt.fmtDur(95), '1:35');
+  assert.equal(fmt.fmtDur(-5), '0 s', 'negative durations clamp rather than print a minus');
+});
+
+test('fmtAgo coarsens as the gap grows', () => {
+  const now = 1_000_000;
+  assert.equal(fmt.fmtAgo(0, now), '—', 'no timestamp is unknown, not "now"');
+  assert.equal(fmt.fmtAgo(now - 30, now), '30 s');
+  assert.equal(fmt.fmtAgo(now - 600, now), '10 m');
+  assert.equal(fmt.fmtAgo(now - 7200, now), '2 h 0 m');
+  assert.equal(fmt.fmtAgo(now - 86400 * 3, now), '3 d');
+});
+
+test('fmtVal keeps a missing reading distinct from zero', () => {
+  assert.equal(fmt.fmtVal(null, '°C'), '—');
+  assert.equal(fmt.fmtVal(undefined, '°C'), '—');
+  assert.equal(fmt.fmtVal(0, '°C'), '0 °C', 'zero is a reading and must render as one');
+  assert.equal(fmt.fmtVal(47.44, '°C'), '47.4 °C');
+  assert.equal(fmt.fmtVal(1234.6, 'rpm'), '1235 rpm', 'past 100 the decimal is noise');
+});
+
+test('fmtTime pads seconds', () => {
+  assert.equal(fmt.fmtTime(0), '0:00');
+  assert.equal(fmt.fmtTime(65), '1:05');
+  assert.equal(fmt.fmtTime(null), '');
+});
+
+test('fmtEte refuses to divide by a ground speed too small to mean anything', () => {
+  assert.equal(fmt.fmtEte(100, 0), 'ETE — · 0 kt');
+  assert.equal(fmt.fmtEte(100, 3), 'ETE — · 3 kt');
+  assert.equal(fmt.fmtEte(100, 120), 'ETE 50 min');
+  assert.equal(fmt.fmtEte(600, 120), 'ETE 5.0 h', 'past 90 min it switches to hours');
+});
+
+/* ── geo ────────────────────────────────────────────────────────────────── */
+
+test('distBrg gets the cardinal directions right', () => {
+  const north = geo.distBrg(28.0, -81.0, 29.0, -81.0);
+  assert.ok(Math.abs(north.dist - 60) < 0.5, 'a degree of latitude is 60 nm');
+  assert.ok(Math.abs(north.brg - 0) < 0.5 || Math.abs(north.brg - 360) < 0.5);
+  assert.ok(Math.abs(geo.distBrg(28, -81, 28, -80).brg - 90) < 0.5, 'east');
+  assert.ok(Math.abs(geo.distBrg(28, -81, 27, -81).brg - 180) < 0.5, 'south');
+  assert.ok(Math.abs(geo.distBrg(28, -81, 28, -82).brg - 270) < 0.5, 'west');
+});
+
+test('longitude compresses with latitude', () => {
+  const equator = geo.distBrg(0, 0, 0, 1).dist;
+  const florida = geo.distBrg(28, -81, 28, -80).dist;
+  assert.ok(florida < equator, 'a degree of longitude is shorter away from the equator');
+  assert.ok(Math.abs(florida - 60 * Math.cos(28 * Math.PI / 180)) < 0.5);
+});
+
+test('world projection is monotonic and inverts latitude', () => {
+  const a = geo.world(28, -81, 12), b = geo.world(28, -80, 12);
+  assert.ok(b.x > a.x, 'east is right');
+  assert.ok(geo.world(29, -81, 12).y < a.y, 'north is up, so y decreases');
+  assert.ok(geo.world(28, -81, 13).x > a.x, 'a deeper zoom is a bigger world');
+});
+
+test('clampZoom holds the manual range', () => {
+  assert.equal(geo.clampZoom(3), geo.ZMIN);
+  assert.equal(geo.clampZoom(99), geo.ZMAX);
+  assert.equal(geo.clampZoom(12), 12);
+});
+
+test('a pinch of double the span is exactly one zoom level', () => {
+  // The gesture measures against the span at touchdown: z = z0 + log2(now/then)
+  const z0 = 11, step = (ratio) => geo.clampZoom(Math.round(z0 + Math.log(ratio) / Math.LN2));
+  assert.equal(step(1), 11);
+  assert.equal(step(2), 12);
+  assert.equal(step(4), 13);
+  assert.equal(step(0.5), 10);
+  assert.equal(step(1000), geo.ZMAX, 'and it stops at the limit rather than running away');
+});
+
+test('isTeleport separates a relocate from a slow poll, not a big number', () => {
+  const orlando = { lat: 28.43, lon: -81.31 };
+  const seattle = { lat: 47.45, lon: -122.31 };
+  const northOfOrlando = { lat: 29.43, lon: -81.31 };   // 60 nm away
+
+  assert.equal(geo.isTeleport(orlando, seattle, 2000), true,
+    'a continental jump in two seconds is a relocate');
+  assert.equal(geo.isTeleport(orlando, northOfOrlando, 1200_000), false,
+    '60 nm in twenty minutes is a backgrounded tab, and its trail is real');
+  assert.equal(geo.isTeleport(orlando, northOfOrlando, 2000), true,
+    'the same 60 nm in two seconds is not');
+  assert.equal(geo.isTeleport(null, orlando, 2000), false, 'no previous fix, nothing to compare');
+});
+
+test('a cruising aircraft never trips the teleport threshold', () => {
+  // 500 kt for two seconds, sampled at the worst case of a whole poll late.
+  const nm = 500 * (2 / 3600);
+  const from = { lat: 28, lon: -81 };
+  const to = { lat: 28 + nm / 60, lon: -81 };
+  assert.equal(geo.isTeleport(from, to, 2000), false);
+});
+
+/* ── series ─────────────────────────────────────────────────────────────── */
+
+test('an absent key records a gap, never a zero or the last value', () => {
+  const s = createSeries();
+  s.push({ telemetry: { ts: 100, ws: { gpu_temp_c: 47 } } }, ['ws.gpu_temp_c']);
+  s.push({ telemetry: { ts: 101, ws: {} } }, ['ws.gpu_temp_c']);   // mid-reboot
+  const pts = s.points('ws.gpu_temp_c');
+  assert.equal(pts.length, 2);
+  assert.equal(pts[1].v, null, 'the machine was off; that is a hole, not a reading');
+  assert.equal(s.latest('ws.gpu_temp_c').v, 47, 'but the last real reading is still findable');
+});
+
+test('a repeated timestamp is not a new sample', () => {
+  const s = createSeries();
+  assert.equal(s.push({ telemetry: { ts: 100, ws: { v: 1 } } }, ['ws.v']), true);
+  assert.equal(s.push({ telemetry: { ts: 100, ws: { v: 2 } } }, ['ws.v']), false,
+    'deck-api re-sending the same frame must not double-plot it');
+  assert.equal(s.points('ws.v').length, 1);
+});
+
+test('samples older than the window are evicted', () => {
+  const s = createSeries({ windowS: 60 });
+  for (let t = 0; t <= 120; t += 10) s.record('k', t, t);
+  const pts = s.points('k');
+  assert.ok(pts[0].t >= 60, 'nothing older than the window survives');
+  assert.equal(pts[pts.length - 1].t, 120);
+});
+
+test('the hard cap holds regardless of sample rate', () => {
+  const s = createSeries({ maxPts: 10 });
+  for (let i = 0; i < 500; i++) s.record('k', i, i);
+  assert.equal(s.points('k').length, 10, 'a fast agent cannot grow this without bound');
+  assert.equal(s.points('k')[9].v, 499, 'and it keeps the newest, not the oldest');
+});
+
+test('non-numeric readings become gaps', () => {
+  const s = createSeries();
+  s.record('k', 1, 'warm');
+  s.record('k', 2, NaN);
+  s.record('k', 3, Infinity);
+  assert.deepEqual(s.points('k').map(p => p.v), [null, null, null]);
+  assert.equal(s.latest('k'), null, 'a trace of nothing has no latest value');
+});
+
+if (failures.length) {
+  console.error(`FAIL: deck-ui pure logic (${failures.length} of ${passed + failures.length})`);
+  failures.forEach(f => console.error('  - ' + f));
+  process.exit(1);
+}
+console.log(`deck-ui pure logic tests passed (${passed} assertions groups)`);

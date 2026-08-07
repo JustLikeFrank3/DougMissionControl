@@ -3,6 +3,12 @@
    out. Deliberately dependency-free and small — on a Pi 4B the browser is
    the single most expensive process on the box, so this page stays cheap. */
 
+import { fmtDur, fmtAgo, fmtClock, fmtVal, fmtTime, fmtEte } from './js/format.js';
+import { distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
+         isTeleport, zoomForSpan, TILE, ZMIN as NAV_ZMIN, ZMAX as NAV_ZMAX,
+         NM_PER_DEG } from './js/geo.js';
+import { createSeries } from './js/series.js';
+
 (function () {
   'use strict';
 
@@ -84,29 +90,6 @@
     }
   }
 
-  /* ── formatting ───────────────────────────────────────────────────────── */
-  function fmtDur(s) {
-    s = Math.max(0, Math.round(s || 0));
-    var m = Math.floor(s / 60);
-    return m ? m + ':' + String(s % 60).padStart(2, '0') : s + ' s';
-  }
-
-  function fmtAgo(ts) {
-    if (!ts) return '—';
-    var s = Math.max(0, Math.round(Date.now() / 1000 - ts));
-    if (s < 90) return s + ' s';
-    var m = Math.floor(s / 60);
-    if (m < 90) return m + ' m';
-    var h = Math.floor(m / 60);
-    return h < 48 ? h + ' h ' + (m % 60) + ' m' : Math.floor(h / 24) + ' d';
-  }
-
-  function fmtClock(ts) {
-    var d = new Date((ts || Date.now() / 1000) * 1000);
-    return String(d.getHours()).padStart(2, '0') + ':' +
-           String(d.getMinutes()).padStart(2, '0');
-  }
-
   function rows(el, pairs) {
     el.innerHTML = '';
     pairs.forEach(function (p) {
@@ -126,56 +109,24 @@
 
   var WINDOW_S = 3600;          // 60 min
   var MAX_PTS = 1200;           // hard cap regardless of sample rate
-  var series = Object.create(null);
-  var lastSampleTs = 0;
+  var series = createSeries();
 
   // Which traces the page actually shows, read off the DOM once.
   var TRACKED = [].map.call(document.querySelectorAll('[data-key]'), function (el) {
     return el.dataset.key;
   }).filter(function (v, i, a) { return a.indexOf(v) === i; });
 
-  function record(key, t, v) {
-    var a = series[key] || (series[key] = []);
-    a.push({ t: t, v: (typeof v === 'number' && isFinite(v)) ? v : null });
-    var cut = t - WINDOW_S;
-    var drop = 0;
-    while (drop < a.length && a[drop].t < cut) drop++;
-    if (drop) a.splice(0, drop);
-    if (a.length > MAX_PTS) a.splice(0, a.length - MAX_PTS);
-  }
-
-  function pushSamples(s) {
-    var tel = s.telemetry || {};
-    if (!tel.ts || tel.ts === lastSampleTs) return false;
-    lastSampleTs = tel.ts;
-    TRACKED.forEach(function (key) {
-      var parts = key.split('.');
-      var src = tel[parts[0]] || {};
-      // A key that is absent this cycle is a genuine gap — the machine was
-      // off or mid-reboot — not a zero and not a carried-forward value.
-      record(key, tel.ts, parts[1] in src ? src[parts[1]] : null);
-    });
-    return true;
-  }
-
-  function latest(key) {
-    var a = series[key];
-    if (!a) return null;
-    for (var i = a.length - 1; i >= 0; i--) if (a[i].v !== null) return a[i];
-    return null;
-  }
-
   /* ── sparkline ────────────────────────────────────────────────────────── */
 
   function drawSpark(svg) {
     // The stat tiles put data-key on the .stat div, not on their svg — so the
-    // svg's own key is undefined there and this looked up series[undefined],
+    // svg's own key is undefined there and this looked up series.points(undefined),
     // which is why every stat spark has read "no data — exporter not
     // answering" since the day it shipped, healthy exporter or not. Fall back
     // to the parent's key.
     var key = svg.dataset.key ||
       (svg.parentNode && svg.parentNode.dataset && svg.parentNode.dataset.key);
-    var data = series[key] || [];
+    var data = series.points(key) || [];
     var vb = svg.viewBox.baseVal;
     var W = vb.width, H = vb.height;
     var wide = svg.classList.contains('wide');
@@ -259,12 +210,6 @@
     svg.innerHTML = out.join('');
   }
 
-  function fmtVal(v, unit) {
-    if (v === null || v === undefined) return '—';
-    var s = Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
-    return s + (unit ? ' ' + unit : '');
-  }
-
   function drawAllSparks() {
     [].forEach.call(document.querySelectorAll('svg.spark'), drawSpark);
 
@@ -274,7 +219,7 @@
     // value AND stamps its age beside it in the same glance; a value older
     // than two minutes stops being shown at all.
     [].forEach.call(document.querySelectorAll('.stat'), function (el) {
-      var p = latest(el.dataset.key);
+      var p = series.latest(el.dataset.key);
       var v = el.querySelector('.v');
       var age = p ? Date.now() / 1000 - p.t : Infinity;
       var stale = age > 15;
@@ -447,15 +392,8 @@
   var navSyncWps = {};             // gps waypoint index -> {name, lat, lon}
   var navSyncCount = 0;            // plan shape; a change means a new plan
   var navTrail = [];               // {t, lat, lon} — browser memory only
-  // Implied ground speed above which the aircraft did not fly there, it was
-  // put there. Comfortably above anything the sim's aircraft do, and far
-  // below the rate a relocate across a continent implies.
-  var NAV_TELEPORT_KT = 1500;
   var navTimer = null;
   var navZoom = null;              // null = auto-fit; integer = manual slippy z
-  // Manual zoom range. The auto-fit stops at 15; manual goes one closer, which
-  // is the level that shows taxiways.
-  var NAV_ZMIN = 8, NAV_ZMAX = 16;
   var navLastZ = 12;               // whatever the auto-fit last chose
 
   function navPoll(on) {
@@ -468,27 +406,6 @@
       .then(function (r) { return r.json(); })
       .then(paintNav)
       .catch(function () { paintNav({ link: false }); });
-  }
-
-  var NM_PER_DEG = 60;
-  function navXY(lat, lon, lat0, lon0) {
-    // Local flat projection in nm around the reference — exact enough for a
-    // wall map at Florida distances, and vastly cheaper than real geodesy.
-    var k = Math.cos(lat0 * Math.PI / 180);
-    return { x: (lon - lon0) * NM_PER_DEG * k, y: (lat - lat0) * NM_PER_DEG };
-  }
-
-  function navDistBrg(lat1, lon1, lat2, lon2) {
-    var p = navXY(lat2, lon2, lat1, lon1);
-    var dist = Math.sqrt(p.x * p.x + p.y * p.y);
-    var brg = (Math.atan2(p.x, p.y) * 180 / Math.PI + 360) % 360;
-    return { dist: dist, brg: brg };
-  }
-
-  function fmtEte(nm, gs) {
-    if (!gs || gs < 5) return 'ETE — · ' + gs + ' kt';
-    var min = nm / gs * 60;
-    return 'ETE ' + (min >= 90 ? (min / 60).toFixed(1) + ' h' : Math.round(min) + ' min');
   }
 
   /* Grow the plan from the GPS's observed legs. deck-api still owns the plan
@@ -612,13 +529,10 @@
       // the view on the trail: one relocate and the map zooms out to hold two
       // states at once.
       //
-      // Detect it as implied ground speed rather than raw distance. Dividing
-      // by elapsed time is what keeps a backgrounded tab or a missed poll —
-      // both of which produce a legitimately large gap — from being mistaken
-      // for a jump.
-      var moved = navDistBrg(last.lat, last.lon, r.lat, r.lon).dist;
-      var hrs = Math.max(Date.now() - last.t, 1000) / 3600000;
-      if (moved / hrs > NAV_TELEPORT_KT) navTrail.length = 0;
+      // isTeleport judges it on implied ground speed rather than raw distance,
+      // which is what keeps a backgrounded tab or a missed poll — both of which
+      // produce a legitimately large gap — from being mistaken for a jump.
+      if (isTeleport(last, r, Date.now() - last.t)) navTrail.length = 0;
       last = navTrail[navTrail.length - 1];
     }
     if (!last || navDistBrg(last.lat, last.lon, r.lat, r.lon).dist > 0.02) {
@@ -852,18 +766,8 @@
      drawn on the map as required. No internet degrades gracefully: missing
      tiles simply do not draw and the overlays stand alone on dark.
      Projection is Web Mercator throughout so tiles and trail agree. */
-  var TILE = 256;
   var navTiles = {};             // url -> Image
   var navTileOrder = [];         // insertion order, for crude eviction
-
-  function navWorld(lat, lon, z) {
-    var n = TILE * Math.pow(2, z);
-    var rad = lat * Math.PI / 180;
-    return {
-      x: (lon + 180) / 360 * n,
-      y: (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n
-    };
-  }
 
   function navTile(url) {
     var img = navTiles[url];
@@ -1038,11 +942,6 @@
       .then(function (r) { return r.json(); })
       .then(paintNp)
       .catch(function () { paintNp({ active: false }); });
-  }
-
-  function fmtTime(s) {
-    if (!s && s !== 0) return '';
-    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
   }
 
   function paintNp(m) {
@@ -1537,7 +1436,7 @@
     $('st-os').innerHTML = '<span class="' + (ws.os === 'off' ? '' : 'live') + '">●</span> ' +
       (boot.in_flight ? 'BOOTING' : look.os);
 
-    var t = latest('ws.gpu_temp_c');
+    var t = series.latest('ws.gpu_temp_c');
     $('st-gpu').innerHTML = t ? 'GPU <b>' + Math.round(t.v) + '°</b>' : '';
 
     $('nav-deck').textContent = boot.in_flight
@@ -1573,7 +1472,7 @@
 
     // Traces redraw only when a genuinely new sample lands, not on the 1 Hz
     // clock tick — the Pi 4B has better things to do with its CPU.
-    if (pushSamples(s)) drawAllSparks();
+    if (series.push(s, TRACKED)) drawAllSparks();
 
     var src = (s.telemetry && s.telemetry.source) || null;
     $('chart-lbl').textContent = 'GPU TEMPERATURE · °C' +
@@ -1903,7 +1802,6 @@
 
   // NAV zoom. Steps start from wherever the auto-fit currently sits, so the
   // first tap nudges rather than jumps; FIT hands framing back to auto.
-  function navClampZ(z) { return Math.max(NAV_ZMIN, Math.min(NAV_ZMAX, z)); }
   function navSetZoom(zOrNull) {
     navZoom = zOrNull === null ? null : navClampZ(zOrNull);
     var fit = $('navp-fit');
