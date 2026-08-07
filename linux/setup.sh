@@ -17,6 +17,9 @@
 #     fallback) + VS Code — the Linux mirror of jarvis-greeting.ps1
 #   * media-agent.py as a systemd USER unit on :9110 — the Linux half of the
 #     MEDIA widget and the SCREENS surface (ddcutil, i2c-dev, the i2c group)
+#   * a logon hook that hands the session's DISPLAY/XAUTHORITY to the user
+#     manager, without which the agent cannot read desktop geometry and the
+#     SCREENS cards lose their left-to-right order
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -296,6 +299,32 @@ chown "$REAL_USER:$REAL_USER" "$USER_UNIT_DIR/flightsim-media-agent.service"
 # error, so this degrades exactly the way it should.
 loginctl enable-linger "$REAL_USER" >/dev/null 2>&1 || true
 
+# ...but lingering has a cost the agent cannot pay by itself: a unit started at
+# boot never inherits DISPLAY or XAUTHORITY, so xrandr cannot authenticate and
+# the agent gets no desktop geometry. It then cannot say which panel is on the
+# left, the SCREENS cards fall back to ddcutil's bus order, and on a desk where
+# that order does not match the desk they come out reversed.
+#
+# Push the session's own variables into the user manager at login and restart
+# the agent so it picks them up. Same idea as the import-environment line most
+# desktops run for their own units.
+cat > /usr/local/bin/flightdeck-media-env <<'EOF'
+#!/bin/bash
+# Hand the graphical session's environment to the user manager, then restart
+# the media agent so its xrandr/wlr-randr probes can reach the display server.
+systemctl --user import-environment DISPLAY XAUTHORITY WAYLAND_DISPLAY 2>/dev/null || true
+systemctl --user restart flightsim-media-agent.service 2>/dev/null || true
+EOF
+chmod 755 /usr/local/bin/flightdeck-media-env
+cat > "$REAL_HOME/.config/autostart/flightdeck-media-env.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Flight Deck media agent session environment
+Exec=/usr/local/bin/flightdeck-media-env
+X-GNOME-Autostart-enabled=true
+EOF
+chown "$REAL_USER:$REAL_USER" "$REAL_HOME/.config/autostart/flightdeck-media-env.desktop"
+
 REAL_UID="$(id -u "$REAL_USER")"
 if command -v systemctl >/dev/null 2>&1; then
     sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$REAL_UID" \
@@ -322,6 +351,15 @@ echo "    python3 /usr/local/bin/media-agent.py --monitors"
 echo "Expect one entry per monitor with \"ddc\": true. An empty list means"
 echo "ddcutil reached no I2C bus — group membership does not apply to sessions"
 echo "that were already open, so log out and back in (or reboot) and re-check."
+echo
+echo "Then check what the SERVICE serves, which is what SCREENS actually sees:"
+echo "    curl -s \"http://127.0.0.1:9110/monitor?token=\$(sudo cat $MEDIA_TOKEN_FILE)\""
+echo "The two can disagree: your shell has DISPLAY and XAUTHORITY, a unit"
+echo "started at boot does not. If \"position\" is empty there, the agent got no"
+echo "desktop geometry, could not tell left from right, and the cards fall back"
+echo "to ddcutil's bus order — which is how they come out reversed. Logging out"
+echo "and back in now installs the fix; failing that, state the order yourself:"
+echo "    echo 'MON_ORDER=dp1,hdmi1' | sudo tee -a /etc/dualboot/media-agent.env"
 echo
 if [ -n "$PUBKEY" ]; then
     echo "Done. Test from the Pi:  ssh -i ~/.ssh/flightsim_ed25519 $REAL_USER@192.168.100.1 boot"
