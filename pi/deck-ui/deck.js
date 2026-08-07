@@ -559,10 +559,6 @@
      distances update every paint without rebuilding the DOM. */
   function renderNavPlan(r) {
     var box = $('navp-plan');
-    // There is nothing to name when the plan is empty, and the server says so
-    // too. Disabled rather than silently inert, so the button never reads as
-    // broken — which is how a no-op control looks on a panel with no console.
-    $('navp-save').disabled = !navPlan.length;
     var sig = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
     if (sig !== navPlanSig) {
       navPlanSig = sig;
@@ -1334,6 +1330,10 @@
     renderStrip(s);
     renderSimNav(s);
     navPlan = s.nav_plan || [];   // deck-api owns the plan; SSE delivers it
+    // Here, not in the NAV paint: that path only runs once the sim is feeding
+    // a position, so with no sim the button sat enabled and did nothing —
+    // which is the silently-inert control this was meant to prevent.
+    $('navp-save').disabled = !navPlan.length;
 
     var ws = s.workstation || {};
     var boot = s.boot || {};
