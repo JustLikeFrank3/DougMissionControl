@@ -48,6 +48,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 from hashlib import md5
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -350,6 +352,10 @@ def _layout_xrandr() -> dict[str, dict]:
                 "w": int(m.group(3)), "h": int(m.group(4)),
                 "x": int(m.group(5)), "y": int(m.group(6)),
                 "primary": bool(m.group(2)),
+                # xrandr's own spelling of the output, kept so the layout can
+                # be handed straight back to xrandr --output. The normalized
+                # key cannot be: "hdmi1" is not an output name.
+                "_out": m.group(1),
             }
     return found
 
@@ -479,6 +485,7 @@ def monitors() -> dict:
             rec["w"], rec["h"] = mode
         geo = dict(layout.get(_conn_key(conn)) or {})
         order = geo.pop("_order", None)
+        geo.pop("_out", None)      # xrandr's output name is ours, not the panel's
         for k, v in geo.items():
             if v is not None:
                 rec[k] = v
@@ -506,12 +513,56 @@ def monitors() -> dict:
     return {"monitors": [], "reason": _last_error or "ddcutil reached no I2C bus"}
 
 
+# How long to wait before checking whether the desktop survived a switch.
+# The monitor has to drop its input, settle, and re-assert hotplug; the display
+# server then reconfigures. Under about 4 s and the check races that.
+_RESTORE_AFTER_S = 6.0
+# Off with MEDIA_NO_RESTORE=1 in /etc/dualboot/media-agent.env, for a desk whose
+# monitors keep hotplug asserted on the inactive input — there the re-apply is
+# a no-op, but a no-op that costs an xrandr call per switch.
+RESTORE_LAYOUT = os.environ.get("MEDIA_NO_RESTORE", "") not in ("1", "true", "yes")
+
+
+def _restore_layout(before: dict[str, dict]) -> None:
+    """Put the desktop back the way it was before an input switch.
+
+    Sending a monitor to another input usually drops its hotplug line. The
+    display server sees the output vanish, tears it down, and when the monitor
+    returns the driver brings it back at whatever mode it can prove is safe —
+    1024x768, typically, on a panel whose EDID it no longer trusts. That is why
+    switching away and back leaves a black screen or a 4:3 desktop.
+
+    None of this is DDC's doing and none of it is DDC's to fix; the switch
+    worked. But the agent is the only thing that knows a switch just happened,
+    so it is the only thing positioned to put the mode back.
+    """
+    time.sleep(_RESTORE_AFTER_S)
+    after = _layout()
+    if not before or not after:
+        return                      # no display server either side: nothing to do
+    for key, was in before.items():
+        now = after.get(key)
+        out = was.get("_out")
+        if not now or not out:
+            continue
+        same = (now.get("w"), now.get("h"), now.get("x"), now.get("y")) == \
+               (was.get("w"), was.get("h"), was.get("x"), was.get("y"))
+        if same:
+            continue
+        _run_env(["xrandr", "--output", out,
+                  "--mode", f"{was['w']}x{was['h']}",
+                  "--pos", f"{was['x']}x{was['y']}"])
+
+
 def monitor_switch(input_name: str, index: int) -> dict:
     """Command one monitor (or all when index < 0). "sent" means ddcutil
     returned success — the read-back is the only proof anything moved."""
     code = MON_INPUTS.get(input_name)
     if code is None:
         return {"ok": False, "reason": "input must be one of " + "/".join(MON_INPUTS)}
+    # Captured BEFORE the switch: once the monitor leaves this input the
+    # display server has already forgotten what the mode was.
+    before = _layout() if RESTORE_LAYOUT else {}
     results, any_ok = [], False
     for i, disp in enumerate(_detect()):
         if index >= 0 and i != index:
@@ -521,6 +572,12 @@ def monitor_switch(input_name: str, index: int) -> dict:
         results.append({"index": i, "desc": disp["model"], "sent": sent})
     if not results:
         return {"ok": False, "reason": f"no monitor at index {index}"}
+    # In the background: the panel gets its answer immediately, and the reply
+    # still means only "the DDC write returned success". Whether the desktop
+    # came back is a separate question from whether the input changed.
+    if any_ok and before:
+        threading.Thread(target=_restore_layout, args=(before,),
+                         daemon=True).start()
     return {"ok": any_ok, "input": input_name, "monitors": results}
 
 
