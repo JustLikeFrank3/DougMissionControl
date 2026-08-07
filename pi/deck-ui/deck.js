@@ -1646,6 +1646,78 @@
     });
   });
 
+  // AP numpad: tap a bug's value to type the target outright. "Fly heading
+  // 240" is three keys, not fifteen taps of +10.
+  var AP_PAD = {
+    ap_hdg: { title: 'AP HDG', unit: '°', hint: '0 – 359', neg: false, key: 'aphdg' },
+    ap_alt: { title: 'AP ALT', unit: 'FT', hint: '0 – 60000', neg: false, key: 'apalt' },
+    ap_vs: { title: 'AP V/S', unit: 'FPM', hint: '±8000 · ± flips climb/descend', neg: true, key: 'apvs' },
+    ap_spd: { title: 'AP SPD', unit: 'KT', hint: '0 – 900', neg: false, key: 'apspd' }
+  };
+  var apPadCtl = null, apPadStr = '', apPadNeg = false;
+
+  function apPadPaint() {
+    var bad = apPadStr !== '' && !apPadOk();
+    $('ap-pad-val').textContent = (apPadNeg ? '−' : '') + (apPadStr || ' ');
+    var hint = $('ap-pad-hint');
+    hint.textContent = bad ? 'OUT OF RANGE · ' + AP_PAD[apPadCtl].hint
+                           : AP_PAD[apPadCtl].hint;
+    hint.className = 'np-hint' + (bad ? ' bad' : '');
+  }
+
+  function apPadValue() { return (apPadNeg ? -1 : 1) * Number(apPadStr || '0'); }
+
+  function apPadOk() {
+    if (apPadStr === '') return false;
+    var ap = AP_VARS[apPadCtl];
+    var v = apPadValue();
+    return ap.wrap ? v >= 0 && v <= 359 : v >= ap.min && v <= ap.max;
+  }
+
+  function apPadOpen(ctl) {
+    var c = (simLast && simLast.controls) || {};
+    if (!c[ctl]) return;                    // no autopilot, no pad
+    apPadCtl = ctl; apPadStr = ''; apPadNeg = false;
+    $('ap-pad-title').textContent = AP_PAD[ctl].title;
+    $('ap-pad-unit').textContent = AP_PAD[ctl].unit;
+    $('ap-pad').hidden = false;
+    apPadPaint();
+  }
+
+  function apPadCommit() {
+    if (!apPadOk()) return;
+    simSend(apPadCtl, 'set', String(apPadValue()));
+    $('ap-pad').hidden = true;
+  }
+
+  (function () {
+    var keys = $('ap-pad-keys');
+    ['7', '8', '9', '4', '5', '6', '1', '2', '3', '±', '0', '⌫'].forEach(function (k) {
+      var b = document.createElement('button');
+      b.textContent = k;
+      b.addEventListener('click', function () {
+        if (k === '±') { if (AP_PAD[apPadCtl].neg) apPadNeg = !apPadNeg; }
+        else if (k === '⌫') apPadStr = apPadStr.slice(0, -1);
+        else if (apPadStr.length < 5) apPadStr += k;
+        apPadPaint();
+      });
+      keys.appendChild(b);
+    });
+    var set = document.createElement('button');
+    set.textContent = 'SET';
+    set.className = 'go';
+    set.style.gridColumn = '1 / -1';
+    set.addEventListener('click', apPadCommit);
+    keys.appendChild(set);
+    $('ap-pad-close').addEventListener('click', function () { $('ap-pad').hidden = true; });
+
+    Object.keys(AP_PAD).forEach(function (ctl) {
+      var el = $('simv-' + AP_PAD[ctl].key);
+      el.classList.add('tap');
+      el.addEventListener('click', function () { apPadOpen(ctl); });
+    });
+  })();
+
   // The AUTO sub-nav button is static HTML, so the dynamic-button wiring in
   // renderEvalsNav never touches it — and no revision ever wired it, which
   // made pinning a board a one-way door: you could leave the playlist but
