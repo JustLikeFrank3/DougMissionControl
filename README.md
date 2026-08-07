@@ -189,12 +189,6 @@ search hits real OpenStreetMap data, plans are saved on the Pi, and the trail
 is where the aircraft has actually been. Pinch to zoom; FIT hands framing back
 to the auto-fit.
 
-The render below was made on a host with no route to the tile server, so only
-Flight Deck's own symbology is drawn — route, waypoints, aircraft, range rings.
-Run `node tools/screenshots.mjs` anywhere with internet and the same image
-comes back with the OpenStreetMap raster underneath, exactly as the panel
-draws it.
-
 ![NAV](docs/img/nav.png)
 
 **SIM** — observed aircraft state and the controls that command it. The panel
