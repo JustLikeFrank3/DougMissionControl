@@ -76,6 +76,9 @@ pi/deck-ui/js/           the panel as ES modules — deck.js is now just wiring:
                            nav, sim, screens, media   a surface each, owning its
                                                  own state and its own listeners
 tools/screenshots.mjs    renders every surface at 2560x720 for the images above
+                         (node + any installed Chrome + internet for map tiles;
+                          `npm install playwright-core` first, `npm.cmd` on
+                          Windows if PowerShell blocks the npm wrapper)
 
 The Windows sim agent (docs/SIM-AGENT-BRIEF.md):
 windows/sim-agent/       flightdeck-sim-agent — SimConnect + media on :9109

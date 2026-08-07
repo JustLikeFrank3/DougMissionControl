@@ -201,8 +201,29 @@ const main = async () => {
     return new Promise(() => {});
   }
   const { chromium } = await import('playwright-core');
-  const exe = arg('--browser', process.env.CHROMIUM ||
-                  '/opt/pw-browsers/chromium-1194/chrome-linux/chrome');
+  // Where Chrome lives, per platform. The default used to be one hardcoded
+  // Linux path — the sandbox this tool was written in — which meant it only
+  // ran on that one machine and failed everywhere else with a path nobody
+  // recognised. Explicit --browser still wins.
+  const CANDIDATES = [
+    process.env.CHROMIUM,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
+    '/snap/bin/chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ].filter(Boolean);
+  const { existsSync } = await import('node:fs');
+  const exe = arg('--browser', CANDIDATES.find(existsSync));
+  if (!exe) {
+    console.error('No Chrome or Chromium found. Pass one:\n' +
+      '  node tools/screenshots.mjs --browser "<path to chrome>"\n' +
+      'Looked in:\n' + CANDIDATES.map(c => '  ' + c).join('\n'));
+    process.exit(1);
+  }
+  // playwright-core drives an installed browser; it downloads nothing.
   const browser = await chromium.launch({ executablePath: exe });
   const page = await browser.newPage({ viewport: { width: 2560, height: 720 } });
   await page.goto(`http://127.0.0.1:${PORT}/index.html`);
