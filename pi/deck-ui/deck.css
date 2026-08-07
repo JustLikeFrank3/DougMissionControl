@@ -354,6 +354,13 @@ html, body {
 .sim-body { flex: 1; display: flex; gap: 14px; min-height: 0; }
 .sim-controls { flex: 3; display: grid; gap: 14px;
                 grid-template-columns: 1.7fr 1fr 1fr 1fr 1fr; }
+/* Nine tiles in a five-column grid: five across the top, four AP bugs beneath.
+   That leaves the tenth cell — under AUTOPILOT — empty, which is the hole in
+   the middle of SIM. Gear takes the spare row instead: it is the one control
+   this panel was built to prove, it is the only tile with a bar and two
+   buttons to fill the height, and it puts the AP bugs directly under the
+   autopilot they belong to. */
+.sim-controls > #simt-gear { grid-row: span 2; }
 .sim-reads { flex: 1.1; display: grid; gap: 14px;
              grid-template-columns: 1fr 1fr;
              grid-template-rows: repeat(3, 1fr); }
@@ -567,12 +574,28 @@ html, body {
              box-shadow: inset 0 -3px 0 var(--cy); }
 .navsteer { display: flex; flex-direction: column; align-items: center;
             gap: 6px; padding: 8px 0; }
-.navsteer svg { width: 190px; height: 190px; }
+/* 160, not 190. The rail gained an aircraft tile and a SYNC button without
+   anything giving way, and the steer compass is the single biggest consumer
+   in it — still the largest thing on the rail at this size. */
+.navsteer svg { width: 150px; height: 150px; }
 .ns-ring { fill: none; stroke: var(--ln); stroke-width: 2; }
 .ns-arrow { fill: var(--cy); }
 #navp-arrow-g { transform-origin: 50px 50px; transition: transform .25s linear; }
 .ns-cap { font-size: 12px; letter-spacing: .22em; color: var(--mut); }
-.navrail .simt { flex: 1; }
+/* .simt pins its h3 absolutely at the top and CENTRES the value beneath, which
+   works in SIM where the tiles are tall. In this rail they are not, so a value
+   of any length rides up into its own label. Start the content below the label
+   rather than centring it, and let the tile be exactly as tall as it needs —
+   no floor to collide under, no fixed height to waste. */
+.navrail .simt { flex: none; justify-content: flex-start;
+                 padding-top: 36px; min-height: 0; }
+.navrail .simt-v.sm2 { font-size: 28px; }
+
+/* The airframe as a caption: two short lines, no absolute label to collide. */
+.navac { flex: none; line-height: 1.35; }
+.navac-n { font-size: 15px; letter-spacing: .06em; color: var(--fg);
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navac-s { font-size: 12px; letter-spacing: .06em; color: var(--mut); }
 .simt-v.sm2 { font-size: 34px; }
 /* touch-action: none so the pinch reaches the map. Without it Chromium claims
    the gesture for its own scroll/zoom before the pointer stream gets going,

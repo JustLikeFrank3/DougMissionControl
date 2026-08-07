@@ -1784,7 +1784,7 @@
 
   function showNumericInput(o) {
     numOpts = o; numStr = ''; numNeg = false;
-    $('np-title').textContent = o.title;
+    $('numpad-title').textContent = o.title;
     $('np-unit').textContent = o.unit || '';
     $('num-pad').hidden = false;
     numPaint();

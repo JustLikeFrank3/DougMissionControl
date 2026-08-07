@@ -212,6 +212,14 @@
              the steer arrow is derived from observed position and track. -->
         <div class="navmap" id="navp-live" hidden>
           <div class="navrail">
+            <!-- The airframe, as a caption rather than an instrument. It was a
+                 full tile, which cost 92 px of a rail that has none to spare and
+                 spent it repeating the altitude and ground speed that TRK · GS
+                 already shows two tiles below. -->
+            <div class="navac">
+              <div class="navac-n" id="navp-ac">—</div>
+              <div class="navac-s" id="navp-acs"></div>
+            </div>
             <!-- The flight plan: ordered, tap to target, ✕ to drop. -->
             <div class="navplan" id="navp-plan"></div>
             <div class="navbtns">
@@ -230,9 +238,6 @@
               <div class="ns-cap" id="navp-steer-cap">STEER</div>
             </div>
             <!-- The aircraft, so NAV reads as a view into the same mission. -->
-            <div class="simt"><h3>AIRCRAFT</h3>
-              <div class="simt-v sm2" id="navp-ac">—</div>
-              <div class="simt-s" id="navp-acs"></div></div>
             <div class="simt"><h3>BRG · DIST</h3>
               <div class="simt-v sm2" id="navp-brg">—</div>
               <div class="simt-s" id="navp-ete"></div></div>
@@ -525,7 +530,7 @@
       <div class="numpad" id="num-pad" hidden>
         <div class="np-box">
           <div class="np-head">
-            <span id="np-title">—</span>
+            <span id="numpad-title">—</span>
             <button class="nsx-close" id="np-close">✕</button>
           </div>
           <div class="np-disp"><span id="np-val">&nbsp;</span>
