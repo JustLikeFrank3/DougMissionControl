@@ -38,6 +38,18 @@ import { createSeries } from './js/series.js';
     $('fit').style.height = window.innerHeight + 'px';
   }
   window.addEventListener('resize', fit);
+  // A kiosk never resizes, so `resize` alone means fit() effectively runs once,
+  // against whatever the viewport measured at that instant. If it settles even
+  // a few pixels shorter afterwards — a late scrollbar, a compositor handing
+  // over the real mode — nothing recomputes the scale and the bottom of the
+  // 720 px layout is simply cut off. That is LIVE and "hold to arm" going
+  // missing: they are the last 18 px of their columns, so they are what a few
+  // pixels of overhang eats first.
+  //
+  // ResizeObserver catches the viewport actually changing; the load event
+  // catches fonts and the stylesheet settling after first paint.
+  window.addEventListener('load', fit);
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(document.documentElement);
 
   /* ── phase track ──────────────────────────────────────────────────────── */
   function buildTrack() {

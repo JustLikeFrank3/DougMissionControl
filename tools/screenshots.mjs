@@ -149,6 +149,13 @@ const SHOTS = [
 const main = async () => {
   await mkdir(OUT, { recursive: true });
   await new Promise(r => server.listen(PORT, '127.0.0.1', r));
+  // --serve leaves the harness up so the panel can be opened in a real browser
+  // against a scripted state frame — the only way to look at a surface that
+  // needs a sim, a booting workstation and two monitors all at once.
+  if (process.argv.includes('--serve')) {
+    console.log(`harness on http://127.0.0.1:${PORT}/  (ctrl-c to stop)`);
+    return new Promise(() => {});
+  }
   const { chromium } = await import('playwright-core');
   const exe = arg('--browser', process.env.CHROMIUM ||
                   '/opt/pw-browsers/chromium-1194/chrome-linux/chrome');
