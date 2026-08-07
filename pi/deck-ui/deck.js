@@ -518,6 +518,77 @@
     if (sig !== cur) post('/api/nav/plan', { waypoints: wps });
   }
 
+  /* ── MissionContext ───────────────────────────────────────────────
+     The current operational context — not a flight object. Today the only
+     mission kind is 'flight'; a train run or a workstation boot slots in as
+     another kind with the same shape. NAV writes it, SIM reads it, and no
+     second copy of navigation state exists anywhere. Everything in it is
+     DERIVED from observed simulator state — nothing is invented. */
+  var mission = { kind: null, vehicle: null, phase: null, dest: null,
+                  brg: null, dist: null, ete_s: null, eta: null, xte: null };
+
+  function missionPhase(r) {
+    if (r.on_ground === undefined) return null;   // agent predates phase data
+    if (r.on_ground) {
+      if ((r.gs_kt || 0) > 40) return 'ROLL';
+      if ((r.gs_kt || 0) > 2) return 'TAXI';
+      return (r.rpm_1 || 0) < 50 ? 'COLD & DARK' : 'RAMP';
+    }
+    if (mission.dist !== null && mission.dist < 15 && (r.vs_fpm || 0) < 100) return 'APPROACH';
+    if ((r.vs_fpm || 0) > 300) return 'CLIMB';
+    if ((r.vs_fpm || 0) < -300) return 'DESCENT';
+    return 'CRUISE';
+  }
+
+  function missionUpdate(d) {
+    var st = d && d.session ? d.state : null;
+    var r = st && st.readouts;
+    if (!r || typeof r.lat !== 'number') {
+      mission.kind = null; mission.phase = null;
+      return;
+    }
+    mission.kind = 'flight';
+    mission.vehicle = st.aircraft || null;
+    var wpt = navPlan[navSelIdx] || null;
+    mission.dest = wpt ? wpt.name : null;
+    if (wpt) {
+      var nav = navDistBrg(r.lat, r.lon, wpt.lat, wpt.lon);
+      mission.brg = Math.round(nav.brg);
+      mission.dist = nav.dist;
+      mission.ete_s = (r.gs_kt > 5) ? nav.dist / r.gs_kt * 3600 : null;
+      mission.eta = mission.ete_s !== null ? Date.now() / 1000 + mission.ete_s : null;
+      // Cross-track against the leg being flown. No previous waypoint means
+      // no leg to be off of — direct-to has no XTK by definition.
+      var prev = navSelIdx > 0 ? navPlan[navSelIdx - 1] : null;
+      if (prev) {
+        var a = navXY(r.lat, r.lon, prev.lat, prev.lon);
+        var b = navXY(wpt.lat, wpt.lon, prev.lat, prev.lon);
+        var len = Math.sqrt(b.x * b.x + b.y * b.y);
+        mission.xte = len > 0.1 ? (a.x * b.y - a.y * b.x) / len : null;
+      } else { mission.xte = null; }
+    } else {
+      mission.brg = mission.dist = mission.ete_s = mission.eta = mission.xte = null;
+    }
+    mission.phase = missionPhase(r);
+  }
+
+  function paintMissionStrip() {
+    $('ms-phase').textContent = mission.phase || '—';
+    $('ms-dest').textContent = mission.dest || '—';
+    $('ms-brg').textContent = mission.brg !== null ? ('00' + mission.brg).slice(-3) + '°' : '—';
+    $('ms-dist').textContent = mission.dist !== null
+      ? (mission.dist >= 10 ? Math.round(mission.dist) : mission.dist.toFixed(1)) + ' nm' : '—';
+    $('ms-ete').textContent = mission.ete_s !== null ? fmtDur(mission.ete_s) : '—';
+    $('ms-eta').textContent = mission.eta !== null ? fmtClock(mission.eta) : '—';
+    $('ms-xte').textContent = mission.xte !== null
+      ? Math.abs(mission.xte).toFixed(2) + ' ' + (mission.xte >= 0 ? 'R' : 'L') : '—';
+    // Phase-aware presentation: approach promotes what is about to be used.
+    // Observation, not advice — the gear tile grows, nobody is told to use it.
+    var appr = mission.phase === 'APPROACH';
+    $('simt-gear').classList.toggle('hot', appr);
+    $('simt-flaps').classList.toggle('hot', appr);
+  }
+
   function paintNav(d) {
     d = d || {};
     var st = d.session ? d.state : null;
@@ -557,6 +628,13 @@
     while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
 
     navSyncFeed(st.gps);
+    missionUpdate(d);
+
+    // The aircraft on the NAV rail — same mission, different view.
+    $('navp-ac').textContent = (st.aircraft || '—').slice(0, 18);
+    var apState = st.controls && st.controls.ap_master ? st.controls.ap_master.state : null;
+    $('navp-acs').textContent = r.alt_ft + ' ft · ' + r.gs_kt + ' kt' +
+      (apState ? ' · AP ' + (apState === 'engaged' ? 'ON' : 'OFF') : '');
 
     if (navSelIdx >= navPlan.length) navSelIdx = Math.max(0, navPlan.length - 1);
     var wpt = navPlan[navSelIdx] || null;
@@ -1064,6 +1142,10 @@
     if (control === 'parking_brake') return c.parking_brake ? c.parking_brake.state : null;
     if (control === 'landing_lights') return c.landing_lights ? c.landing_lights.state : null;
     if (control === 'ap_master') return c.ap_master ? c.ap_master.state : null;
+    if (control === 'com1' || control === 'com2' || control === 'nav1' || control === 'nav2')
+      return c[control] ? c[control].sby.toFixed(3) : null;
+    if (control === 'xpdr') return c.xpdr ? c.xpdr.code : null;
+    if (control === 'baro') return c.baro ? c.baro.inhg.toFixed(2) : null;
     var ap = AP_VARS[control];
     if (ap) return c[control] ? String(c[control][ap.field]) : null;
     return null;
@@ -1227,6 +1309,9 @@
     }
 
     var r = st.readouts || {};
+    missionUpdate(d);
+    paintMissionStrip();
+    cxPaint(c);
     $('simv-ias').textContent = r.ias_kt;
     $('simv-alt').textContent = r.alt_ft;
     $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
@@ -1252,6 +1337,33 @@
     simRenderPending('apalt', 'ap_alt', c);
     simRenderPending('apvs', 'ap_vs', c);
     simRenderPending('apspd', 'ap_spd', c);
+    ['com1', 'com2', 'nav1', 'nav2', 'xpdr', 'baro'].forEach(function (k) {
+      simRenderPending(k, k, c);
+    });
+  }
+
+  /* The comms drawer. Rows exist only for radios the airframe declares —
+     a Cub never shows a NAV2, and never shows a greyed one either. */
+  function cxPaint(c) {
+    ['com1', 'com2', 'nav1', 'nav2'].forEach(function (k) {
+      var row = $('cx-' + k), has = !!c[k];
+      row.hidden = !has;
+      if (!has) return;
+      $('cx-' + k + '-act').textContent = c[k].act.toFixed(3);
+      $('cx-' + k + '-sby').textContent = c[k].sby.toFixed(3);
+    });
+    var x = c.xpdr;
+    $('cx-xpdr').hidden = !x;
+    if (x) {
+      $('cx-xpdr-mode').textContent = x.mode.toUpperCase();
+      $('cx-xpdr-code').textContent = x.code;
+    }
+    var b = c.baro;
+    $('cx-baro').hidden = !b;
+    if (b) {
+      $('cx-baro-hpa').textContent = b.hpa + ' hPa';
+      $('cx-baro-v').textContent = b.inhg.toFixed(2);
+    }
   }
 
   /* ── EFIS gauges: attitude + compass rose ────────────────────────────
@@ -1644,6 +1756,142 @@
                   : Math.max(ap.min, Math.min(ap.max, v));
       simSend(ctl, 'set', String(v));
     });
+  });
+
+  // Doug's one numeric entry system. Options: title, unit, min, max,
+  // decimals (0 = integers), allowNeg, hint, validate(v, str) -> bool,
+  // onSet(v). Every number typed on this panel goes through here — AP bugs
+  // today, frequencies and squawk below, train throttles someday.
+  var numOpts = null, numStr = '', numNeg = false;
+
+  function numValue() { return (numNeg ? -1 : 1) * parseFloat(numStr || '0'); }
+
+  function numOk() {
+    if (numStr === '' || numStr === '.') return false;
+    var v = numValue();
+    if (v < numOpts.min || v > numOpts.max) return false;
+    return !numOpts.validate || numOpts.validate(v, numStr);
+  }
+
+  function numPaint() {
+    var bad = numStr !== '' && !numOk();
+    $('np-val').textContent = (numNeg ? '\u2212' : '') + (numStr || '\u00a0');
+    var hint = $('np-hint');
+    var range = numOpts.hint || (numOpts.min + ' \u2013 ' + numOpts.max);
+    hint.textContent = bad ? 'OUT OF RANGE \u00b7 ' + range : range;
+    hint.className = 'np-hint' + (bad ? ' bad' : '');
+  }
+
+  function showNumericInput(o) {
+    numOpts = o; numStr = ''; numNeg = false;
+    $('np-title').textContent = o.title;
+    $('np-unit').textContent = o.unit || '';
+    $('num-pad').hidden = false;
+    numPaint();
+  }
+
+  (function () {
+    var keys = $('np-keys');
+    ['7', '8', '9', '4', '5', '6', '1', '2', '3', '\u00b1', '0', '.'].forEach(function (k) {
+      var b = document.createElement('button');
+      b.textContent = k;
+      b.addEventListener('click', function () {
+        if (!numOpts) return;
+        if (k === '\u00b1') { if (numOpts.allowNeg) numNeg = !numNeg; }
+        else if (k === '.') {
+          if (numOpts.decimals > 0 && numStr.indexOf('.') === -1) numStr += '.';
+        } else if (numStr.length < 7) {
+          // No more digits after the point than the field means.
+          var dot = numStr.indexOf('.');
+          if (dot === -1 || numStr.length - dot <= (numOpts.decimals || 0)) numStr += k;
+        }
+        numPaint();
+      });
+      keys.appendChild(b);
+    });
+    var back = document.createElement('button');
+    back.textContent = '\u232b';
+    back.addEventListener('click', function () { numStr = numStr.slice(0, -1); numPaint(); });
+    keys.appendChild(back);
+    var set = document.createElement('button');
+    set.textContent = 'SET';
+    set.className = 'go';
+    set.style.gridColumn = '1 / -2';
+    set.addEventListener('click', function () {
+      if (!numOk()) return;
+      $('num-pad').hidden = true;
+      numOpts.onSet(numValue(), numStr);
+    });
+    keys.appendChild(set);
+    $('np-close').addEventListener('click', function () { $('num-pad').hidden = true; });
+  })();
+
+  // AP bugs on the dialog. Tap the value, type the target — "fly heading
+  // 240" is three keys, not fifteen taps of +10.
+  var AP_PAD = {
+    ap_hdg: { title: 'AP HDG', unit: '\u00b0', min: 0, max: 359, key: 'aphdg' },
+    ap_alt: { title: 'AP ALT', unit: 'FT', min: 0, max: 60000, key: 'apalt' },
+    ap_vs: { title: 'AP V/S', unit: 'FPM', min: -8000, max: 8000, allowNeg: true,
+             hint: '\u00b18000 \u00b7 \u00b1 flips climb/descend', key: 'apvs' },
+    ap_spd: { title: 'AP SPD', unit: 'KT', min: 0, max: 900, key: 'apspd' }
+  };
+  Object.keys(AP_PAD).forEach(function (ctl) {
+    var o = AP_PAD[ctl];
+    var el = $('simv-' + o.key);
+    el.classList.add('tap');
+    el.addEventListener('click', function () {
+      var c = (simLast && simLast.controls) || {};
+      if (!c[ctl]) return;                  // no autopilot, no pad
+      showNumericInput({ title: o.title, unit: o.unit, min: o.min, max: o.max,
+        decimals: 0, allowNeg: !!o.allowNeg, hint: o.hint,
+        onSet: function (v) { simSend(ctl, 'set', String(Math.round(v))); } });
+    });
+  });
+
+  // Comms drawer. Standby values route through the same dialog; SWAP is a
+  // tap — it mirrors the real avionics flow and is reversible by tapping
+  // again, so hold-to-confirm would only slow the radio call down.
+  $('comms-btn').addEventListener('click', function () { $('comms').hidden = false; });
+  $('comms-close').addEventListener('click', function () { $('comms').hidden = true; });
+
+  [['com1', 'COM1', 118, 136.99], ['com2', 'COM2', 118, 136.99],
+   ['nav1', 'NAV1', 108, 117.95], ['nav2', 'NAV2', 108, 117.95]]
+    .forEach(function (def) {
+      var ctl = def[0];
+      $('cx-' + ctl + '-sby').addEventListener('click', function () {
+        var c = (simLast && simLast.controls) || {};
+        if (!c[ctl]) return;
+        showNumericInput({ title: def[1] + ' STANDBY', unit: 'MHZ',
+          min: def[2], max: def[3], decimals: 3,
+          onSet: function (v) { simSend(ctl, 'set_sby', v.toFixed(3)); } });
+      });
+      $('cx-' + ctl + '-swap').addEventListener('click', function () {
+        simSend(ctl, 'swap', null);
+      });
+    });
+
+  $('cx-xpdr-code').addEventListener('click', function () {
+    var c = (simLast && simLast.controls) || {};
+    if (!c.xpdr) return;
+    showNumericInput({ title: 'SQUAWK', unit: '', min: 0, max: 7777, decimals: 0,
+      hint: '4 digits \u00b7 0-7 each',
+      validate: function (v, s) { return !/[89]/.test(s); },
+      onSet: function (v) { simSend('xpdr', 'set', ('0000' + Math.round(v)).slice(-4)); } });
+  });
+  // IDENT has no observable state to confirm against, so it bypasses the
+  // pending machinery: fire and trust the sim, like a real IDENT button.
+  $('cx-xpdr-ident').addEventListener('click', function () {
+    post('/api/sim/command', { cmd_id: 'ident-' + (++simSeq), control: 'xpdr', action: 'ident' });
+  });
+
+  $('cx-baro-v').addEventListener('click', function () {
+    var c = (simLast && simLast.controls) || {};
+    if (!c.baro) return;
+    showNumericInput({ title: 'ALTIMETER', unit: 'INHG', min: 26, max: 32, decimals: 2,
+      onSet: function (v) { simSend('baro', 'set', v.toFixed(2)); } });
+  });
+  $('cx-baro-std').addEventListener('click', function () {
+    simSend('baro', 'set', '29.92');
   });
 
   // The AUTO sub-nav button is static HTML, so the dynamic-button wiring in

@@ -73,6 +73,17 @@ internal enum Event
     ApAltVarSet,
     ApVsVarSet,
     ApSpdVarSet,
+    Com1StbySet,
+    Com1Swap,
+    Com2StbySet,
+    Com2Swap,
+    Nav1StbySet,
+    Nav1Swap,
+    Nav2StbySet,
+    Nav2Swap,
+    XpdrSet,
+    XpdrIdent,
+    BaroSet,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -107,6 +118,18 @@ internal struct SimStateRaw
     public double ApAltFt;
     public double ApVsFpm;
     public double ApSpdKt;
+    public double OnGround;
+    public double Com1ActMHz;
+    public double Com1SbyMHz;
+    public double Com2ActMHz;
+    public double Com2SbyMHz;
+    public double Nav1ActMHz;
+    public double Nav1SbyMHz;
+    public double Nav2ActMHz;
+    public double Nav2SbyMHz;
+    public double XpdrCodeBcd;
+    public double XpdrState;
+    public double BaroInHg;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -117,6 +140,10 @@ internal struct SimCapsRaw
     public double FlapsNumHandlePositions;
     public double SpoilerAvailable;
     public double AutopilotAvailable;
+    public double Com2Available;
+    public double Nav1Available;
+    public double Nav2Available;
+    public double XpdrAvailable;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -185,6 +212,20 @@ internal static class SimVars
         ("AUTOPILOT ALTITUDE LOCK VAR",    "Feet"),
         ("AUTOPILOT VERTICAL HOLD VAR",    "Feet/minute"),
         ("AUTOPILOT AIRSPEED HOLD VAR",    "Knots"),
+        // Mission phase + comms drawer. BCO16 arrives as a double holding the
+        // BCD value — decoded at the boundary in Normalize, never in the UI.
+        ("SIM ON GROUND",                  "Bool"),
+        ("COM ACTIVE FREQUENCY:1",         "MHz"),
+        ("COM STANDBY FREQUENCY:1",        "MHz"),
+        ("COM ACTIVE FREQUENCY:2",         "MHz"),
+        ("COM STANDBY FREQUENCY:2",        "MHz"),
+        ("NAV ACTIVE FREQUENCY:1",         "MHz"),
+        ("NAV STANDBY FREQUENCY:1",        "MHz"),
+        ("NAV ACTIVE FREQUENCY:2",         "MHz"),
+        ("NAV STANDBY FREQUENCY:2",        "MHz"),
+        ("TRANSPONDER CODE:1",             "BCO16"),
+        ("TRANSPONDER STATE:1",            "Enum"),
+        ("KOHLSMAN SETTING HG",            "inHg"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -194,6 +235,10 @@ internal static class SimVars
         ("FLAPS NUM HANDLE POSITIONS", "Number"),
         ("SPOILER AVAILABLE",          "Bool"),
         ("AUTOPILOT AVAILABLE",        "Bool"),
+        ("COM AVAILABLE:2",            "Bool"),
+        ("NAV AVAILABLE:1",            "Bool"),
+        ("NAV AVAILABLE:2",            "Bool"),
+        ("TRANSPONDER AVAILABLE:1",    "Bool"),
     };
 
     public const string TitleVar = "TITLE";
@@ -234,5 +279,17 @@ internal static class SimVars
         (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
         (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm
         (Event.ApSpdVarSet,      "AP_SPD_VAR_SET"),             // takes knots
+        // Radios take Hz — the _HZ family avoids the BCD encoding entirely.
+        (Event.Com1StbySet,      "COM_STBY_RADIO_SET_HZ"),
+        (Event.Com1Swap,         "COM_STBY_RADIO_SWAP"),
+        (Event.Com2StbySet,      "COM2_STBY_RADIO_SET_HZ"),
+        (Event.Com2Swap,         "COM2_RADIO_SWAP"),
+        (Event.Nav1StbySet,      "NAV1_STBY_SET_HZ"),
+        (Event.Nav1Swap,         "NAV1_RADIO_SWAP"),
+        (Event.Nav2StbySet,      "NAV2_STBY_SET_HZ"),
+        (Event.Nav2Swap,         "NAV2_RADIO_SWAP"),
+        (Event.XpdrSet,          "XPNDR_SET"),                  // BCD16 code
+        (Event.XpdrIdent,        "XPNDR_IDENT_ON"),
+        (Event.BaroSet,          "KOHLSMAN_SET"),               // millibars * 16
     };
 }

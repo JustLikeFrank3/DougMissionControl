@@ -229,6 +229,10 @@
               </svg>
               <div class="ns-cap" id="navp-steer-cap">STEER</div>
             </div>
+            <!-- The aircraft, so NAV reads as a view into the same mission. -->
+            <div class="simt"><h3>AIRCRAFT</h3>
+              <div class="simt-v sm2" id="navp-ac">—</div>
+              <div class="simt-s" id="navp-acs"></div></div>
             <div class="simt"><h3>BRG · DIST</h3>
               <div class="simt-v sm2" id="navp-brg">—</div>
               <div class="simt-s" id="navp-ete"></div></div>
@@ -314,6 +318,19 @@
           <div class="sim-head">
             <span class="sim-ac" id="sim-ac">—</span>
             <span class="sim-meta" id="sim-meta"></span>
+            <button class="navadd cx-open" id="comms-btn">COMMS</button>
+          </div>
+          <!-- Mission strip: where the flight is going, always in view. Fed by
+               MissionContext — the same numbers NAV computes, never a second
+               copy of navigation state. -->
+          <div class="mstrip" id="mstrip">
+            <span class="ms-phase" id="ms-phase">—</span>
+            <span class="ms-item"><b>DEST</b><span id="ms-dest">—</span></span>
+            <span class="ms-item"><b>BRG</b><span id="ms-brg">—</span></span>
+            <span class="ms-item"><b>DIST</b><span id="ms-dist">—</span></span>
+            <span class="ms-item"><b>ETE</b><span id="ms-ete">—</span></span>
+            <span class="ms-item"><b>ETA</b><span id="ms-eta">—</span></span>
+            <span class="ms-item"><b>XTK</b><span id="ms-xte">—</span></span>
           </div>
           <div class="sim-body">
             <!-- Buttons hold to fire, like the boot tiles: a stray knuckle on a
@@ -460,8 +477,63 @@
                 <div class="simt-v big" id="simv-fuel">—</div></div>
             </div>
           </div>
+
+          <!-- Comms drawer: open, adjust, close, keep flying. Not a tab — the
+               SIM page stays the workspace and this overlays its right edge.
+               Rows appear only for radios the airframe declares. -->
+          <div class="comms" id="comms" hidden>
+            <div class="cx-head">COMMS
+              <button class="nsx-close" id="comms-close">✕</button></div>
+            <div class="cx-row" id="cx-com1">
+              <span class="cx-l">COM1</span><span class="cx-act" id="cx-com1-act">—</span>
+              <button class="cx-sby" id="cx-com1-sby">—</button>
+              <button class="cx-swap" id="cx-com1-swap">⇄</button>
+              <div class="simpend" id="simpd-com1"></div></div>
+            <div class="cx-row" id="cx-com2">
+              <span class="cx-l">COM2</span><span class="cx-act" id="cx-com2-act">—</span>
+              <button class="cx-sby" id="cx-com2-sby">—</button>
+              <button class="cx-swap" id="cx-com2-swap">⇄</button>
+              <div class="simpend" id="simpd-com2"></div></div>
+            <div class="cx-row" id="cx-nav1">
+              <span class="cx-l">NAV1</span><span class="cx-act" id="cx-nav1-act">—</span>
+              <button class="cx-sby" id="cx-nav1-sby">—</button>
+              <button class="cx-swap" id="cx-nav1-swap">⇄</button>
+              <div class="simpend" id="simpd-nav1"></div></div>
+            <div class="cx-row" id="cx-nav2">
+              <span class="cx-l">NAV2</span><span class="cx-act" id="cx-nav2-act">—</span>
+              <button class="cx-sby" id="cx-nav2-sby">—</button>
+              <button class="cx-swap" id="cx-nav2-swap">⇄</button>
+              <div class="simpend" id="simpd-nav2"></div></div>
+            <div class="cx-row" id="cx-xpdr">
+              <span class="cx-l">XPDR</span><span class="cx-act" id="cx-xpdr-mode">—</span>
+              <button class="cx-sby" id="cx-xpdr-code">—</button>
+              <button class="cx-swap" id="cx-xpdr-ident">ID</button>
+              <div class="simpend" id="simpd-xpdr"></div></div>
+            <div class="cx-row" id="cx-baro">
+              <span class="cx-l">BARO</span><span class="cx-act" id="cx-baro-hpa">—</span>
+              <button class="cx-sby" id="cx-baro-v">—</button>
+              <button class="cx-swap" id="cx-baro-std">STD</button>
+              <div class="simpend" id="simpd-baro"></div></div>
+            <div class="cx-note">tap a standby value to type · ⇄ swaps</div>
+          </div>
         </div>
       </section>
+
+      <!-- Doug's one numeric entry system. Every number typed on this panel —
+           AP bugs, frequencies, squawk, baro, whatever comes next — goes
+           through this dialog. Never build another keypad. -->
+      <div class="numpad" id="num-pad" hidden>
+        <div class="np-box">
+          <div class="np-head">
+            <span id="np-title">—</span>
+            <button class="nsx-close" id="np-close">✕</button>
+          </div>
+          <div class="np-disp"><span id="np-val">&nbsp;</span>
+            <span class="np-unit" id="np-unit"></span></div>
+          <div class="np-hint" id="np-hint"></div>
+          <div class="np-keys" id="np-keys"></div>
+        </div>
+      </div>
 
     </main>
   </div>
