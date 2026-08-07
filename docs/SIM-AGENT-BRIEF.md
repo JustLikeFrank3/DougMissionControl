@@ -18,7 +18,7 @@ moving map from the position this agent reports. Nothing on the Pi needs
 writing. The SIM chip reads *no link* for exactly one reason: nothing is
 answering on :9109. **This brief builds the thing that answers.**
 
-Repo: `JustLikeFrank3/dualbootautomationproject`, branch `main` — that is where
+Repo: `JustLikeFrank3/DougMissionControl`, branch `main` — that is where
 the Pi-side work lives. (An older `claude/multi-os-boot-dashboard-5qgfio`
 branch still exists on the remote but is well behind; do not build against it.)
 Design notes in `docs/DESIGN.md`.

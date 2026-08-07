@@ -1,4 +1,6 @@
-# dualbootautomationproject
+# DougMissionControl
+
+The panel says DOUG MISSION CONTROL; so does the repo now.
 
 Voice-controlled boot orchestration for a dual-boot workstation. Say
 *"Alexa, flight sim bootup"* and the machine wakes from off, or reboots
