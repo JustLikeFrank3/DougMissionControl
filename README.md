@@ -56,6 +56,8 @@ linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows
 linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
 linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
 linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
+linux/seamless-displays.sh  pins EDID + forces connectors on, so a SCREENS input
+                         switch does not tear the desktop down (--revert undoes it)
 linux/media-agent.py     :9110 — now-playing (MPRIS) + monitor input switching (DDC),
                          the Linux twin of the sim-agent's /media and /monitor
 tests/                   shell tests for the above — `bash tests/test_*.sh`
