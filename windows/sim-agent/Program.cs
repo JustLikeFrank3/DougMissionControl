@@ -304,6 +304,49 @@ internal static class Program
                 if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
                 return Send(Event.ApSpdVarSet, (uint)spd);
 
+            case "com1" or "com2":
+            {
+                var (set, swap) = control == "com1"
+                    ? (Event.Com1StbySet, Event.Com1Swap)
+                    : (Event.Com2StbySet, Event.Com2Swap);
+                if (action == "swap") return Send(swap);
+                if (action != "set_sby") return Invalid("unsupported action");
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var com)
+                    || com < 118.0 || com > 136.99) return Invalid("invalid value");
+                return Send(set, (uint)Math.Round(com * 1_000_000));
+            }
+
+            case "nav1" or "nav2":
+            {
+                var (set, swap) = control == "nav1"
+                    ? (Event.Nav1StbySet, Event.Nav1Swap)
+                    : (Event.Nav2StbySet, Event.Nav2Swap);
+                if (action == "swap") return Send(swap);
+                if (action != "set_sby") return Invalid("unsupported action");
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var nav)
+                    || nav < 108.0 || nav > 117.95) return Invalid("invalid value");
+                return Send(set, (uint)Math.Round(nav * 1_000_000));
+            }
+
+            case "xpdr":
+                if (action == "ident") return Send(Event.XpdrIdent);
+                if (action != "set") return Invalid("unsupported action");
+                // Four octal digits, sent as BCD16 — squawk 4321 rides as 0x4321.
+                if (value is null || value.Length != 4 || value.Any(ch => ch < '0' || ch > '7'))
+                    return Invalid("invalid value");
+                var bcd = value.Aggregate(0u, (acc, ch) => (acc << 4) | (uint)(ch - '0'));
+                return Send(Event.XpdrSet, bcd);
+
+            case "baro":
+                if (action != "set") return Invalid("unsupported action");
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var inhg)
+                    || inhg < 26.0 || inhg > 32.0) return Invalid("invalid value");
+                // KOHLSMAN_SET wants millibars * 16.
+                return Send(Event.BaroSet, (uint)Math.Round(inhg * 33.8639 * 16));
+
             default:
                 return Invalid("unknown control");
         }

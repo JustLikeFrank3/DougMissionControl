@@ -142,6 +142,36 @@ internal static class Normalize
             controls["ap_spd"] = new JsonObject { ["kt"] = (int)Math.Round(s.ApSpdKt) };
         }
 
+        // Comms. COM1 and the altimeter are assumed universal; everything else
+        // is gated on what the airframe declares, so a Cub never shows a NAV2.
+        JsonObject Radio(double act, double sby) => new()
+        {
+            ["act"] = Math.Round(act, 3),
+            ["sby"] = Math.Round(sby, 3),
+        };
+        controls["com1"] = Radio(s.Com1ActMHz, s.Com1SbyMHz);
+        if (Flag(c.Com2Available)) controls["com2"] = Radio(s.Com2ActMHz, s.Com2SbyMHz);
+        if (Flag(c.Nav1Available)) controls["nav1"] = Radio(s.Nav1ActMHz, s.Nav1SbyMHz);
+        if (Flag(c.Nav2Available)) controls["nav2"] = Radio(s.Nav2ActMHz, s.Nav2SbyMHz);
+        if (Flag(c.XpdrAvailable))
+        {
+            controls["xpdr"] = new JsonObject
+            {
+                // BCO16: the double holds a BCD word — 0x1200 for squawk 1200.
+                ["code"] = ((int)s.XpdrCodeBcd).ToString("X4"),
+                ["mode"] = (int)s.XpdrState switch
+                {
+                    0 => "off", 1 => "stby", 2 => "test", 3 => "on", 4 => "alt",
+                    _ => "unknown",
+                },
+            };
+        }
+        controls["baro"] = new JsonObject
+        {
+            ["inhg"] = Math.Round(s.BaroInHg, 2),
+            ["hpa"] = (int)Math.Round(s.BaroInHg * 33.8639),
+        };
+
         return controls;
     }
 
@@ -167,6 +197,8 @@ internal static class Normalize
         // the flip happens here at the boundary. Step-0: verify on the Baron.
         ["pitch_deg"] = Math.Round(-s.PlanePitchDeg, 1),
         ["bank_deg"] = Math.Round(-s.PlaneBankDeg, 1),
+        // Phase detection needs ground truth, not a guess from altitude.
+        ["on_ground"] = Flag(s.OnGround),
     };
 
     /// <summary>
@@ -223,5 +255,17 @@ internal static class Normalize
         || (int)Math.Round(a.ApHdgDeg) != (int)Math.Round(b.ApHdgDeg)
         || (int)Math.Round(a.ApAltFt) != (int)Math.Round(b.ApAltFt)
         || (int)Math.Round(a.ApVsFpm) != (int)Math.Round(b.ApVsFpm)
-        || (int)Math.Round(a.ApSpdKt) != (int)Math.Round(b.ApSpdKt);
+        || (int)Math.Round(a.ApSpdKt) != (int)Math.Round(b.ApSpdKt)
+        // Same reasoning for the comms drawer — a swap must land on the next frame.
+        || Math.Abs(a.Com1ActMHz - b.Com1ActMHz) >= 0.001
+        || Math.Abs(a.Com1SbyMHz - b.Com1SbyMHz) >= 0.001
+        || Math.Abs(a.Com2ActMHz - b.Com2ActMHz) >= 0.001
+        || Math.Abs(a.Com2SbyMHz - b.Com2SbyMHz) >= 0.001
+        || Math.Abs(a.Nav1ActMHz - b.Nav1ActMHz) >= 0.001
+        || Math.Abs(a.Nav1SbyMHz - b.Nav1SbyMHz) >= 0.001
+        || Math.Abs(a.Nav2ActMHz - b.Nav2ActMHz) >= 0.001
+        || Math.Abs(a.Nav2SbyMHz - b.Nav2SbyMHz) >= 0.001
+        || (int)a.XpdrCodeBcd != (int)b.XpdrCodeBcd
+        || (int)a.XpdrState != (int)b.XpdrState
+        || Math.Abs(a.BaroInHg - b.BaroInHg) >= 0.005;
 }
