@@ -10,3 +10,8 @@ obj/
 
 tmp_*.py
 tmp-*
+
+# Scratch from tools/screenshots.mjs — playwright-core is installed ad hoc,
+# never vendored. The tool is documentation, not a dependency.
+node_modules/
+package-lock.json

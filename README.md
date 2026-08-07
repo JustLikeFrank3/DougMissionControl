@@ -68,7 +68,10 @@ pi/setup-display.sh      cage + chromium kiosk on the Edge, mode pinning
 pi/setup-deck.sh         installs deck-api, repoints fauxmo at it
 pi/deck-api/deck_api.py  one entry point for every trigger; state + SSE
 pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
-pi/deck-ui/              the panel itself (index/deck.css/deck.js) + selftest.html
+pi/deck-ui/              the panel itself — index.html, deck.css, deck.js, selftest.html
+pi/deck-ui/js/           the panel's pure logic as ES modules (format, geo, series),
+                         imported by deck.js and unit-tested without a browser
+tools/screenshots.mjs    renders every surface at 2560x720 for the images above
 
 The Windows sim agent (docs/SIM-AGENT-BRIEF.md):
 windows/sim-agent/       flightdeck-sim-agent — SimConnect + media on :9109
@@ -158,6 +161,48 @@ Loopback needs no token; anything else needs `DECK_TOKEN` from
 `jarvis-greeting.ps1` gains a callback — nothing on the Windows side is
 touched, so a run completes at **OS UP**.
 
+### The surfaces
+
+Five surfaces behind a persistent 72 px strip, all of them live at once —
+nothing is unmounted when you look away, because reloading the Grafana frame
+would restart the playlist every time you glance at DECK.
+
+These are rendered from the real `deck-ui` at true panel pixels by
+`tools/screenshots.mjs`, against a scripted state frame. They are what the
+panel looks like, not a mock-up, and they can be regenerated after any change.
+
+**DECK** — the boot you just asked for, while it happens. Phase track,
+rolling GPU telemetry, the fleet, and an ABORT that only appears with a boot
+in flight.
+
+![DECK](docs/img/deck.png)
+
+**NAV** — a moving map from the sim agent's observed position. Waypoint
+search hits real OpenStreetMap data, plans are saved on the Pi, and the trail
+is where the aircraft has actually been. Pinch to zoom; FIT hands framing back
+to the auto-fit.
+
+![NAV](docs/img/nav.png)
+
+**SIM** — observed aircraft state and the controls that command it. The panel
+never draws the commanded state: a tap shows PENDING over the last *observed*
+value, and only the simulator moving it changes what you see. That is what
+makes a command MSFS ignored look like a failed command instead of a lie.
+
+![SIM](docs/img/sim.png)
+
+**SCREENS** — one card per monitor, named by its position on the desk, with a
+button per input the panel declares. DDC/CI over whichever OS is booted:
+Windows answers through the sim agent, Linux through `media-agent.py`.
+
+![SCREENS](docs/img/screens.png)
+
+**jobContext** — the pre-existing Grafana wallboard, framed as-is. Flight Deck
+provisions no dashboards and stores no eval data. Shown here with Grafana
+unreachable, which is the honest state on a machine that is not running it.
+
+![jobContext](docs/img/evals.png)
+
 ### Live telemetry, and only live
 
 GPU temperature, utilisation and VRAM come from the exporters that already
@@ -230,6 +275,30 @@ dead exporter all look identical from the Pi. All three log
 `no response — sending WOL`. If a trigger reaches the Pi and nothing
 boots, check whether the machine was merely asleep before suspecting
 fauxmo — see the WOL note in Troubleshooting.
+
+## Tests
+
+```
+bash tests/test_*.sh          # all of them; each is standalone
+python3 pi/deck-api/test_phases.py
+```
+
+| Suite | Covers |
+|---|---|
+| `tests/test_boot_agent.sh` | the Linux boot agent's auth matrix, against a real listener on a throwaway port with a stubbed reboot |
+| `tests/test_grub_entry.sh` | finding the Windows menuentry in single- and double-quoted `grub.cfg` |
+| `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
+| `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
+| `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
+
+`test_deck_ui.sh` skips cleanly where node is absent; the Pi runs the panel in
+Chromium and has no reason to have node installed.
+
+The UI suite is deliberately weighted toward the failures this panel has
+actually had, rather than toward coverage: a trail drawn straight across a
+relocate, a sparkline carrying a value through an outage instead of showing a
+hole, an ETE invented from a ground speed too small to divide by, and a
+missing reading rendered as a zero.
 
 ## Test matrix
 
