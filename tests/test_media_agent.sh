@@ -207,6 +207,53 @@ for m in got:
     if "x" in m:
         failures.append(f"MON_ORDER leaked an ordinal as a pixel offset: {m}")
 
+# --- the invariant that decides whether SCREENS commands the right panel ---
+#
+# The cards are ordered by desktop geometry, but each card carries the ddcutil
+# ordinal as its "index" and POSTs that back. So for EVERY card, switching by
+# its index must reach the bus of the monitor that card is labelled for. If the
+# sort renumbered the cards instead, LEFT would command the right-hand panel.
+def switched_bus(index):
+    """Which I2C bus does monitor_switch actually write to for this index?"""
+    seen = []
+
+    def spy(args, timeout=10):
+        if args and args[0] == "setvcp":
+            seen.append(args[args.index("--bus") + 1])
+            return "ok"
+        return "VCP 60 SNC x12"
+
+    ma._ddcutil = spy
+    ma.monitor_switch("hdmi1", index)
+    return seen
+
+
+# DP on the LEFT (x=0) but SECOND in ddcutil's bus order — the arrangement
+# where a renumbering bug is visible and an index-preserving sort is not.
+ma._buses = [dict(b) for b in BUSES]
+ma._last_error = None
+ma._ddcutil = lambda args, timeout=10: "VCP 60 SNC x12"
+ma.subprocess.run = lambda *a, **k: _Ran(
+    "DP-1 connected primary 1920x1080+0+0 (normal) 698mm x 392mm\n"
+    "HDMI-1 connected 1920x1080+1920+0 (normal) 698mm x 392mm\n")
+cards = ma.monitors()["monitors"]
+ma.subprocess.run = subprocess_run_real
+
+bus_of = {"card1-DP-1": "6", "card1-HDMI-A-1": "5"}   # from BUSES above
+want = {"LEFT": bus_of["card1-DP-1"], "RIGHT": bus_of["card1-HDMI-A-1"]}
+for card in cards:
+    ma._buses = [dict(b) for b in BUSES]
+    got = switched_bus(card["index"])
+    if got != [want[card["position"]]]:
+        failures.append(
+            f"the {card['position']} card (index {card['index']}) wrote to bus "
+            f"{got} but that panel is on bus {want[card['position']]}")
+
+# index -1 is "every monitor", and must reach both buses.
+ma._buses = [dict(b) for b in BUSES]
+if sorted(switched_bus(-1)) != ["5", "6"]:
+    failures.append("index -1 did not reach every monitor")
+
 if failures:
     print("FAIL: media-agent ddcutil parsing", file=sys.stderr)
     for f in failures:
