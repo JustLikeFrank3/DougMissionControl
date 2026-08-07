@@ -152,9 +152,42 @@ internal static class Normalize
         // True track, not magnetic: bearings computed from lat/lon are true,
         // and mixing references on one instrument is how people get lost.
         ["trk_true"] = (int)Math.Round(Heading(s.GpsTrueTrackDeg)) % 360,
+        ["vs_fpm"] = (int)Math.Round(s.VerticalSpeedFpm),
+        ["rpm_1"] = (int)Math.Round(s.EngRpm1),
+        ["rpm_2"] = (int)Math.Round(s.EngRpm2),
+        ["fuel_gal"] = Math.Round(s.FuelTotalGal, 1),
+        // MSFS body-frame signs are positive nose-DOWN / bank-LEFT. The panel
+        // draws standard EFIS signs (nose-up / right-wing-down positive), so
+        // the flip happens here at the boundary. Step-0: verify on the Baron.
+        ["pitch_deg"] = Math.Round(-s.PlanePitchDeg, 1),
+        ["bank_deg"] = Math.Round(-s.PlaneBankDeg, 1),
     };
 
-    public static JsonObject State(long seq, double ts, string aircraft, SimStateRaw s, SimCapsRaw c) => new()
+    /// <summary>
+    /// The GPS's active leg. Null when no flight plan is running — absence,
+    /// not zeros, so the panel never plots a waypoint at 0,0 off Ghana.
+    /// </summary>
+    public static JsonObject? Gps(SimGpsRaw g)
+    {
+        if (!Flag(g.FlightPlanActive) || g.WpCount < 1) return null;
+        JsonObject Wp(string id, double lat, double lon, int idx) => new()
+        {
+            ["id"] = string.IsNullOrWhiteSpace(id) ? null : id.Trim().ToUpperInvariant(),
+            ["lat"] = Math.Round(lat, 5),
+            ["lon"] = Math.Round(lon, 5),
+            ["i"] = idx,
+        };
+        var i = (int)g.WpIndex;
+        return new JsonObject
+        {
+            ["count"] = (int)g.WpCount,
+            ["index"] = i,
+            ["prev"] = i >= 1 ? Wp(g.PrevId, g.PrevLatDeg, g.PrevLonDeg, i - 1) : null,
+            ["next"] = Wp(g.NextId, g.NextLatDeg, g.NextLonDeg, i),
+        };
+    }
+
+    public static JsonObject State(long seq, double ts, string aircraft, SimStateRaw s, SimCapsRaw c, SimGpsRaw g) => new()
     {
         ["ts"] = Math.Round(ts, 1),
         ["seq"] = seq,
@@ -162,6 +195,7 @@ internal static class Normalize
         ["capabilities"] = Capabilities(c),
         ["controls"] = Controls(s, c),
         ["readouts"] = Readouts(s),
+        ["gps"] = Gps(g),
     };
 
     /// <summary>

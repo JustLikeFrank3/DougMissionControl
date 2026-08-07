@@ -129,7 +129,7 @@ internal static class Program
     /// has actually moved, and otherwise at the readout cadence, so "on change"
     /// keeps meaning something while IAS still updates smoothly.
     /// </summary>
-    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, string aircraft)
+    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, SimGpsRaw gps, string aircraft)
     {
         lock (PublishLock)
         {
@@ -138,7 +138,7 @@ internal static class Program
             if (!due && !moved) return;
 
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps);
+            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps, gps);
 
             _lastPublished = state;
             _lastPublishedAt = DateTime.UtcNow;

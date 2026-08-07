@@ -33,13 +33,14 @@ internal sealed class SimBridge : IDisposable
     private SimConnect? _sim;
     private SimStateRaw _state;
     private SimCapsRaw _caps;
+    private SimGpsRaw _gps;
     private bool _haveState;
     private bool _haveCaps;
     private string _aircraft = "";
     private string _simName = "";
 
     /// <summary>Raised on the pump thread each time a fresh state frame lands.</summary>
-    public event Action<SimStateRaw, SimCapsRaw, string>? StateReceived;
+    public event Action<SimStateRaw, SimCapsRaw, SimGpsRaw, string>? StateReceived;
 
     /// <summary>A live SimConnect session — not merely "the process is running".</summary>
     public bool Connected { get; private set; }
@@ -136,6 +137,12 @@ internal sealed class SimBridge : IDisposable
             sim.AddToDataDefinition(Definition.Title, SimVars.TitleVar, null, SIMCONNECT_DATATYPE.STRING256, 0.0f, SimConnect.SIMCONNECT_UNUSED);
             sim.RegisterDataDefineStruct<SimTitleRaw>(Definition.Title);
 
+            foreach (var (name, unit) in SimVars.GpsVars)
+                sim.AddToDataDefinition(Definition.Gps, name, unit, SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+            foreach (var name in SimVars.GpsStringVars)
+                sim.AddToDataDefinition(Definition.Gps, name, null, SIMCONNECT_DATATYPE.STRING32, 0.0f, SimConnect.SIMCONNECT_UNUSED);
+            sim.RegisterDataDefineStruct<SimGpsRaw>(Definition.Gps);
+
             foreach (var (id, name) in SimVars.ClientEvents)
             {
                 sim.MapClientEventToSimEvent(id, name);
@@ -171,6 +178,12 @@ internal sealed class SimBridge : IDisposable
         sender.RequestDataOnSimObject(Request.Title, Definition.Title,
             SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SECOND,
             SIMCONNECT_DATA_REQUEST_FLAG.CHANGED, 0, 0, 0);
+
+        // Waypoints sequence every few minutes at cruise; 1 Hz on change costs
+        // nothing and keeps the panel's plan a beat behind the GPS at worst.
+        sender.RequestDataOnSimObject(Request.Gps, Definition.Gps,
+            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SECOND,
+            SIMCONNECT_DATA_REQUEST_FLAG.CHANGED, 0, 0, 0);
     }
 
     private void OnException(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data)
@@ -187,7 +200,7 @@ internal sealed class SimBridge : IDisposable
             case Request.State:
                 _state = (SimStateRaw)data.dwData[0];
                 _haveState = true;
-                if (_haveCaps) StateReceived?.Invoke(_state, _caps, _aircraft);
+                if (_haveCaps) StateReceived?.Invoke(_state, _caps, _gps, _aircraft);
                 break;
 
             case Request.Caps:
@@ -197,6 +210,10 @@ internal sealed class SimBridge : IDisposable
 
             case Request.Title:
                 _aircraft = ((SimTitleRaw)data.dwData[0]).Title?.Trim() ?? "";
+                break;
+
+            case Request.Gps:
+                _gps = (SimGpsRaw)data.dwData[0];
                 break;
         }
     }
@@ -230,6 +247,7 @@ internal sealed class SimBridge : IDisposable
         Connected = false;
         _haveState = false;
         _haveCaps = false;
+        _gps = default;
         _aircraft = "";
         _simName = "";
         try { _sim?.Dispose(); } catch (COMException) { }
