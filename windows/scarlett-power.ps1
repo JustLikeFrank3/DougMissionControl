@@ -1,4 +1,4 @@
-# windows/scarlett-power.ps1 — stop the Scarlett dropping off the bus.
+# windows/scarlett-power.ps1 - stop the Scarlett dropping off the bus.
 # The Windows sibling of linux/scarlett-reset.py, aimed at a different failure:
 # Linux needed a software replug after warm dual-boot reboots; Windows drops the
 # device MID-SESSION, which is nearly always power management, not stale state.
@@ -7,7 +7,7 @@
 #   powershell -ExecutionPolicy Bypass -File windows\scarlett-power.ps1
 #
 # Does, for every Focusrite device (USB vendor 1235):
-#   1. EnhancedPowerManagementEnabled=0 — Focusrite's own documented fix; the
+#   1. EnhancedPowerManagementEnabled=0 - Focusrite's own documented fix; the
 #      usbaudio power logic suspends the interface and Scarletts don't wake.
 #   2. "Allow the computer to turn off this device" OFF for the device and
 #      every USB hub above it.

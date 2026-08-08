@@ -1,8 +1,8 @@
-# jarvis-greeting.ps1 — spoken Jarvis-style welcome at Windows logon.
+# jarvis-greeting.ps1 - spoken Jarvis-style welcome at Windows logon.
 # Installed to C:\ProgramData\dualboot\ by windows/setup.ps1 and
 # registered as the JarvisGreeting logon task.
 #
-# Voice: Microsoft neural TTS via edge-tts (pip install edge-tts) — the
+# Voice: Microsoft neural TTS via edge-tts (pip install edge-tts) - the
 # built-in SAPI voices are unlistenable. Renders fresh each logon (keeps
 # the live GPU line), caches the mp3 for offline boots, SAPI only as the
 # last resort.
@@ -22,7 +22,7 @@ $PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 # the Pi. "plain" (or anything unknown) greets without launching.
 # MSFS 2020 (Store): explorer.exe shell:AppsFolder\Microsoft.FlightSimulator_8wekyb3d8bbwe!App
 #
-# `display` names the monitor the profile wants primary, and is optional —
+# `display` names the monitor the profile wants primary, and is optional -
 # a profile without one leaves the desk exactly as it found it. Both of these
 # games take the primary display and nothing else (Squadrons is Frostbite and
 # has no monitor picker at all), so "launch on the ultrawide" is really "make
@@ -32,7 +32,7 @@ $PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 #
 # `input` is optional too: the DDC input to put every monitor on before
 # launching, through the sim agent already running on this machine. It is the
-# other half of the same thought — the monitor has to be showing this PC, not
+# other half of the same thought - the monitor has to be showing this PC, not
 # whatever else is wired into it.
 $LaunchProfiles = @{
     sim = @{
@@ -61,7 +61,7 @@ $launch = if ($bootProfile) { $LaunchProfiles[$bootProfile] } else { $null }
 
 # Phase callbacks to deck-api, so the panel's rail can show LOGON and
 # LAUNCHED as observed fact instead of stopping at OS UP. Authenticated with
-# the boot-agent token this machine already holds; failures are silent — the
+# the boot-agent token this machine already holds; failures are silent - the
 # greeting must never break because the Pi is down.
 function Send-Phase($phase) {
     try {
@@ -78,7 +78,7 @@ function Send-Phase($phase) {
 # quiet way to get behaviour nobody can explain later.
 function Set-MonitorInput($InputName) {
     <#  Put every monitor on one DDC input, through the sim agent already
-        running on this machine — the same endpoint the SCREENS surface drives,
+        running on this machine - the same endpoint the SCREENS surface drives,
         so there is exactly one implementation of DDC on this box. index -1 is
         "all monitors". Slow by nature (dxva2 waits on the panel), hence the
         generous timeout; the agent answers with what it sent, and the
@@ -126,7 +126,7 @@ function Play-Mp3($path) {
     $p.Close()
 }
 
-# Fresh neural render (needs network — usually up by logon). python -m
+# Fresh neural render (needs network - usually up by logon). python -m
 # beats relying on the pip Scripts dir being on the task's PATH.
 Remove-Item $fresh -Force
 & python -m edge_tts --voice $Voice --rate=$Rate --text $greeting --write-media $fresh 2>$null
@@ -137,7 +137,7 @@ if ((Test-Path $fresh) -and (Get-Item $fresh).Length -gt 1kb) {
     # Offline: replay the last successful render (stale temp beats robot voice).
     Play-Mp3 $cached
 } else {
-    # Never rendered anything yet and offline — better robotic than silent.
+    # Never rendered anything yet and offline - better robotic than silent.
     Add-Type -AssemblyName System.Speech
     $v = New-Object System.Speech.Synthesis.SpeechSynthesizer
     $v.Rate = -1

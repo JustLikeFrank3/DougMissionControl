@@ -1,4 +1,4 @@
-# boot-agent.ps1 — tiny LAN control endpoint on :9107 (Windows), the
+# boot-agent.ps1 - tiny LAN control endpoint on :9107 (Windows), the
 # reverse leg of flightsim-boot.sh: lets the Pi reboot Windows so GRUB's
 # saved default lands the workstation in Linux.
 #

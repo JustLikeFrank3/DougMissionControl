@@ -1,4 +1,4 @@
-# windows/setup.ps1 — one-time prep on the workstation's WINDOWS boot.
+# windows/setup.ps1 - one-time prep on the workstation's WINDOWS boot.
 # Run from an elevated PowerShell in the repo root:
 #
 #   powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
@@ -106,7 +106,7 @@ if ($PiHost) {
         Set-Content "$dest\jarvis-greeting.ps1"
     Write-Host "Greeting reads boot intent from: $PiHost"
 } else {
-    Write-Host 'WARNING: no -PiHost given — the greeting cannot read the boot intent,'
+    Write-Host 'WARNING: no -PiHost given - the greeting cannot read the boot intent,'
     Write-Host '         so no game will launch. Re-run with -PiHost user@pi-address.'
 }
 
@@ -135,7 +135,7 @@ if (-not (Test-Path $tokenFile)) {
 }
 if (-not (Get-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -ErrorAction SilentlyContinue)) {
     # Profile Any: this LAN shows as Public in Windows' eyes, and the
-    # agent is token-guarded — a Private-only rule silently blocked the Pi.
+    # agent is token-guarded - a Private-only rule silently blocked the Pi.
     New-NetFirewallRule -DisplayName 'FlightSim BootAgent 9107' -Direction Inbound `
         -Protocol TCP -LocalPort 9107 -Action Allow -Profile Any | Out-Null
 }

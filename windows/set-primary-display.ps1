@@ -24,7 +24,7 @@
 .PARAMETER Match
     Case-insensitive substring identifying the monitor, wildcards allowed.
     Tested against the device name, the monitor's PnP id, its description, the
-    adapter, and its current resolution — so "SAM", "3840x1080" and "DISPLAY3"
+    adapter, and its current resolution - so "SAM", "3840x1080" and "DISPLAY3"
     all work. Ambiguity is an error, never a guess: two identical 1920x1080
     panels both match "1920x1080", and picking the wrong one to be primary
     rearranges the whole desktop.
@@ -49,7 +49,7 @@ param(
 
 # Deliberately no Set-StrictMode and no $ErrorActionPreference here. This file
 # is DOT-SOURCED by jarvis-greeting.ps1, and dot-sourcing runs in the caller's
-# scope — both would leak into the rest of the greeting and change how it
+# scope - both would leak into the rest of the greeting and change how it
 # handles its own errors, several of which it survives on purpose. Every
 # failure path below throws explicitly instead of relying on a preference.
 
@@ -122,7 +122,7 @@ public static class Display {
     public const int ATTACHED_TO_DESKTOP = 0x00000001;
     public const int PRIMARY_DEVICE = 0x00000004;
     // Makes the second-level enumeration return the device interface path
-    // rather than a registry key — that path carries the EDID vendor id, which
+    // rather than a registry key - that path carries the EDID vendor id, which
     // is the only place "SAM" appears for a Samsung panel that otherwise
     // insists it is a Generic PnP Monitor.
     public const int EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001;
@@ -213,7 +213,7 @@ function Set-PrimaryDisplay {
     })
 
     if ($hits.Count -eq 0) {
-        throw "no display matches '$Match' — run set-primary-display.ps1 -List to see what this machine has"
+        throw "no display matches '$Match' - run set-primary-display.ps1 -List to see what this machine has"
     }
     # Never guess. Choosing the wrong monitor here rearranges the whole desktop.
     if ($hits.Count -gt 1) {

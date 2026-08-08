@@ -1,4 +1,4 @@
-# windows/setup-sim-agent.ps1 — one-time prep for flightdeck-sim-agent.
+# windows/setup-sim-agent.ps1 - one-time prep for flightdeck-sim-agent.
 # Run from an elevated PowerShell in the repo root:
 #
 #   powershell -ExecutionPolicy Bypass -File windows\setup-sim-agent.ps1
@@ -67,7 +67,7 @@ if (-not (Test-Path $tokenFile)) {
 
 # --- Firewall --------------------------------------------------------------
 # Profile Any: Windows classifies this LAN as Public, and a Private-only rule
-# fails silently — the same trap the boot agent's 9107 rule already documents.
+# fails silently - the same trap the boot agent's 9107 rule already documents.
 if (-not (Get-NetFirewallRule -DisplayName "FlightDeck SimAgent $port" -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName "FlightDeck SimAgent $port" -Direction Inbound `
         -Protocol TCP -LocalPort $port -Action Allow -Profile Any | Out-Null
@@ -93,7 +93,7 @@ Check it from the Pi:
   curl -s http://192.168.68.50:$port/                       # -> sim-agent
   curl -s "http://192.168.68.50:$port/health?token=<token>"
 
-The agent answering with sim.connected=false is normal — it means MSFS is not
+The agent answering with sim.connected=false is normal - it means MSFS is not
 running. It disappearing entirely is also normal: the workstation rebooted
 into Linux.
 "@
