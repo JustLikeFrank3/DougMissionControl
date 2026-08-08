@@ -127,11 +127,11 @@ public static class Display {
     // insists it is a Generic PnP Monitor.
     public const int EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001;
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum,
         ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool EnumDisplaySettings(string lpszDeviceName,
         int iModeNum, ref DEVMODE lpDevMode);
 
@@ -145,7 +145,11 @@ public static class Display {
     public static extern int ApplyStagedChanges(IntPtr lpszDeviceName,
         IntPtr lpDevMode, IntPtr hwnd, int dwflags, IntPtr lParam);
 
+    // Sized from the TYPE, never from an instance: PowerShell hands these
+    // around as boxed structs inside a PSObject, and asking Marshal to size
+    // one of those is a question with more than one plausible answer.
     public static int DevModeSize() { return Marshal.SizeOf(typeof(DEVMODE)); }
+    public static int DisplayDeviceSize() { return Marshal.SizeOf(typeof(DISPLAY_DEVICE)); }
 }
 
 }
@@ -155,24 +159,42 @@ public static class Display {
 function Get-AttachedDisplay {
     <#  Every monitor currently part of the desktop, with where it sits, what
         it is called, and whether it is primary. #>
+    # Counted so an empty result can say WHY. A list that comes back empty and
+    # prints nothing is indistinguishable from a broken tool, which is exactly
+    # what happened the first time this ran on the workstation.
+    $script:DiagSeen = 0
+    $script:DiagAttached = 0
+    $script:DiagNoMode = 0
+    $script:DiagErr = 0
+
     $out = @()
     $i = 0
     while ($true) {
         $dev = New-Object DualBoot.DISPLAY_DEVICE
-        $dev.cb = [Runtime.InteropServices.Marshal]::SizeOf($dev)
-        if (-not [DualBoot.Display]::EnumDisplayDevices($null, $i, [ref]$dev, 0)) { break }
+        $dev.cb = [DualBoot.Display]::DisplayDeviceSize()
+        if (-not [DualBoot.Display]::EnumDisplayDevices($null, $i, [ref]$dev, 0)) {
+            if ($i -eq 0) {
+                $script:DiagErr = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            }
+            break
+        }
         $i++
+        $script:DiagSeen++
         if (-not ($dev.StateFlags -band [DualBoot.Display]::ATTACHED_TO_DESKTOP)) { continue }
+        $script:DiagAttached++
 
         $mode = New-Object DualBoot.DEVMODE
         $mode.dmSize = [short][DualBoot.Display]::DevModeSize()
         if (-not [DualBoot.Display]::EnumDisplaySettings(
-                $dev.DeviceName, [DualBoot.Display]::ENUM_CURRENT_SETTINGS, [ref]$mode)) { continue }
+                $dev.DeviceName, [DualBoot.Display]::ENUM_CURRENT_SETTINGS, [ref]$mode)) {
+            $script:DiagNoMode++
+            continue
+        }
 
         # Second level: the monitor behind the adapter output. Its DeviceID is
         # the interface path carrying the EDID vendor id.
         $mon = New-Object DualBoot.DISPLAY_DEVICE
-        $mon.cb = [Runtime.InteropServices.Marshal]::SizeOf($mon)
+        $mon.cb = [DualBoot.Display]::DisplayDeviceSize()
         $monId = ''
         $monName = ''
         if ([DualBoot.Display]::EnumDisplayDevices($dev.DeviceName, 0, [ref]$mon,
@@ -275,7 +297,27 @@ function Set-PrimaryDisplay {
 # is the operator's tool. $MyInvocation.InvocationName is '.' when sourced.
 if ($MyInvocation.InvocationName -ne '.') {
     if ($List -or -not $Match) {
-        Get-AttachedDisplay | Format-Table Device, Width, Height, Refresh, X, Y,
+        $found = @(Get-AttachedDisplay)
+        # Never print nothing. Format-Table on an empty list outputs not one
+        # character, which is indistinguishable from the script having failed
+        # to run at all - and that is exactly how this first landed on the
+        # workstation: a bare prompt, and no way to tell which half was wrong.
+        if ($found.Count -eq 0) {
+            Write-Host 'No displays enumerated.'
+            Write-Host "  display devices seen : $script:DiagSeen"
+            Write-Host "  attached to desktop  : $script:DiagAttached"
+            Write-Host "  refused a mode read  : $script:DiagNoMode"
+            if ($script:DiagErr) {
+                Write-Host "  EnumDisplayDevices failed immediately, Win32 error $script:DiagErr"
+            }
+            Write-Host ''
+            Write-Host 'Cross-check with a path that uses none of this script''s interop:'
+            Write-Host '  Add-Type -AssemblyName System.Windows.Forms'
+            Write-Host '  [System.Windows.Forms.Screen]::AllScreens | Format-Table DeviceName, Bounds, Primary'
+            Write-Host 'If that lists your monitors, the fault is in here and not in Windows.'
+            exit 1
+        }
+        $found | Format-Table Device, Width, Height, Refresh, X, Y,
             Primary, Monitor, MonitorId -AutoSize
         if (-not $List -and -not $Match) {
             Write-Host 'Pass -Match with something from the table above, e.g. -Match 3840x1080'
