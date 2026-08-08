@@ -7,7 +7,7 @@
    MSFS declined — over gear speed, on the ground, wrong aircraft — read as a
    failed command instead of a lie. */
 
-import { $, wireHold, post } from './ui.js';
+import { $, wireTap, post } from './ui.js';
 import { fmtAgo } from './format.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
 import { missionUpdate, paintMissionStrip } from './nav.js';
@@ -304,8 +304,12 @@ function cxPaint(c) {
 
 export function wireSim() {
   simBuildGauges();
+  // Instant, not hold-to-arm — see wireTap. Every control on this surface is
+  // reversible and observed: the panel still draws only what the simulator
+  // reports back, so a mis-tap shows up as state moving and is undone by
+  // tapping the other way.
   [].forEach.call(document.querySelectorAll('.simbtn'), function (b) {
-    wireHold(b, function () {
+    wireTap(b, function () {
       simSend(b.dataset.c, b.dataset.a, b.dataset.v || null);
     });
   });
@@ -313,7 +317,7 @@ export function wireSim() {
   // AP bug steppers. Absolute set computed from the observed value at tap
   // time: a dropped command leaves the bug where it was, never double-steps.
   [].forEach.call(document.querySelectorAll('.simstep'), function (b) {
-    b.addEventListener('click', function () {
+    wireTap(b, function () {
       var ctl = b.dataset.c;
       var ap = AP_VARS[ctl];
       var c = (simLast && simLast.controls) || {};

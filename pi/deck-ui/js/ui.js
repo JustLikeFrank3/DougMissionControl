@@ -67,6 +67,32 @@ export function wireHold(el, fire) {
 }
 
 /**
+ * Fire on touch-down, immediately.
+ *
+ * Hold-to-arm exists so a stray touch cannot reboot a machine someone is
+ * working on. Nothing in a simulator carries that weight: a flap detent, a
+ * heading bug, a landing light are all reversible, incremental, and pressed
+ * repeatedly — a 1.5 s hold between each step of the flaps is an obstacle
+ * with nothing on the other side of it.
+ *
+ * pointerdown rather than click: this panel speaks pointer events, and firing
+ * on press is what makes a control feel like a switch instead of a web page.
+ * The `tapped` class gives the press somewhere to show, since these buttons
+ * have no fill sweep to watch.
+ */
+export function wireTap(el, fire) {
+  el.addEventListener('pointerdown', function (e) {
+    if (el.disabled) return;
+    e.preventDefault();
+    el.classList.add('tapped');
+    fire();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (t) {
+    el.addEventListener(t, function () { el.classList.remove('tapped'); });
+  });
+}
+
+/**
  * POST JSON to deck-api. Never throws and never rejects: a command that did
  * not reach the Pi resolves to null, and every caller renders that as the
  * command not having happened. The panel has no error dialog by design —

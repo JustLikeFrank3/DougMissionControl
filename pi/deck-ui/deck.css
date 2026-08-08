@@ -413,6 +413,12 @@ html, body {
 .simt.na { opacity: .35; }
 .simt.na .simt-v { font-size: 22px; color: var(--mut); }
 
+/* The press, for controls that fire instantly and so have no fill to watch.
+   Brief and bright: the acknowledgement is the observed state moving a moment
+   later, this is only the panel admitting it felt the finger. */
+.simbtn.tapped, .simstep.tapped { border-color: var(--acc); color: var(--fg);
+                                  background: var(--pan2); }
+
 /* AP bug steppers: four to a row, tap-to-fire. */
 .simcmd.steppers { display: flex; gap: 6px; }
 .simstep { flex: 1; padding: 10px 2px; border: 1px solid var(--ln);
