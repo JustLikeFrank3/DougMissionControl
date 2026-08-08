@@ -7,7 +7,7 @@
    MSFS declined — over gear speed, on the ground, wrong aircraft — read as a
    failed command instead of a lie. */
 
-import { $, wireTap, post } from './ui.js';
+import { $, wireTap, wireHold, post } from './ui.js';
 import { fmtAgo } from './format.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
 import { missionUpdate, paintMissionStrip } from './nav.js';
@@ -304,14 +304,20 @@ function cxPaint(c) {
 
 export function wireSim() {
   simBuildGauges();
-  // Instant, not hold-to-arm — see wireTap. Every control on this surface is
-  // reversible and observed: the panel still draws only what the simulator
-  // reports back, so a mis-tap shows up as state moving and is undone by
-  // tapping the other way.
+  // Instant, except the gear.
+  //
+  // Everything on this surface is reversible and observed, so a mis-tap shows
+  // as state moving and is undone by tapping the other way — which is why the
+  // rest fire on touch. Firing on PRESS also means sliding a finger off no
+  // longer cancels: the command has already gone. For a flap notch or a
+  // heading bug that is the right trade. For the gear it is not — it is the
+  // one control here with a real airframe consequence, it is not something you
+  // press repeatedly, and a hold costs nothing when you use it twice a flight.
   [].forEach.call(document.querySelectorAll('.simbtn'), function (b) {
-    wireTap(b, function () {
+    var fire = function () {
       simSend(b.dataset.c, b.dataset.a, b.dataset.v || null);
-    });
+    };
+    if (b.dataset.c === 'gear') wireHold(b, fire); else wireTap(b, fire);
   });
 
   // AP bug steppers. Absolute set computed from the observed value at tap
