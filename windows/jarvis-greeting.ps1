@@ -21,13 +21,28 @@ $PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 # Launch profiles, keyed by the boot intent each fauxmo device records on
 # the Pi. "plain" (or anything unknown) greets without launching.
 # MSFS 2020 (Store): explorer.exe shell:AppsFolder\Microsoft.FlightSimulator_8wekyb3d8bbwe!App
+#
+# `display` names the monitor the profile wants primary, and is optional —
+# a profile without one leaves the desk exactly as it found it. Both of these
+# games take the primary display and nothing else (Squadrons is Frostbite and
+# has no monitor picker at all), so "launch on the ultrawide" is really "make
+# the ultrawide primary first". The string is matched by
+# set-primary-display.ps1 against the device name, PnP id, description and
+# resolution; run that script with -List to find one that identifies a panel.
+#
+# `input` is optional too: the DDC input to put every monitor on before
+# launching, through the sim agent already running on this machine. It is the
+# other half of the same thought — the monitor has to be showing this PC, not
+# whatever else is wired into it.
 $LaunchProfiles = @{
     sim = @{
         cmd     = { explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App }
+        display = '3840x1080'
         closing = 'The flight deck is ready when you are.'
     }
     squadrons = @{
         cmd     = { Start-Process 'C:\Program Files\EA Games\STAR WARS Squadrons\starwarssquadrons_launcher.exe' }
+        display = '3840x1080'
         closing = 'Flight controls booting. May the Force be with you.'
     }
 }
@@ -58,6 +73,23 @@ function Send-Phase($phase) {
             -ContentType 'application/json' -Body $body -TimeoutSec 3 | Out-Null
     } catch { }
 }
+# NOT $input as the parameter name: that is a PowerShell automatic variable
+# holding the pipeline enumerator, and shadowing it inside a function is a
+# quiet way to get behaviour nobody can explain later.
+function Set-MonitorInput($InputName) {
+    <#  Put every monitor on one DDC input, through the sim agent already
+        running on this machine — the same endpoint the SCREENS surface drives,
+        so there is exactly one implementation of DDC on this box. index -1 is
+        "all monitors". Slow by nature (dxva2 waits on the panel), hence the
+        generous timeout; the agent answers with what it sent, and the
+        read-back on the panel is the only proof anything moved. #>
+    $tok = (Get-Content 'C:\ProgramData\dualboot\sim-agent.token' -TotalCount 1).Trim()
+    if (-not $tok) { throw 'sim-agent.token is empty' }
+    $body = (@{ input = $InputName; index = -1 } | ConvertTo-Json -Compress)
+    Invoke-RestMethod -Uri "http://127.0.0.1:9109/monitor?token=$tok" -Method Post `
+        -ContentType 'application/json' -Body $body -TimeoutSec 25 | Out-Null
+}
+
 Send-Phase 'logon'
 
 # Let the audio stack finish coming up before speaking.
@@ -113,6 +145,23 @@ if ((Test-Path $fresh) -and (Get-Item $fresh).Length -gt 1kb) {
 }
 
 if ($launch) {
+    # The desk, before the game. Both of these are best-effort and neither may
+    # stop a launch: a monitor that will not move is a worse evening than a
+    # game on the wrong screen, and a greeting that ends in a red error and no
+    # simulator is the worst of the three.
+    if ($launch.ContainsKey('display') -and $launch.display) {
+        try {
+            . "$PSScriptRoot\set-primary-display.ps1"
+            Write-Host (Set-PrimaryDisplay -Match $launch.display)
+        } catch {
+            Write-Warning "primary display unchanged: $_"
+        }
+    }
+    if ($launch.ContainsKey('input') -and $launch.input) {
+        try { Set-MonitorInput $launch.input }
+        catch { Write-Warning "monitor input unchanged: $_" }
+    }
+
     & $launch.cmd
     # Reported AFTER Start-Process returns: "the launch command was issued",
     # which is all this script can honestly observe about the app.

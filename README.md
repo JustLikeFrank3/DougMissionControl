@@ -53,6 +53,8 @@ pi/flightsim-boot.sh     the orchestrator itself (→ /usr/local/bin on the Pi)
 windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, token
 windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
 windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
+windows/set-primary-display.ps1  makes one monitor primary, so a profile can
+                         say which screen its game opens on (`-List` to look)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting, media-agent
 linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows one)
 linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
@@ -276,6 +278,47 @@ Three edits: a new device block in `pi/setup.sh` with
 `FLIGHT_INTENT=<key>`, a matching entry in `$LaunchProfiles` in
 `windows/jarvis-greeting.ps1` (command plus the Jarvis closing line), then
 redeploy both sides, re-run Alexa discovery, and add a routine.
+
+### Choosing which screen a game opens on
+
+A launch profile can also say what the desk should look like before the game
+starts. Both fields are optional, and a profile with neither leaves everything
+exactly as it found it:
+
+```powershell
+sim = @{
+    cmd     = { explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App }
+    display = '3840x1080'      # make this monitor primary first
+    input   = 'dp1'            # and put every monitor on this DDC input
+    closing = 'The flight deck is ready when you are.'
+}
+```
+
+`display` exists because both of these games take the **primary display and
+nothing else** — Squadrons is Frostbite and has no monitor picker at all — so
+"launch on the ultrawide" really means "make the ultrawide primary first".
+Windows has no cmdlet for that; `set-primary-display.ps1` does it through
+`ChangeDisplaySettingsEx`, moving the new primary to the origin and carrying
+every other monitor with it so the desktop does not end up with a hole in it.
+Run it with `-List` to find a string that identifies the panel you mean:
+
+```powershell
+C:\ProgramData\dualboot\set-primary-display.ps1 -List
+```
+
+Matching is deliberately strict about ambiguity — two identical 1920×1080
+panels both match `1920x1080`, and it will refuse rather than pick one, because
+making the wrong monitor primary rearranges the whole desktop.
+
+`input` switches DDC through the sim agent already running on the box, the same
+endpoint the SCREENS surface drives, so there is exactly one implementation of
+DDC on this machine. Leave it unset unless you know which input your PC is on:
+sending a monitor to an input nothing is plugged into blanks it until you find
+the OSD.
+
+Neither can stop a launch. A monitor that will not move is a worse evening than
+a game on the wrong screen, and both failures are warnings that the greeting
+carries on past.
 
 ## How "is it up?" is decided
 

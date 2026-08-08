@@ -98,6 +98,8 @@ if (-not $PiHost -and (Test-Path "$dest\jarvis-greeting.ps1")) {
 }
 Copy-Item "$PSScriptRoot\jarvis-greeting.ps1" $dest -Force
 Copy-Item "$PSScriptRoot\boot-agent.ps1" $dest -Force
+# Dot-sourced by the greeting from $PSScriptRoot, so it has to land beside it.
+Copy-Item "$PSScriptRoot\set-primary-display.ps1" $dest -Force
 if ($PiHost) {
     (Get-Content "$dest\jarvis-greeting.ps1") `
         -replace "^\`$PiHost\s*=\s*'[^']*'", "`$PiHost = '$PiHost'" |
