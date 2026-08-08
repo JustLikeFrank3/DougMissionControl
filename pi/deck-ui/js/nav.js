@@ -359,6 +359,10 @@ function navSearchGo() {
 export function navKbdBuild() {
   var rows = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
   var kbd = $('navp-kbd');
+  // Cleared first, so building twice yields one keyboard rather than two
+  // stacked on top of each other. wireNav did exactly that for a while and the
+  // waypoint search grew a second full QWERTY underneath the first.
+  kbd.innerHTML = '';
   rows.forEach(function (line) {
     var kr = document.createElement('div');
     kr.className = 'krow';
@@ -692,8 +696,8 @@ export function wireNav() {
     });
   })();
 
-  // Flight-plan search overlay + its on-screen keyboard.
-  navKbdBuild();
+  // Flight-plan search overlay. The keyboard it uses is built once at the top
+  // of wireNav, not here as well.
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
   $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
   // SAVE sits next to ADD, not behind PLANS. Saving was reachable only by
