@@ -197,6 +197,59 @@ Expect("FFT puts 120 Hz in its bin", PeakBin(120).ToString(), "3");
     Expect("silence produces no spectrum", any ? "moved" : "flat", "flat");
 }
 
+/* ── band mapping ───────────────────────────────────────────────────────────
+   The FFT was right and the display was still wrong: log-spaced bands narrower
+   than one FFT bin clamped to that bin, so the first nine bands carried the
+   SAME NUMBER and the bottom of the spectrum moved as one block. It looked
+   like a working visualiser with a heavy bass response. */
+
+var mapBands = audioT.GetMethod("MapBands", BindingFlags.NonPublic | BindingFlags.Static);
+
+float[] Bands(double[] mag, int rate = 48000, int fftSize = 4096, int count = 64)
+    => (float[])mapBands.Invoke(null, new object[] { mag, rate, fftSize, count });
+
+// A spectrum that rises smoothly with frequency. Every band must read a
+// DIFFERENT value: adjacent bands landing on the same number is precisely the
+// bug, and on a ramp there is no legitimate reason for a tie.
+{
+    var mag = new double[2048];
+    for (var i = 0; i < mag.Length; i++) mag[i] = 0.001 + i * 0.0004;
+    var got = Bands(mag);
+    var ties = 0;
+    for (var b = 1; b < got.Length; b++) if (got[b] == got[b - 1]) ties++;
+    Expect("no two bands read the same value on a ramp", ties.ToString(), "0");
+    // And it must still be monotonic - interpolation that wanders is not a fix.
+    var slips = 0;
+    for (var b = 1; b < got.Length; b++) if (got[b] < got[b - 1]) slips++;
+    Expect("a rising spectrum rises across the bars", slips.ToString(), "0");
+}
+
+// The bottom of the range is where this failed, so check it specifically: the
+// first twelve bands cover 30 Hz upward and must all differ.
+{
+    var mag = new double[2048];
+    for (var i = 0; i < mag.Length; i++) mag[i] = 0.001 + i * 0.0004;
+    var got = Bands(mag);
+    var distinct = new System.Collections.Generic.HashSet<float>();
+    for (var b = 0; b < 12; b++) distinct.Add(got[b]);
+    Expect("the lowest twelve bands are twelve values", distinct.Count.ToString(), "12");
+}
+
+// Silence is a floor, not noise, and a peak in one bin must not light the
+// whole bottom end.
+{
+    var quiet = new double[2048];
+    Expect("silence maps to zero everywhere",
+        Bands(quiet).Any(v => v > 0) ? "moved" : "flat", "flat");
+
+    var spike = new double[2048];
+    spike[400] = 1.0;                     // 400 * 11.72 Hz = ~4.7 kHz
+    var got = Bands(spike);
+    var lit = got.Count(v => v > 0.5);
+    Expect("a single tone lights a few bars, not the spectrum",
+        lit <= 4 ? "focused" : $"{lit} bars", "focused");
+}
+
 Console.WriteLine(fails == 0
     ? "sim-agent resolve and state-shape tests passed"
     : $"FAIL: sim-agent ({fails} failed)");

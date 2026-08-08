@@ -28,9 +28,15 @@ internal sealed class AudioBridge : IDisposable
 {
     /// <summary>Bands the panel draws. Enough to look like a spectrum, few
     /// enough that the JSON stays trivial at 20 Hz.</summary>
-    public const int BandCount = 48;
+    public const int BandCount = 64;
 
-    private const int FftSize = 1024;          // power of two, ~21ms at 48kHz
+    // 4096 rather than 1024, and the reason is the bottom of the spectrum.
+    // At 1024 points and 48kHz a bin is 46.9 Hz wide, so 30-200 Hz - where the
+    // bass everyone actually watches lives - spans four bins, and log spacing
+    // handed the first NINE bands the same bin. Nine bars moving as one, then
+    // three, then pairs. 4096 gives 11.7 Hz per bin and an 85ms window, which
+    // is still far quicker than the attack/release smoothing below.
+    private const int FftSize = 4096;
     private const int PublishMs = 50;          // 20 Hz
     private const int ReconnectMs = 3000;
 
@@ -286,37 +292,13 @@ internal sealed class AudioBridge : IDisposable
 
         Fft(re, im);
 
-        // Log-spaced bands from 30Hz to 16kHz. Linear bins would put four
-        // fifths of the bars above 5kHz, where music has almost nothing, and
-        // the bass - the part you can see moving - would be one bar wide.
-        var bins = FftSize / 2;
-        var hzPerBin = sampleRate / (double)FftSize;
-        var lo = 30.0;
-        var hi = Math.Min(16000.0, sampleRate / 2.0 - hzPerBin);
-        var bands = new float[BandCount];
+        var mag = new double[FftSize / 2];
+        for (var i = 0; i < mag.Length; i++)
+            mag[i] = Math.Sqrt(re[i] * re[i] + im[i] * im[i]) / (FftSize / 2.0);
+
+        var bands = MapBands(mag, sampleRate, FftSize, BandCount);
         float peak = 0;
-
-        for (var b = 0; b < BandCount; b++)
-        {
-            var f0 = lo * Math.Pow(hi / lo, b / (double)BandCount);
-            var f1 = lo * Math.Pow(hi / lo, (b + 1) / (double)BandCount);
-            var i0 = Math.Clamp((int)(f0 / hzPerBin), 1, bins - 1);
-            var i1 = Math.Clamp((int)(f1 / hzPerBin), i0 + 1, bins);
-
-            double best = 0;
-            for (var i = i0; i < i1; i++)
-            {
-                var mag = Math.Sqrt(re[i] * re[i] + im[i] * im[i]) / (FftSize / 2.0);
-                if (mag > best) best = mag;
-            }
-            // dB, then mapped onto 0..1 across a 60dB floor. Linear magnitude
-            // looks dead: music spends most of its time in the bottom few
-            // percent of it, and the bars would barely leave the floor.
-            var db = 20 * Math.Log10(best + 1e-9);
-            var v = (float)Math.Clamp((db + 60) / 60.0, 0, 1);
-            bands[b] = v;
-            if (v > peak) peak = v;
-        }
+        foreach (var v in bands) if (v > peak) peak = v;
 
         lock (_lock)
         {
@@ -328,6 +310,69 @@ internal sealed class AudioBridge : IDisposable
                           : _bands[b] * 0.75f + bands[b] * 0.25f;
             _peak = peak;
         }
+    }
+
+    /// <summary>
+    /// Magnitudes per FFT bin onto the bars the panel draws.
+    ///
+    /// Log-spaced from 30Hz to 16kHz: linear spacing would put four fifths of
+    /// the bars above 5kHz, where music has almost nothing, and the bass would
+    /// be one bar wide.
+    ///
+    /// The part that was wrong: a band narrower than one FFT bin used to clamp
+    /// to that bin, so every band under about 200Hz read the SAME NUMBER and
+    /// the bottom of the display moved as one block. Narrow bands now
+    /// INTERPOLATE between neighbouring bins at their own centre frequency, so
+    /// adjacent bars read different points on the same slope. That is
+    /// resampling the spectrum envelope, not inventing resolution - the shape
+    /// is real, it is just being read at more places than there are bins.
+    /// </summary>
+    internal static float[] MapBands(double[] mag, int sampleRate, int fftSize, int bandCount)
+    {
+        var bins = mag.Length;
+        var hzPerBin = sampleRate / (double)fftSize;
+        var lo = 30.0;
+        var hi = Math.Min(16000.0, sampleRate / 2.0 - hzPerBin);
+        var outp = new float[bandCount];
+
+        for (var b = 0; b < bandCount; b++)
+        {
+            var f0 = lo * Math.Pow(hi / lo, b / (double)bandCount);
+            var f1 = lo * Math.Pow(hi / lo, (b + 1) / (double)bandCount);
+            var x0 = f0 / hzPerBin;
+            var x1 = f1 / hzPerBin;
+
+            // Bins wholly INSIDE the band, not merely touched by it. Rounding
+            // the ends outward instead lets a band reach into its neighbour's
+            // territory, and on a rising spectrum a low band then reads higher
+            // than the one above it - bars that cross over for no reason
+            // anything is doing in the music.
+            var i0 = Math.Clamp((int)Math.Ceiling(x0), 1, bins - 1);
+            var i1 = Math.Clamp((int)Math.Floor(x1), 0, bins - 1);
+
+            double v;
+            if (i1 >= i0)
+            {
+                // The loudest thing inside wins, so a narrow peak is not
+                // averaged into nothing by its quiet neighbours.
+                v = 0;
+                for (var i = i0; i <= i1; i++) if (mag[i] > v) v = mag[i];
+            }
+            else
+            {
+                var x = Math.Clamp((x0 + x1) / 2.0, 1, bins - 2);
+                var i = (int)Math.Floor(x);
+                var frac = x - i;
+                v = mag[i] * (1 - frac) + mag[i + 1] * frac;
+            }
+
+            // dB across a 60dB floor. Linear magnitude looks dead: music spends
+            // most of its time in the bottom few percent of it and the bars
+            // would barely leave the floor.
+            var db = 20 * Math.Log10(v + 1e-9);
+            outp[b] = (float)Math.Clamp((db + 60) / 60.0, 0, 1);
+        }
+        return outp;
     }
 
     /// <summary>In-place iterative radix-2 FFT. Small, allocation-free per

@@ -606,17 +606,26 @@ html, body {
    music. Cyan because it is this panel's reference-data colour -- green,
    amber and red are reserved for state, and a visualiser has no state to
    report. */
-.viz { display: flex; align-items: flex-end; gap: 2px; height: 46px;
+/* Each <i> is a full-height TRACK, not the bar itself: ::before is the bar and
+   ::after is the peak cap, so the cap can sit anywhere in the column instead of
+   being trapped inside a bar that is only as tall as the current level. */
+.viz { display: flex; align-items: stretch; gap: 2px; height: 46px;
        flex: none; padding: 4px 2px 0; }
-.viz i { flex: 1; min-width: 0; height: var(--h, 2%);
-         background: linear-gradient(to top, var(--cy), #7ee3f0);
-         opacity: .8; transition: height 90ms linear; }
-.viz i.hot { background: linear-gradient(to top, var(--cy), var(--fg)); opacity: 1; }
+.viz i { flex: 1; min-width: 0; position: relative; }
+.viz i::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0;
+                 height: var(--h, 2%); opacity: .85;
+                 background: linear-gradient(to top, var(--cy), #7ee3f0);
+                 transition: height 90ms linear; }
+.viz i::after { content: ''; position: absolute; left: 0; right: 0;
+                bottom: var(--p, 2%); height: 2px; background: var(--fg);
+                opacity: .55; transition: bottom 140ms linear; }
+.viz i.hot::before { background: linear-gradient(to top, var(--cy), var(--fg)); opacity: 1; }
 
 /* Motion off means motion off. A spectrum is decoration, and someone who has
    asked the OS to stop animating things has asked for this too. */
 @media (prefers-reduced-motion: reduce) {
-  .viz i, .aud-viz i { transition: none; }
+  .viz i::before, .viz i::after,
+  .aud-viz i::before, .aud-viz i::after { transition: none; }
 }
 
 /* ── AUDIO ─────────────────────────────────────────────────────────────────
@@ -648,11 +657,18 @@ html, body {
 /* flex:1 with min-height:0 — without the second half this grows to its
    content and pushes the foot off the bottom of a fixed-height panel, which
    is the same way LIVE and "hold to arm" went missing from the DECK rail. */
-.aud-viz { flex: 1; min-height: 0; display: flex; align-items: flex-end; gap: 3px; }
-.aud-viz i { flex: 1; min-width: 0; height: var(--h, 2%);
-             background: linear-gradient(to top, var(--cy), #7ee3f0);
-             opacity: .85; transition: height 90ms linear; }
-.aud-viz i.hot { background: linear-gradient(to top, var(--cy), var(--fg)); opacity: 1; }
+.aud-viz { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 3px; }
+.aud-viz i { flex: 1; min-width: 0; position: relative; }
+/* A hairline floor under every column, so silence reads as a spectrum at rest
+   rather than an empty black box. */
+.aud-viz i::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0;
+                     height: var(--h, 2%); opacity: .9;
+                     background: linear-gradient(to top, var(--cy) 0%, #7ee3f0 70%, var(--fg) 100%);
+                     transition: height 90ms linear; }
+.aud-viz i::after { content: ''; position: absolute; left: 0; right: 0;
+                    bottom: var(--p, 2%); height: 3px; background: var(--fg);
+                    opacity: .6; transition: bottom 140ms linear; }
+.aud-viz i.hot::before { background: linear-gradient(to top, var(--cy), var(--fg)); }
 .aud-foot { flex: none; font-size: 12px; letter-spacing: .14em; color: var(--mut); }
 
 

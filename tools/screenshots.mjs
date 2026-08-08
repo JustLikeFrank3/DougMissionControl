@@ -139,8 +139,8 @@ const MEDIA = { source: 'windows', active: true, playing: true,
 // A plausible spectrum: bass-heavy, rolling off with frequency, the way music
 // actually looks. A flat row of equal bars would screenshot as "working" while
 // hiding a band-mapping bug that put everything in one bin.
-const BANDS = Array.from({ length: 48 }, (_, i) =>
-  Math.max(0.05, Math.min(1, 0.95 * Math.pow(1 - i / 48, 1.6)
+const BANDS = Array.from({ length: 64 }, (_, i) =>
+  Math.max(0.05, Math.min(1, 0.95 * Math.pow(1 - i / 64, 1.6)
     + 0.22 * Math.sin(i * 1.7) * Math.sin(i * 0.4))));
 const AUDIO = { active: true, peak: Math.max(...BANDS), bands: BANDS.map(b => +b.toFixed(3)) };
 

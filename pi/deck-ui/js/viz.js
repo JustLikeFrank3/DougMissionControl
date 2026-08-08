@@ -20,6 +20,7 @@ import { $, getJSON } from './ui.js';
 var VIZ_MS = 100;
 var vizTimer = null;
 var vizBars = {};      // element id -> how many bars it currently holds
+var vizPeaks = {};     // element id -> each bar's held peak
 var vizLast = null;
 
 export function vizPoll(on) {
@@ -47,15 +48,24 @@ export function drawBands(el, bands) {
   var id = el.id;
   if (vizBars[id] !== bands.length) {
     vizBars[id] = bands.length;
+    vizPeaks[id] = [];
     el.innerHTML = '';
     for (var i = 0; i < bands.length; i++) el.appendChild(document.createElement('i'));
   }
+  var peaks = vizPeaks[id];
   for (var b = 0; b < bands.length; b++) {
-    var v = bands[b];
+    var v = Math.max(0.02, Math.min(1, bands[b]));
+    // Peak hold: jump to a new high instantly, then sink slowly. It is what
+    // every real analyser does, it costs one number per bar, and it is honest
+    // - the cap marks a level this band actually reached a moment ago rather
+    // than decorating the bar with something invented.
+    var held = peaks[b];
+    peaks[b] = (held === undefined || v >= held) ? v : Math.max(v, held - 0.010);
     // A floor of a couple of percent so silence reads as a quiet line rather
     // than an empty box that looks like the widget has broken.
-    el.children[b].style.setProperty('--h', (Math.max(0.02, Math.min(1, v)) * 100) + '%');
-    el.children[b].classList.toggle('hot', v > 0.85);
+    el.children[b].style.setProperty('--h', (v * 100) + '%');
+    el.children[b].style.setProperty('--p', (peaks[b] * 100) + '%');
+    el.children[b].classList.toggle('hot', bands[b] > 0.85);
   }
 }
 
