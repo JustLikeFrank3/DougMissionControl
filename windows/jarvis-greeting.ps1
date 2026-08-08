@@ -37,12 +37,12 @@ $PiHost = 'user@192.168.1.51'   # where the boot intent is recorded
 $LaunchProfiles = @{
     sim = @{
         cmd     = { explorer.exe shell:AppsFolder\Microsoft.Limitless_8wekyb3d8bbwe!App }
-        display = '3840x1080'
+        display = 'SAM'
         closing = 'The flight deck is ready when you are.'
     }
     squadrons = @{
         cmd     = { Start-Process 'C:\Program Files\EA Games\STAR WARS Squadrons\starwarssquadrons_launcher.exe' }
-        display = '3840x1080'
+        display = 'SAM'
         closing = 'Flight controls booting. May the Force be with you.'
     }
 }

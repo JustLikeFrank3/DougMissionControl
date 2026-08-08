@@ -35,14 +35,30 @@ var dspDefaults = null;   // deck-api's stated fallback for silent panels
  * side of the desk. An input a monitor is demonstrably sitting on is an
  * input that monitor has, whatever any fallback list forgot to mention.
  */
+var dspSeen = {};      // monitor -> every input it has been observed on
+
 function dspAllowed(m) {
-  var list = m.inputs || dspDefaults;
-  if (!list) return null;                       // null means offer everything
+  // Remembered, not just current. Offering only the input a monitor is on
+  // RIGHT NOW is useless the moment you switch it: this Samsung sat on DP,
+  // was switched to HDMI 2, and its declared list - which omits DisplayPort
+  // entirely, as plenty of panels do - then became the whole truth. DP
+  // vanished from the card while the monitor was still physically wired to
+  // it, and the only way back was the OSD on the monitor itself.
+  //
+  // An input this panel has SEEN a monitor on is an input that monitor has,
+  // and no capabilities string gets to overrule the evidence.
+  var key = m.index + ':' + (m.desc || '');
+  var seen = dspSeen[key] || (dspSeen[key] = {});
   // 'other' is the agents' word for a code neither of them recognises. There
   // is no button for it, so it cannot be offered and cannot be returned to.
-  if (m.input && m.input !== 'other' && list.indexOf(m.input) === -1) {
-    list = list.concat([m.input]);
-  }
+  if (m.input && m.input !== 'other') seen[m.input] = true;
+
+  var list = m.inputs || dspDefaults;
+  if (!list) return null;                       // null means offer everything
+  list = list.slice();
+  Object.keys(seen).forEach(function (i) {
+    if (list.indexOf(i) === -1) list.push(i);
+  });
   return list;
 }
 
@@ -94,7 +110,12 @@ export function paintDsp(d) {
       card.innerHTML =
         '<div class="h-top"><span class="h-name"></span>' +
         '<span class="h-pill dsp-obs">—</span></div>' +
-        '<div class="dsp-desc"></div><div class="dsp-btns"></div>';
+        '<div class="dsp-desc"></div><div class="dsp-btns"></div>' +
+        // The trap, stated on the card. Sending a monitor to an input with
+        // nothing plugged into it does not just blank it - it takes the DDC
+        // link with it, and the only way back is that monitor's own OSD.
+        '<div class="dsp-warn">an input with nothing on it takes DDC with it' +
+        ' \u00b7 recover at the monitor</div>';
       // Name from the panel's own EDID model where it gives one — Windows
       // says "Generic PnP Monitor" for plenty of screens, so fall back to
       // the geometry-derived position rather than inventing a model.

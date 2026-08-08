@@ -75,7 +75,10 @@ internal sealed class AudioBridge : IDisposable
             }
             catch (COMException e)
             {
-                Fail($"audio endpoint error 0x{e.HResult:X8}");
+                // The message now names the call that failed, because Ok()
+                // built it that way. "GetMixFormat failed (0x88890004)" is a
+                // sentence someone can act on; "NullReferenceException" is not.
+                Fail($"{e.Message} (0x{e.HResult:X8})");
             }
             catch (Exception e)
             {
@@ -100,17 +103,31 @@ internal sealed class AudioBridge : IDisposable
         }
     }
 
+    /// <summary>
+    /// Every COM call here returns an HRESULT that used to be dropped on the
+    /// floor. A failed call then left a null behind and the first NULL
+    /// DEREFERENCE several frames later became the error message - which is how
+    /// a mis-declared vtable slot reported itself as "NullReferenceException"
+    /// and named nothing that would help. Check each one where it happens.
+    /// </summary>
+    private static void Ok(int hr, string what)
+    {
+        if (hr != 0) throw new COMException($"{what} failed", hr);
+    }
+
     private void Capture()
     {
         var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
-        enumerator.GetDefaultAudioEndpoint(EDataFlow.Render, ERole.Console, out var device);
+        Ok(enumerator.GetDefaultAudioEndpoint(EDataFlow.Render, ERole.Console, out var device),
+           "GetDefaultAudioEndpoint");
         try
         {
             var iid = typeof(IAudioClient).GUID;
-            device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out var clientObj);
+            Ok(device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out var clientObj),
+               "IMMDevice.Activate");
             var client = (IAudioClient)clientObj;
 
-            client.GetMixFormat(out var pFormat);
+            Ok(client.GetMixFormat(out var pFormat), "GetMixFormat");
             try
             {
                 var fmt = Marshal.PtrToStructure<WAVEFORMATEX>(pFormat);
@@ -125,14 +142,15 @@ internal sealed class AudioBridge : IDisposable
 
                 // 200ms buffer, loopback, event-free (we poll on our own timer,
                 // which is simpler than an event handle and plenty at 20Hz).
-                client.Initialize(AUDCLNT_SHAREMODE_SHARED,
-                    AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000, 0, pFormat, IntPtr.Zero);
+                Ok(client.Initialize(AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000, 0, pFormat, IntPtr.Zero),
+                   "IAudioClient.Initialize");
 
                 var captureIid = typeof(IAudioCaptureClient).GUID;
-                client.GetService(ref captureIid, out var captureObj);
+                Ok(client.GetService(ref captureIid, out var captureObj), "GetService");
                 var capture = (IAudioCaptureClient)captureObj;
 
-                client.Start();
+                Ok(client.Start(), "IAudioClient.Start");
                 lock (_lock) { _active = true; _why = ""; }
 
                 var lastPublish = Environment.TickCount64;
@@ -193,10 +211,13 @@ internal sealed class AudioBridge : IDisposable
     {
         while (true)
         {
-            capture.GetNextPacketSize(out var frames);
+            Ok(capture.GetNextPacketSize(out var frames), "GetNextPacketSize");
             if (frames == 0) return;
 
-            capture.GetBuffer(out var pData, out var got, out var flags, out _, out _);
+            // S_FALSE (1) means the buffer is empty, which is not an error.
+            var hr = capture.GetBuffer(out var pData, out var got, out var flags, out _, out _);
+            if (hr == 1) return;
+            Ok(hr, "GetBuffer");
             try
             {
                 if (got == 0) continue;
@@ -378,8 +399,18 @@ internal sealed class AudioBridge : IDisposable
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMMDeviceEnumerator
     {
-        int NotImpl1();
-        int NotImpl2();
+        // EXACTLY ONE placeholder, and the count is the whole interface.
+        //
+        // A ComImport interface is a vtable by position: every method declared
+        // before the one you want is a slot, whether it is named or not. The
+        // real order is EnumAudioEndpoints, GetDefaultAudioEndpoint, GetDevice,
+        // then the two notification-callback methods. Declaring two
+        // placeholders put GetDefaultAudioEndpoint on GetDevice's slot, so the
+        // call went to a method whose first argument is a device-id STRING,
+        // handed it an enum, and came back with a null device - surfacing five
+        // frames later as a NullReferenceException that named nothing useful.
+        [PreserveSig] int EnumAudioEndpoints_NotUsed(int dataFlow, int stateMask,
+            out IntPtr collection);
         [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role,
             out IMMDevice device);
     }

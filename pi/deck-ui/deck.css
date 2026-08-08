@@ -810,3 +810,7 @@ html, body {
 .dsp-btns { margin-top: auto; display: grid; gap: 10px;
             grid-template-columns: repeat(5, 1fr); }
 .dsp-btns .simbtn { padding: 16px 4px; font-size: 15px; }
+/* Quiet, but present on every card: this is the one action on the panel that
+   can put a monitor somewhere the panel cannot reach it. */
+.dsp-warn { margin-top: 8px; font-size: 10px; letter-spacing: .1em;
+            color: var(--mut); opacity: .75; }
