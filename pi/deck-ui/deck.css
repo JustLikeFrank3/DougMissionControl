@@ -444,8 +444,24 @@ html, body {
 /* The press, for controls that fire instantly and so have no fill to watch.
    Brief and bright: the acknowledgement is the observed state moving a moment
    later, this is only the panel admitting it felt the finger. */
-.simbtn.tapped, .simstep.tapped { border-color: var(--acc); color: var(--fg);
-                                  background: var(--pan2); }
+.simbtn.tapped, .simstep.tapped, .simmode.tapped {
+  border-color: var(--acc); color: var(--fg); background: var(--pan2); }
+
+/* AP mode chip: the switch that decides whether the bug above it means
+   anything. Off is deliberately drawn as an outline with no fill — an unlit
+   annunciator, the same way it reads in a cockpit — and on is the only state
+   in this tile that gets colour. */
+.simmode { display: block; width: 100%; margin: 6px 0 3px; padding: 6px 4px;
+           border: 1px solid var(--ln); background: transparent; color: var(--mut);
+           font-family: inherit; font-size: 11px; letter-spacing: .16em;
+           cursor: pointer; }
+.simmode.on { border-color: var(--gr); color: var(--gr); background: #0e1c14; }
+.simmode:disabled { opacity: .45; cursor: default; }
+
+/* Why the bug is or is not being flown. Quiet until it is live. */
+.simnote { font-size: 10px; letter-spacing: .12em; color: var(--mut);
+           min-height: 12px; }
+.simnote.live { color: var(--gr); }
 
 /* AP bug steppers: four to a row, tap-to-fire. */
 .simcmd.steppers { display: flex; gap: 6px; }

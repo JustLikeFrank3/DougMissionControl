@@ -136,10 +136,24 @@ internal static class Normalize
             };
             // One entry per bug: the command gate is ContainsKey(control), so
             // each settable thing must be its own key.
-            controls["ap_hdg"] = new JsonObject { ["deg"] = (int)Math.Round(Heading(s.ApHdgDeg)) % 360 };
-            controls["ap_alt"] = new JsonObject { ["ft"] = (int)Math.Round(s.ApAltFt) };
-            controls["ap_vs"] = new JsonObject { ["fpm"] = (int)Math.Round(s.ApVsFpm) };
-            controls["ap_spd"] = new JsonObject { ["kt"] = (int)Math.Round(s.ApSpdKt) };
+            //
+            // `mode` is the half that was missing. A bug is a target and
+            // nothing more — the aeroplane only chases it once the mode that
+            // reads it is engaged, so a panel that shows the number without
+            // the mode is showing half the autopilot and looking broken for
+            // the other half. Speed reads either flag: FLC is what modern
+            // autopilots use, IAS hold is the older one, and both fly the
+            // same bug.
+            string Mode(double v) => Flag(v) ? "on" : "off";
+            controls["ap_hdg"] = new JsonObject
+                { ["deg"] = (int)Math.Round(Heading(s.ApHdgDeg)) % 360, ["mode"] = Mode(s.ApHdgLock) };
+            controls["ap_alt"] = new JsonObject
+                { ["ft"] = (int)Math.Round(s.ApAltFt), ["mode"] = Mode(s.ApAltLock) };
+            controls["ap_vs"] = new JsonObject
+                { ["fpm"] = (int)Math.Round(s.ApVsFpm), ["mode"] = Mode(s.ApVsHold) };
+            controls["ap_spd"] = new JsonObject
+                { ["kt"] = (int)Math.Round(s.ApSpdKt),
+                  ["mode"] = Flag(s.ApFlcActive) || Flag(s.ApIasHold) ? "on" : "off" };
         }
 
         // Comms. COM1 and the altimeter are assumed universal; everything else

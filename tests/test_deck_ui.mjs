@@ -17,6 +17,7 @@ const UI = path.join(here, '..', 'pi', 'deck-ui', 'js');
 const fmt = await import(path.join(UI, 'format.js'));
 const geo = await import(path.join(UI, 'geo.js'));
 const { createSeries } = await import(path.join(UI, 'series.js'));
+const sim = await import(path.join(UI, 'simmath.js'));
 
 let passed = 0;
 const failures = [];
@@ -169,6 +170,33 @@ test('non-numeric readings become gaps', () => {
   s.record('k', 3, Infinity);
   assert.deepEqual(s.points('k').map(p => p.v), [null, null, null]);
   assert.equal(s.latest('k'), null, 'a trace of nothing has no latest value');
+});
+
+/* ── sim steppers ───────────────────────────────────────────────────────── */
+
+test('a flap tap resolves to an absolute detent, clamped at both ends', () => {
+  assert.equal(sim.nextDetent(0, 1, 4), 1);
+  assert.equal(sim.nextDetent(2, -1, 4), 1);
+  assert.equal(sim.nextDetent(3, 1, 4), 3,
+    'a + tap at full flap must NOT come round to clean on short final');
+  assert.equal(sim.nextDetent(0, -1, 4), 0);
+  assert.equal(sim.nextDetent(0, 1, 1), 0, 'an airframe with one position has nowhere to go');
+  assert.equal(sim.nextDetent(1.0, 1, 4), 2, 'the sim reports the index as a double');
+});
+
+test('the heading bug wraps and the rest clamp', () => {
+  const hdg = { min: 0, max: 359, wrap: true };
+  assert.equal(sim.stepBug(355, 10, hdg), 5, '359 + 1 is 000, not 360');
+  assert.equal(sim.stepBug(5, -10, hdg), 355);
+  assert.equal(sim.stepBug(212, 10, hdg), 222);
+
+  const alt = { min: 0, max: 60000 };
+  assert.equal(sim.stepBug(59500, 1000, alt), 60000, 'clamped, not wrapped');
+  assert.equal(sim.stepBug(500, -1000, alt), 0);
+
+  const vs = { min: -8000, max: 8000 };
+  assert.equal(sim.stepBug(-500, -500, vs), -1000, 'a descent bug goes further negative');
+  assert.equal(sim.stepBug(-7900, -500, vs), -8000);
 });
 
 if (failures.length) {

@@ -362,8 +362,8 @@
                 <div class="simpips" id="simp-flaps"></div>
                 <div class="simpend" id="simpd-flaps"></div>
                 <div class="simcmd">
-                  <button class="simbtn" data-c="flaps" data-a="decr">&minus;<i class="hold"></i></button>
-                  <button class="simbtn" data-c="flaps" data-a="incr">+<i class="hold"></i></button>
+                  <button class="simbtn simflap" data-d="-1">&minus;<i class="hold"></i></button>
+                  <button class="simbtn simflap" data-d="1">+<i class="hold"></i></button>
                 </div>
               </div>
               <div class="simt" id="simt-park"><h3>PARKING BRAKE</h3>
@@ -395,9 +395,16 @@
               </div>
               <!-- AP bugs. Steppers fire on TAP, not hold: nudging a bug one
                    degree is not raising the gear, and each tap sets an
-                   absolute value computed from the observed position. -->
+                   absolute value computed from the observed position.
+
+                   Each carries the MODE that reads it. A bug on its own is a
+                   target nothing is chasing — the chip is what turns the
+                   number into an aeroplane that follows it, and the note says
+                   which of the two you are looking at. -->
               <div class="simt" id="simt-aphdg"><h3>AP HDG</h3><span class="simt-u">BUG</span>
                 <div class="simt-v" id="simv-aphdg">—</div>
+                <button class="simmode" id="simm-aphdg" hidden></button>
+                <div class="simnote" id="simn-aphdg" hidden></div>
                 <div class="simpend" id="simpd-aphdg"></div>
                 <div class="simcmd steppers">
                   <button class="simstep" data-c="ap_hdg" data-d="-10">&minus;10</button>
@@ -408,6 +415,8 @@
               </div>
               <div class="simt" id="simt-apalt"><h3>AP ALT</h3><span class="simt-u">FT</span>
                 <div class="simt-v" id="simv-apalt">—</div>
+                <button class="simmode" id="simm-apalt" hidden></button>
+                <div class="simnote" id="simn-apalt" hidden></div>
                 <div class="simpend" id="simpd-apalt"></div>
                 <div class="simcmd steppers">
                   <button class="simstep" data-c="ap_alt" data-d="-1000">&minus;1000</button>
@@ -418,6 +427,8 @@
               </div>
               <div class="simt" id="simt-apvs"><h3>AP V/S</h3><span class="simt-u">FPM</span>
                 <div class="simt-v" id="simv-apvs">—</div>
+                <button class="simmode" id="simm-apvs" hidden></button>
+                <div class="simnote" id="simn-apvs" hidden></div>
                 <div class="simpend" id="simpd-apvs"></div>
                 <div class="simcmd steppers">
                   <button class="simstep" data-c="ap_vs" data-d="-500">&minus;500</button>
@@ -428,6 +439,8 @@
               </div>
               <div class="simt" id="simt-apspd"><h3>AP SPD</h3><span class="simt-u">KT</span>
                 <div class="simt-v" id="simv-apspd">—</div>
+                <button class="simmode" id="simm-apspd" hidden></button>
+                <div class="simnote" id="simn-apspd" hidden></div>
                 <div class="simpend" id="simpd-apspd"></div>
                 <div class="simcmd steppers">
                   <button class="simstep" data-c="ap_spd" data-d="-10">&minus;10</button>

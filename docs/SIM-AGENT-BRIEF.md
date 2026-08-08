@@ -111,7 +111,11 @@ deck-api uses this to decide SIM is available.
     "flaps":          { "index": 0, "detents": 3, "angle_deg": 0.0 },
     "parking_brake":  { "state": "set|off" },
     "landing_lights": { "state": "on|off" },
-    "ap_master":      { "state": "engaged|off" }
+    "ap_master":      { "state": "engaged|off" },
+    "ap_hdg":         { "deg": 212, "mode": "on|off" },
+    "ap_alt":         { "ft": 3000, "mode": "on|off" },
+    "ap_vs":          { "fpm": -500, "mode": "on|off" },
+    "ap_spd":         { "kt": 145, "mode": "on|off" }
   },
   "readouts": { "ias_kt": 142, "alt_ft": 4850, "hdg_mag": 271 } }
 ```
@@ -123,6 +127,14 @@ important thing this agent produces.
 A control the aircraft does not have must be **absent** from `controls`, so
 the panel can grey it with a reason rather than showing a dead button.
 
+Each autopilot bug carries the `mode` that reads it, because a bug on its own
+is only a target: set AP SPD to 165 with no mode engaged and the throttle does
+not move, the airspeed does not change, and the autopilot looks broken when in
+fact nothing was ever asked to fly it. `ap_spd.mode` reads `on` for either
+`AUTOPILOT FLIGHT LEVEL CHANGE` or `AUTOPILOT AIRSPEED HOLD` — both fly the
+same bug. On an airframe with no autothrottle, speed is flown on **pitch**:
+the aeroplane trades altitude for the speed you asked for.
+
 ### `POST /command`
 
 ```json
@@ -131,7 +143,16 @@ the panel can grey it with a reason rather than showing a dead button.
 → { "cmd_id": "c-183", "accepted": false, "reason": "sim not connected" }
 ```
 
-`accepted` means *the event was transmitted*, *never* "it worked".
+`accepted` means *the event was transmitted*, *never* "it worked". A command
+that asks for the position the aircraft is already in transmits nothing and
+answers `"accepted": true, "noop": true`, so the panel knows not to wait for
+movement that will never come.
+
+`action` is `set` for everything that carries a value, plus `mode` with
+`"on"`/`"off"` on the four AP bugs, and `swap` / `set_sby` / `ident` on the
+radios. Flaps take `set` with a **detent index** — the agent scales it to the
+0–16383 handle position `FLAPS_SET` actually expects, which is not the same
+number and is the sort of thing that silently sends every flap command to UP.
 
 ### Push
 

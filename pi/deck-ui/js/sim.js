@@ -9,6 +9,7 @@
 
 import { $, wireTap, wireHold, post } from './ui.js';
 import { fmtAgo } from './format.js';
+import { nextDetent, stepBug } from './simmath.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
 import { missionUpdate, paintMissionStrip } from './nav.js';
 
@@ -69,8 +70,19 @@ var AP_VARS = {
   ap_vs: { field: 'fpm', min: -8000, max: 8000 },
   ap_spd: { field: 'kt', min: 0, max: 900 }
 };
+// The four AP tiles, by tile suffix. Both the mode chips and the pending
+// slots need the mapping, and it was already implicit in three places.
+var AP_TILES = { aphdg: 'ap_hdg', apalt: 'ap_alt', apvs: 'ap_vs', apspd: 'ap_spd' };
+
 function simObserved(control, c) {
   c = c || {};
+  // "ap_spd#mode" is the mode of ap_spd, tracked separately from its bug so a
+  // mode toggle and a bug nudge cannot each cancel the other's PENDING.
+  var hash = control.indexOf('#');
+  if (hash > 0) {
+    var base = control.slice(0, hash);
+    return c[base] ? c[base].mode || null : null;
+  }
   if (control === 'gear') return c.gear ? c.gear.state : null;
   if (control === 'flaps') return c.flaps ? String(c.flaps.index) : null;
   if (control === 'parking_brake') return c.parking_brake ? c.parking_brake.state : null;
@@ -88,15 +100,19 @@ function simObserved(control, c) {
 export function simSend(control, action, value) {
   var c = (simLast && simLast.controls) || {};
   var id = 'c-' + (++simSeq);
-  // `from` is what it looked like when we asked — the only way to tell that
-  // an incr/decr moved, since we cannot know the target detent up front.
-  simPending[control] = { id: id, want: value || null,
-                          from: simObserved(control, c),
-                          sent: Date.now(), dead: false, reason: null };
+  // A mode toggle gets its own pending slot: it and the bug it belongs to are
+  // different things to wait on, and sharing a key made the later one erase
+  // the earlier one's PENDING without either having landed.
+  var key = action === 'mode' ? control + '#mode' : control;
+  // `from` is what it looked like when we asked — the fallback for the few
+  // commands whose landing position cannot be known up front.
+  simPending[key] = { id: id, want: value || null,
+                      from: simObserved(key, c),
+                      sent: Date.now(), dead: false, reason: null };
   post('/api/sim/command',
        { cmd_id: id, control: control, action: action, value: value })
     .then(function (r) {
-      var p = simPending[control];
+      var p = simPending[key];
       if (!p || p.id !== id) return;
       if (!r || !r.accepted) {
         p.dead = true;
@@ -104,7 +120,7 @@ export function simSend(control, action, value) {
       } else if (r.noop) {
         // Already in the requested position: the agent transmitted nothing,
         // so nothing is going to move and PENDING would hang forever.
-        delete simPending[control];
+        delete simPending[key];
       }
     });
 }
@@ -140,7 +156,7 @@ function simRenderPending(key, control, c) {
 // wheels, no flaps. Grey it and name it; never render a dead control.
 function simAvail(key, present) {
   $('simt-' + key).classList.toggle('na', !present);
-  [].forEach.call($('simt-' + key).querySelectorAll('.simbtn, .simstep'), function (b) {
+  [].forEach.call($('simt-' + key).querySelectorAll('.simbtn, .simstep, .simflap, .simmode'), function (b) {
     b.disabled = !present;
   });
   if (!present) {
@@ -149,6 +165,43 @@ function simAvail(key, present) {
     var u = $('simu-' + key); if (u) u.textContent = '';
   }
   return present;
+}
+
+/**
+ * The AP mode chips — the half of the autopilot the panel used to leave out.
+ *
+ * A bug is a target and nothing else. Setting AP SPD to 165 with no mode
+ * engaged leaves the throttle exactly where it was and the aeroplane doing
+ * exactly what it was doing, which reads as a broken autopilot when in fact
+ * nothing was ever asked to fly it. So each bug now carries the state of the
+ * mode that reads it, and says ARMED or BUG ONLY rather than sitting there
+ * looking authoritative.
+ *
+ * An agent that predates the mode field sends no `mode` at all: the chip stays
+ * hidden and the tile behaves exactly as it did before, rather than claiming
+ * every mode is off.
+ */
+var AP_MODE_LABEL = { aphdg: 'HDG HOLD', apalt: 'ALT HOLD',
+                      apvs: 'V/S HOLD', apspd: 'FLC' };
+
+function simPaintModes(c) {
+  var master = c.ap_master && c.ap_master.state === 'engaged';
+  Object.keys(AP_TILES).forEach(function (key) {
+    var ctl = c[AP_TILES[key]];
+    var btn = $('simm-' + key), note = $('simn-' + key);
+    var known = !!(ctl && ctl.mode);
+    btn.hidden = !known;
+    note.hidden = !known;
+    if (!known) return;
+    var on = ctl.mode === 'on';
+    btn.textContent = AP_MODE_LABEL[key] + (on ? ' · ON' : ' · OFF');
+    btn.className = 'simmode' + (on ? ' on' : '');
+    // Two different kinds of inert, and they want different words: the mode
+    // is off, or the mode is on but the master is not holding the aeroplane.
+    note.textContent = !on ? 'BUG ONLY · MODE OFF'
+      : !master ? 'MODE ARMED · AP MASTER OFF' : 'FLYING THIS BUG';
+    note.className = 'simnote' + (on && master ? ' live' : '');
+  });
 }
 
 function simSimple(key, present, value, onWord) {
@@ -241,6 +294,7 @@ export function paintSim(d) {
   if (simAvail('apspd', !!c.ap_spd)) {
     $('simv-apspd').textContent = c.ap_spd.kt;
   }
+  simPaintModes(c);
 
   var r = st.readouts || {};
   missionUpdate(d);
@@ -299,10 +353,13 @@ export function paintSim(d) {
   simRenderPending('park', 'parking_brake', c);
   simRenderPending('lights', 'landing_lights', c);
   simRenderPending('ap', 'ap_master', c);
-  simRenderPending('aphdg', 'ap_hdg', c);
-  simRenderPending('apalt', 'ap_alt', c);
-  simRenderPending('apvs', 'ap_vs', c);
-  simRenderPending('apspd', 'ap_spd', c);
+  // One pending slot per AP tile but two things that can be pending in it.
+  // The mode wins while it is outstanding: it is the one that decides whether
+  // the bug does anything, so it is the one worth watching.
+  Object.keys(AP_TILES).forEach(function (key) {
+    var ctl = AP_TILES[key];
+    simRenderPending(key, simPending[ctl + '#mode'] ? ctl + '#mode' : ctl, c);
+  });
   ['com1', 'com2', 'nav1', 'nav2', 'xpdr', 'baro'].forEach(function (k) {
     simRenderPending(k, k, c);
   });
@@ -345,11 +402,30 @@ export function wireSim() {
   // heading bug that is the right trade. For the gear it is not — it is the
   // one control here with a real airframe consequence, it is not something you
   // press repeatedly, and a hold costs nothing when you use it twice a flight.
-  [].forEach.call(document.querySelectorAll('.simbtn'), function (b) {
+  // `[data-c]` and not bare `.simbtn`: the flap buttons carry a step rather
+  // than a control and are wired below, and SCREENS reuses the same class for
+  // its input buttons — neither should fall into the generic control loop.
+  [].forEach.call(document.querySelectorAll('.simbtn[data-c]'), function (b) {
     var fire = function () {
       simSend(b.dataset.c, b.dataset.a, b.dataset.v || null);
     };
     if (b.dataset.c === 'gear') wireHold(b, fire); else wireTap(b, fire);
+  });
+
+  // Flaps: an absolute detent, not a nudge.
+  //
+  // FLAPS_INCR / FLAPS_DECR are relative, which means the panel cannot know
+  // what it asked for and PENDING can only wait for "something changed" — and
+  // on airframes that route their flap handle through their own systems the
+  // two events are simply ignored, which is how the flaps came to do nothing
+  // at all. Computing the target detent here sends a command the agent can
+  // scale to a real handle position and the panel can confirm exactly.
+  [].forEach.call(document.querySelectorAll('.simflap'), function (b) {
+    wireTap(b, function () {
+      var f = ((simLast && simLast.controls) || {}).flaps;
+      if (!f) return;
+      simSend('flaps', 'set', String(nextDetent(f.index, Number(b.dataset.d), f.detents)));
+    });
   });
 
   // AP bug steppers. Absolute set computed from the observed value at tap
@@ -360,10 +436,18 @@ export function wireSim() {
       var ap = AP_VARS[ctl];
       var c = (simLast && simLast.controls) || {};
       if (!c[ctl]) return;
-      var v = c[ctl][ap.field] + Number(b.dataset.d);
-      v = ap.wrap ? ((v % 360) + 360) % 360
-                  : Math.max(ap.min, Math.min(ap.max, v));
-      simSend(ctl, 'set', String(v));
+      simSend(ctl, 'set', String(stepBug(c[ctl][ap.field], Number(b.dataset.d), ap)));
+    });
+  });
+
+  // AP mode chips. A tap engages or disengages the mode that reads the bug
+  // above it — the difference between a number on a panel and an aeroplane
+  // that follows it.
+  Object.keys(AP_TILES).forEach(function (key) {
+    wireTap($('simm-' + key), function () {
+      var ctl = (simLast && simLast.controls || {})[AP_TILES[key]];
+      if (!ctl || !ctl.mode) return;
+      simSend(AP_TILES[key], 'mode', ctl.mode === 'on' ? 'off' : 'on');
     });
   });
 

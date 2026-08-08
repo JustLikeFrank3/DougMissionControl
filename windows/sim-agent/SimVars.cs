@@ -73,6 +73,14 @@ internal enum Event
     ApAltVarSet,
     ApVsVarSet,
     ApSpdVarSet,
+    ApHdgHoldOn,
+    ApHdgHoldOff,
+    ApAltHoldOn,
+    ApAltHoldOff,
+    ApVsHoldOn,
+    ApVsHoldOff,
+    ApFlcOn,
+    ApFlcOff,
     Com1StbySet,
     Com1Swap,
     Com2StbySet,
@@ -142,6 +150,16 @@ internal struct SimStateRaw
     // asked for rather than inferred, and a feathered engine on a quad still
     // shows its lever at zero instead of vanishing.
     public double EngineCount;
+    // Which autopilot MODES are engaged. A bug is only a target: the aircraft
+    // does not chase it until the mode that reads it is on, which is why
+    // setting AP SPD to 165 with no mode engaged leaves the throttle exactly
+    // where it was. The panel needs these to say so rather than let a bug sit
+    // there looking authoritative.
+    public double ApHdgLock;
+    public double ApAltLock;
+    public double ApVsHold;
+    public double ApFlcActive;
+    public double ApIasHold;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -246,6 +264,12 @@ internal static class SimVars
         ("GENERAL ENG THROTTLE LEVER POSITION:3", "Percent"),
         ("GENERAL ENG THROTTLE LEVER POSITION:4", "Percent"),   // SimConnect caps at 4
         ("NUMBER OF ENGINES",                     "Number"),
+        // AP mode flags, paired with the tail of SimStateRaw. Same END rule.
+        ("AUTOPILOT HEADING LOCK",        "Bool"),
+        ("AUTOPILOT ALTITUDE LOCK",       "Bool"),
+        ("AUTOPILOT VERTICAL HOLD",       "Bool"),
+        ("AUTOPILOT FLIGHT LEVEL CHANGE", "Bool"),
+        ("AUTOPILOT AIRSPEED HOLD",       "Bool"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -299,6 +323,20 @@ internal static class SimVars
         (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
         (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm
         (Event.ApSpdVarSet,      "AP_SPD_VAR_SET"),             // takes knots
+        // Mode engagement, explicit on/off rather than the _TOGGLE variants —
+        // same reasoning as the landing lights. A bug without its mode is a
+        // number on a panel and nothing else.
+        (Event.ApHdgHoldOn,      "AP_HDG_HOLD_ON"),
+        (Event.ApHdgHoldOff,     "AP_HDG_HOLD_OFF"),
+        (Event.ApAltHoldOn,      "AP_ALT_HOLD_ON"),
+        (Event.ApAltHoldOff,     "AP_ALT_HOLD_OFF"),
+        (Event.ApVsHoldOn,       "AP_VS_HOLD_ON"),
+        (Event.ApVsHoldOff,      "AP_VS_HOLD_OFF"),
+        // Speed is flown by FLC on everything modern. On an airframe with no
+        // autothrottle that means PITCH, not throttle: the aeroplane trades
+        // altitude for the speed you asked for.
+        (Event.ApFlcOn,          "FLIGHT_LEVEL_CHANGE_ON"),
+        (Event.ApFlcOff,         "FLIGHT_LEVEL_CHANGE_OFF"),
         // Radios take Hz — the _HZ family avoids the BCD encoding entirely.
         (Event.Com1StbySet,      "COM_STBY_RADIO_SET_HZ"),
         (Event.Com1Swap,         "COM_STBY_RADIO_SWAP"),

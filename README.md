@@ -198,6 +198,11 @@ never draws the commanded state: a tap shows PENDING over the last *observed*
 value, and only the simulator moving it changes what you see. That is what
 makes a command MSFS ignored look like a failed command instead of a lie.
 
+Each autopilot bug carries the mode that reads it. A bug on its own is only a
+target — set AP SPD to 165 with no mode engaged and the throttle never moves —
+so the tile says *FLYING THIS BUG* or *BUG ONLY · MODE OFF* rather than leaving
+a number sitting there looking authoritative.
+
 ![SIM](docs/img/sim.png)
 
 **SCREENS** — one card per monitor, named by its position on the desk, with a

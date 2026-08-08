@@ -94,15 +94,19 @@ const SIM = { link: true, session: true, state: {
   gps: { count: 3, prev: { i: 0, id: 1234, lat: 28.545, lon: -81.333 },
          next: { i: 1, id: 'KISM', lat: 28.290, lon: -81.437 } },
   controls: {
-    gear:           { state: 'DOWN', pct: 100, handle: 'DOWN' },
+    // Lower case, as the agent actually sends it. The panel compares these
+    // against its own vocabulary and upper-cases for display, so a fixture
+    // shouting 'ON' matched nothing and screenshotted every control as
+    // inactive while showing the word ON above it.
+    gear:           { state: 'down', pct: 100, handle: 'down' },
     flaps:          { index: 1, detents: 3, angle_deg: 15 },
-    parking_brake:  { state: 'OFF' },
-    landing_lights: { state: 'ON' },
-    ap_master:      { state: 'ON' },
-    ap_hdg:         { deg: 212 },
-    ap_alt:         { ft: 3000 },
-    ap_vs:          { fpm: -500 },
-    ap_spd:         { kt: 145 },
+    parking_brake:  { state: 'off' },
+    landing_lights: { state: 'on' },
+    ap_master:      { state: 'engaged' },
+    ap_hdg:         { deg: 212, mode: 'on' },
+    ap_alt:         { ft: 3000, mode: 'off' },
+    ap_vs:          { fpm: -500, mode: 'on' },
+    ap_spd:         { kt: 145, mode: 'off' },
     com1:           { act: 124.300, sby: 119.100 },
     com2:           { act: 121.900, sby: 118.750 },
     nav1:           { act: 110.500, sby: 113.200 },

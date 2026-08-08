@@ -225,6 +225,16 @@ internal static class Program
     {
         bool On(double v) => v > 0.5;
 
+        // Engage or disengage an autopilot mode. Explicit events, guarded
+        // against the state already being right so a redundant tap transmits
+        // nothing and the panel is told not to wait for movement.
+        Resolved Mode(string? want, double observed, Event engage, Event disengage) => want switch
+        {
+            "on" => On(observed) ? Noop : Send(engage),
+            "off" => On(observed) ? Send(disengage) : Noop,
+            _ => Invalid("invalid value"),
+        };
+
         switch (control)
         {
             case "gear":
@@ -238,13 +248,25 @@ internal static class Program
                 };
 
             case "flaps":
+                // incr/decr are kept resolvable but the panel no longer uses
+                // them: they are relative, so nothing can confirm what was
+                // asked for, and airframes that route the flap handle through
+                // their own systems ignore both. `set` is the path now.
                 if (action == "incr") return Send(Event.FlapsIncr);
                 if (action == "decr") return Send(Event.FlapsDecr);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var index)) return Invalid("invalid value");
                 var detents = Normalize.Detents(c.FlapsNumHandlePositions);
                 if (index < 0 || index >= Math.Max(detents, 1)) return Invalid("invalid value");
-                return Send(Event.FlapsSet, (uint)index);
+                // FLAPS_SET does NOT take a detent index, whatever the shape of
+                // the number suggests. The SDK defines its parameter as a
+                // handle POSITION from 0 to 16383 — "sets flaps handle to
+                // closest increment" — so handing it 0..3 asks for 0.02% of
+                // full travel and the handle rounds back to UP every time.
+                // Scaling the index across the detents is also what keeps this
+                // right for a Cub with two positions and an airliner with six.
+                var span = Math.Max(detents - 1, 1);
+                return Send(Event.FlapsSet, (uint)Math.Round(index * 16383.0 / span));
 
             case "parking_brake":
                 if (action == "toggle") return Send(Event.ParkingBrakes);
@@ -283,16 +305,19 @@ internal static class Program
                 };
 
             case "ap_hdg":
+                if (action == "mode") return Mode(value, s.ApHdgLock, Event.ApHdgHoldOn, Event.ApHdgHoldOff);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
                 return Send(Event.HeadingBugSet, (uint)(((hdg % 360) + 360) % 360));
 
             case "ap_alt":
+                if (action == "mode") return Mode(value, s.ApAltLock, Event.ApAltHoldOn, Event.ApAltHoldOff);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var alt) || alt < 0 || alt > 60000) return Invalid("invalid value");
                 return Send(Event.ApAltVarSet, (uint)alt);
 
             case "ap_vs":
+                if (action == "mode") return Mode(value, s.ApVsHold, Event.ApVsHoldOn, Event.ApVsHoldOff);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var vs) || Math.Abs(vs) > 8000) return Invalid("invalid value");
                 // Negative climbs ride as two's complement — the sim reads the
@@ -300,6 +325,11 @@ internal static class Program
                 return Send(Event.ApVsVarSet, unchecked((uint)vs));
 
             case "ap_spd":
+                // Either flag counts as engaged, so switching FLC off when the
+                // aircraft was actually in IAS hold still reads as a change.
+                if (action == "mode")
+                    return Mode(value, On(s.ApFlcActive) || On(s.ApIasHold) ? 1 : 0,
+                                Event.ApFlcOn, Event.ApFlcOff);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
                 return Send(Event.ApSpdVarSet, (uint)spd);
