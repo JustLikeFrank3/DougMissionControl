@@ -135,6 +135,13 @@ internal struct SimStateRaw
     // a single without being told which airframe it is looking at.
     public double Throttle1Pct;
     public double Throttle2Pct;
+    public double Throttle3Pct;
+    public double Throttle4Pct;
+    // How many the airframe HAS. A shut-down engine reads 0 throttle, which is
+    // indistinguishable from an engine that is not there — so the count is
+    // asked for rather than inferred, and a feathered engine on a quad still
+    // shows its lever at zero instead of vanishing.
+    public double EngineCount;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -235,7 +242,10 @@ internal static class SimVars
         // paired with SimStateRaw — the pairing is positional, so a row added
         // to the wrong list lands in the wrong struct entirely.
         ("GENERAL ENG THROTTLE LEVER POSITION:1", "Percent"),
-        ("GENERAL ENG THROTTLE LEVER POSITION:2", "Percent"),   // 0 on singles
+        ("GENERAL ENG THROTTLE LEVER POSITION:2", "Percent"),
+        ("GENERAL ENG THROTTLE LEVER POSITION:3", "Percent"),
+        ("GENERAL ENG THROTTLE LEVER POSITION:4", "Percent"),   // SimConnect caps at 4
+        ("NUMBER OF ENGINES",                     "Number"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =

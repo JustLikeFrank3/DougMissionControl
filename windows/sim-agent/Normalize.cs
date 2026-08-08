@@ -191,8 +191,14 @@ internal static class Normalize
         ["vs_fpm"] = (int)Math.Round(s.VerticalSpeedFpm),
         ["rpm_1"] = (int)Math.Round(s.EngRpm1),
         ["rpm_2"] = (int)Math.Round(s.EngRpm2),
-        ["throttle_1"] = (int)Math.Round(s.Throttle1Pct),
-        ["throttle_2"] = (int)Math.Round(s.Throttle2Pct),
+        // One entry per engine the airframe has, in order. An array rather
+        // than throttle_1..4 so the panel renders what it is given and a
+        // single, a twin and a quad need no special cases anywhere.
+        ["throttles"] = new JsonArray(
+            new[] { s.Throttle1Pct, s.Throttle2Pct, s.Throttle3Pct, s.Throttle4Pct }
+                .Take(Math.Clamp((int)Math.Round(s.EngineCount), 1, 4))
+                .Select(v => (JsonNode)(int)Math.Round(v))
+                .ToArray()),
         ["fuel_gal"] = Math.Round(s.FuelTotalGal, 1),
         // MSFS body-frame signs are positive nose-DOWN / bank-LEFT. The panel
         // draws standard EFIS signs (nose-up / right-wing-down positive), so

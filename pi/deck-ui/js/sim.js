@@ -261,32 +261,37 @@ export function paintSim(d) {
   $('simu-rpm').textContent = r.rpm_2 > 0 ? 'ENG 1 / 2' : '';
   $('simv-fuel').textContent = r.fuel_gal === undefined ? '—' : r.fuel_gal;
 
-  // Throttle. Twins show both levers and both bars; a single reports 0 on
-  // engine 2 — the same convention RPM uses — and shows one of each, so the
-  // panel never invents a second engine an airframe has not got.
-  var t1 = r.throttle_1, t2 = r.throttle_2;
-  var thrEl = $('simv-thr'), bars = $('thr-bars');
-  if (t1 === undefined) {
-    thrEl.textContent = '—';
-    thrEl.className = 'simt-v big';
+  // Throttle: one row per engine, however many the airframe has. The agent
+  // sends an array sized by NUMBER OF ENGINES rather than a fixed pair, so a
+  // single, a twin and a 747 all render here with no special case — and a
+  // shut-down engine still shows its lever at zero instead of disappearing.
+  var thr = r.throttles;
+  var bars = $('thr-bars');
+  if (!thr || !thr.length) {
     bars.innerHTML = '';
     $('simu-thr').textContent = '';
   } else {
-    var twin = t2 > 0;
-    thrEl.textContent = twin ? t1 + ' / ' + t2 : String(t1);
-    thrEl.className = 'simt-v big' + (twin ? ' twin' : '');
-    $('simu-thr').textContent = twin ? '% ENG 1 / 2' : '%';
-    var want = twin ? 2 : 1;
-    if (bars.children.length !== want) {
+    $('simu-thr').textContent = thr.length > 1 ? thr.length + ' ENG · %' : '%';
+    bars.className = 'thr' + (thr.length > 2 ? ' n4' : '');
+    if (bars.children.length !== thr.length) {
       bars.innerHTML = '';
-      for (var bi = 0; bi < want; bi++) bars.appendChild(document.createElement('i'));
+      thr.forEach(function (_, i) {
+        var row = document.createElement('div');
+        row.className = 'r';
+        row.innerHTML = '<b></b><i></i><s></s>';
+        row.querySelector('b').textContent = thr.length > 1 ? String(i + 1) : '';
+        bars.appendChild(row);
+      });
     }
-    [t1, t2].slice(0, want).forEach(function (v, i) {
-      var el = bars.children[i];
-      el.style.setProperty('--p', Math.max(0, Math.min(100, v)) + '%');
-      el.classList.toggle('max', v >= 99);
+    thr.forEach(function (v, i) {
+      var row = bars.children[i];
+      var pct = Math.max(0, Math.min(100, v));
+      row.querySelector('i').style.setProperty('--p', pct + '%');
+      row.querySelector('i').classList.toggle('max', v >= 99);
+      row.querySelector('s').textContent = v + '%';
     });
   }
+
   simPaintGauges(r);
 
   simRenderPending('gear', 'gear', c);

@@ -363,20 +363,35 @@ html, body {
 .sim-controls > #simt-gear { grid-row: span 2; }
 .sim-reads { flex: 1.1; display: grid; gap: 14px;
              grid-template-columns: 1fr 1fr;
-             grid-template-rows: repeat(4, 1fr); }
+             /* The throttle row is taller than the readouts above it: four
+                engines need the height and a single still looks right in it. */
+             grid-template-rows: repeat(3, 1fr) 1.35fr; }
 /* Throttle takes the whole last row — six single tiles plus one double fills
    the eight cells exactly, so no hole opens up the way SIM's control grid had
    one under AUTOPILOT. */
-.simt.span2 { grid-column: 1 / -1; }
+.simt.span2 { grid-column: 1 / -1;
+               /* .simt centres its content under an absolutely-positioned
+                  label, which is fine while the content is short. Four engine
+                  rows are not, and the top one climbs into the word THROTTLE.
+                  Anchor to the bottom and reserve the label's height. */
+               justify-content: flex-end; padding-top: 34px; }
 
-/* Lever position as a bar per engine, because the number alone does not show
-   you that one engine is trailing the other at a glance. */
-.thr { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
-.thr i { display: block; height: 7px; background: var(--ln); position: relative; }
+/* A row per engine: number, bar, percent. A 56 px figure was absurd for a
+   lever set and did not survive a quad — this is the same shape for one
+   engine or four, and the bars are what you read at a glance anyway. */
+.thr { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.thr .r { display: flex; align-items: center; gap: 10px; }
+.thr b { font-weight: 400; font-size: 12px; color: var(--mut); width: 10px; }
+.thr i { flex: 1; height: 10px; background: var(--ln); position: relative; }
 .thr i::after { content: ''; position: absolute; inset: 0 auto 0 0;
                 width: var(--p, 0%); background: var(--cy); }
 /* Wide open reads as the target the aircraft is being flown toward. */
 .thr i.max::after { background: var(--acc); }
+.thr s { text-decoration: none; font-size: 20px; width: 52px; text-align: right; }
+/* Four rows have to fit the same tile two did. */
+.thr.n4 { gap: 4px; }
+.thr.n4 i { height: 8px; }
+.thr.n4 s { font-size: 15px; width: 42px; }
 
 /* EFIS gauge pair. The svg is square inside a flexible tile; height rules. */
 .sim-gauges { flex: 1; display: flex; flex-direction: column; gap: 14px; }
