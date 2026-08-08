@@ -11,7 +11,7 @@
 
 import { $, wireHold, post, getJSON } from './ui.js';
 import { fmtEte, fmtAgo, fmtDur, fmtClock } from './format.js';
-import { distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
+import { xy as navXY, distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
          isTeleport, zoomForSpan, TILE, NM_PER_DEG,
          ZMIN as NAV_ZMIN, ZMAX as NAV_ZMAX } from './geo.js';
 
@@ -75,8 +75,13 @@ function navSyncFeed(g) {
   if (g.count !== navSyncCount) { navSyncWps = {}; navSyncCount = g.count; }
   var dirty = false;
   [g.prev, g.next].forEach(function (w) {
-    if (!w || typeof w.lat !== 'number') return;
-    var name = (w.id || 'WP' + (w.i + 1)).slice(0, 12);
+    if (!w || typeof w.lat !== 'number' || typeof w.i !== 'number') return;
+    // String(): a GPS waypoint id is usually an ident like "KORL", but the
+    // agent will hand over whatever the sim gave it, and a numeric id has no
+    // .slice — which threw here, took paintNav with it, and got reported as
+    // the sim link being down. Nothing about a waypoint name is worth losing
+    // the surface over.
+    var name = String(w.id || 'WP' + (w.i + 1)).slice(0, 12);
     var cur = navSyncWps[w.i];
     if (!cur || cur.lat !== w.lat || cur.lon !== w.lon) {
       navSyncWps[w.i] = { name: name, lat: w.lat, lon: w.lon };

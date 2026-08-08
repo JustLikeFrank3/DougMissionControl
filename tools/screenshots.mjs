@@ -90,6 +90,9 @@ const SIM = { link: true, session: true, state: {
               ias_kt: 148, hdg_mag: 212, vs_fpm: -240, rpm_1: 2400, rpm_2: 2395,
               fuel_gal: 146.6, pitch_deg: -2.5, bank_deg: 8,
               throttles: [72, 68] },
+  // A GPS block with a NUMERIC waypoint id — the shape that broke NAV.
+  gps: { count: 3, prev: { i: 0, id: 1234, lat: 28.545, lon: -81.333 },
+         next: { i: 1, id: 'KISM', lat: 28.290, lon: -81.437 } },
   controls: {
     gear:           { state: 'DOWN', pct: 100, handle: 'DOWN' },
     flaps:          { index: 1, detents: 3, angle_deg: 15 },
