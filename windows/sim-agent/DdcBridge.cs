@@ -97,24 +97,59 @@ internal sealed class DdcBridge
     private static readonly Dictionary<string, List<string>?> CapsCache = new();
     private static readonly HashSet<string> CapsAsked = new();
 
-    private static List<string>? CachedInputs(IntPtr hMonitor, string key)
+    /// <summary>
+    /// This panel's declared inputs if they are known, else null now and a
+    /// background probe so a later poll can do better.
+    ///
+    /// `adopted` means the probe thread has TAKEN OWNERSHIP of the handle and
+    /// will destroy it when it finishes; the caller must not. Snapshot used to
+    /// destroy the handle at the end of its loop while a probe thread was
+    /// still using it — a use-after-free on a Win32 handle, from another
+    /// thread, which is as bad as it sounds. It survived contact with two
+    /// identical monitors because their answers were cached almost
+    /// immediately; a third panel probing for the first time is exactly the
+    /// condition that widens the window.
+    /// </summary>
+    private static List<string>? CachedInputs(IntPtr hMonitor, string key, out bool adopted)
     {
+        adopted = false;
         lock (CapsCache)
         {
             if (CapsCache.TryGetValue(key, out var hit)) return hit;
             if (!CapsAsked.Add(key)) return null;   // in flight
         }
+        adopted = true;
         // Deliberately fire-and-forget on its own thread: the P/Invoke cannot
         // be cancelled, so a panel that never replies costs one parked thread
         // once, rather than every caller of /monitor forever.
         new Thread(() =>
         {
-            var got = DeclaredInputs(hMonitor);
-            lock (CapsCache) CapsCache[key] = got;
+            try
+            {
+                var got = DeclaredInputs(hMonitor);
+                lock (CapsCache) CapsCache[key] = got;
+            }
+            finally
+            {
+                DestroyPhysicalMonitor(hMonitor);
+            }
         })
         { IsBackground = true, Name = "ddc-caps" }.Start();
         return null;
     }
+
+    /// <summary>
+    /// The cache key for a panel's capabilities: what it calls itself and what
+    /// it is, never where it sits.
+    ///
+    /// This used to be the desktop rectangle, which meant rearranging the
+    /// displays invalidated every entry and re-probed every panel — including
+    /// the HP 32f, whose refusal takes about a minute to arrive. Two identical
+    /// monitors legitimately share an answer; resolution keeps a different
+    /// panel apart from them even when Windows calls them both "Generic PnP
+    /// Monitor", which it does.
+    /// </summary>
+    private static string CapsKey(string desc, int w, int h) => $"{desc}|{w}x{h}";
 
     /// <summary>
     /// The inputs a monitor DECLARES, parsed from its MCCS capabilities string
@@ -227,9 +262,12 @@ internal sealed class DdcBridge
             var readable = GetVCPFeatureAndVCPFeatureReply(
                 m.hPhysicalMonitor, VCP_INPUT, IntPtr.Zero, out current, out max);
             var name = Inputs.FirstOrDefault(kv => kv.Value == (current & 0xFF)).Key;
+            var desc = m.szPhysicalMonitorDescription?.Trim() ?? "";
             // Cached/background — never blocks this response. See CachedInputs.
+            // `adopted` decides who destroys the handle: see the note there.
+            var adopted = false;
             var declared = readable
-                ? CachedInputs(m.hPhysicalMonitor, $"{f.X},{f.Y},{f.W}x{f.H}")
+                ? CachedInputs(m.hPhysicalMonitor, CapsKey(desc, f.W, f.H), out adopted)
                 : null;
             // Position word from geometry, never a guess. Row-aware, because
             // this desk stacks: a monitor alone on its row is TOP/BOTTOM,
@@ -249,7 +287,7 @@ internal sealed class DdcBridge
             monitors.Add(new JsonObject
             {
                 ["index"] = idx++,
-                ["desc"] = m.szPhysicalMonitorDescription?.Trim() ?? "",
+                ["desc"] = desc,
                 ["position"] = pos,
                 ["x"] = f.X, ["y"] = f.Y, ["w"] = f.W, ["h"] = f.H,
                 ["primary"] = f.Primary,
@@ -262,7 +300,8 @@ internal sealed class DdcBridge
                 ["inputs"] = declared is null ? null
                     : new JsonArray(declared.Select(d => (JsonNode)d).ToArray()),
             });
-            DestroyPhysicalMonitor(m.hPhysicalMonitor);
+            // Not when a probe thread has taken it — that thread destroys it.
+            if (!adopted) DestroyPhysicalMonitor(m.hPhysicalMonitor);
         }
         return new JsonObject { ["monitors"] = monitors };
     }
