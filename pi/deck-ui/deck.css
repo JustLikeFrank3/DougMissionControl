@@ -595,6 +595,30 @@ html, body {
         color: var(--fg); font-size: 17px; font-family: inherit; cursor: pointer; }
 .np-b:disabled { opacity: .3; cursor: default; }
 
+/* The output spectrum. Bars are laid out by flex and animated only by their
+   own height, so the compositor can carry the whole thing without a repaint --
+   which matters on a Pi 4B, where Chromium is already the most expensive
+   process on the box.
+
+   The transition is deliberately short and only on the way DOWN: the agent
+   already attacks fast and releases slow, so easing the rise as well would
+   smear transients into porridge and the bars would stop looking like the
+   music. Cyan because it is this panel's reference-data colour -- green,
+   amber and red are reserved for state, and a visualiser has no state to
+   report. */
+.viz { display: flex; align-items: flex-end; gap: 2px; height: 46px;
+       flex: none; padding: 4px 2px 0; }
+.viz i { flex: 1; min-width: 0; height: var(--h, 2%);
+         background: linear-gradient(to top, var(--cy), #7ee3f0);
+         opacity: .8; transition: height 90ms linear; }
+.viz i.hot { background: linear-gradient(to top, var(--cy), var(--fg)); opacity: 1; }
+
+/* Motion off means motion off. A spectrum is decoration, and someone who has
+   asked the OS to stop animating things has asked for this too. */
+@media (prefers-reduced-motion: reduce) {
+  .viz i { transition: none; }
+}
+
 
 /* ── NAV ───────────────────────────────────────────────────────────────── */
 /* Observed position only: the trail is where the aircraft HAS been, the

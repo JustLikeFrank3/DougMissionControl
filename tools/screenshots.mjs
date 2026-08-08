@@ -136,6 +136,14 @@ const MEDIA = { source: 'windows', active: true, playing: true,
   app: 'spotify', position_s: 74, duration_s: 213, art_id: 'x',
   can: { play_pause: true, next: true, prev: true } };
 
+// A plausible spectrum: bass-heavy, rolling off with frequency, the way music
+// actually looks. A flat row of equal bars would screenshot as "working" while
+// hiding a band-mapping bug that put everything in one bin.
+const BANDS = Array.from({ length: 48 }, (_, i) =>
+  Math.max(0.05, Math.min(1, 0.95 * Math.pow(1 - i / 48, 1.6)
+    + 0.22 * Math.sin(i * 1.7) * Math.sin(i * 0.4))));
+const AUDIO = { active: true, peak: Math.max(...BANDS), bands: BANDS.map(b => +b.toFixed(3)) };
+
 const streams = new Set();
 /** Push a frame naming the surface to show. The page owns which surface is
     active — it is state, not a class the harness can set behind its back. */
@@ -189,6 +197,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/sim')     return json(SIM);
   if (url.pathname === '/api/monitor') return json(MONITORS);
   if (url.pathname === '/api/media')   return json(MEDIA);
+  if (url.pathname === '/api/audio')   return json(AUDIO);
   if (url.pathname.startsWith('/api/')) return json({});
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   try {

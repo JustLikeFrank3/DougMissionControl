@@ -610,6 +610,16 @@ def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
     point-to-point link rather than the LAN. Hence separate configuration.
     """
     if os_now == "windows":
+        # The sim agent first. GPU telemetry used to come only from a Prometheus
+        # exporter belonging to another project, and each of the three times it
+        # died it took the DECK gauges with it while the machine underneath was
+        # perfectly healthy. This agent is ours, runs whenever Windows does, and
+        # reads the same nvidia-smi. The exporter stays as the fallback, so a
+        # deployment without this agent behaves exactly as it always has.
+        if SIM_TOKEN:
+            own = _scrape(_sim_url("/metrics"))
+            if own:
+                return own, f"windows {WS_LAN}:{SIM_PORT}/metrics"
         url, src = WIN_METRICS_URL, "windows"
     elif os_now == "linux":
         url, src = LINUX_METRICS_URL, "linux"
@@ -617,11 +627,25 @@ def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
         return {}, None  # no OS up: a real gap, and the panel shows it as one
     if not url:
         return {}, None
+    values = _scrape(url)
+    return (values, f"{src} {url}") if values else ({}, None)
+
+
+def _scrape(url: str) -> dict:
+    """One exposition-format endpoint, canonicalised. Empty on any failure.
+
+    Complains once per URL rather than every cycle: a wrong endpoint that says
+    so at the panel's poll rate buries the log it is trying to appear in. The
+    sim agent's own /metrics answers a comment and no samples when the box has
+    no NVIDIA card, which lands here as an ordinary empty scrape - correctly,
+    because a machine with no GPU has no GPU telemetry, and that is not a fault
+    worth a warning.
+    """
     try:
         with urllib.request.urlopen(url, timeout=3) as r:
             body = r.read(512_000).decode("utf-8", "replace")
     except (urllib.error.URLError, OSError, ValueError):
-        return {}, None
+        return {}
 
     # A directory listing or an error page is not exposition format. Say so
     # once rather than silently reporting an empty scrape forever.
@@ -629,18 +653,42 @@ def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
         if url not in _bad_metrics:
             _bad_metrics.add(url)
             DECK.event("deck-api", f"{url} returned HTML, not Prometheus text", "warn")
-        return {}, None
+        return {}
 
     values = canonicalise(parse_prom_text(body))
-    if not values and url not in _bad_metrics:
+    # Only the CONFIGURED exporter is worth complaining about. The sim agent
+    # legitimately returns nothing on a box without nvidia-smi, and warning
+    # about that would fire forever on a perfectly healthy machine.
+    if not values and url not in _bad_metrics and "/metrics" in url \
+            and url in (WIN_METRICS_URL, LINUX_METRICS_URL):
         _bad_metrics.add(url)
         DECK.event("deck-api", f"{url} exposes no GPU metrics this panel recognises",
                    "warn")
-    return values, f"{src} {url}"
+    return values
 
 
 def _sim_url(path: str) -> str:
     return f"http://{WS_LAN}:{SIM_PORT}{path}?token={quote(SIM_TOKEN)}"
+
+
+def audio_spectrum() -> dict:
+    """The workstation's output spectrum, for the panel's visualiser.
+
+    Measured where the sound actually is. The panel is on the Pi and the music
+    plays on the workstation, so the Edge has no signal of its own to look at -
+    and a visualiser driven by anything other than the audio would be the same
+    kind of lie the SIM surface refuses to tell about the gear.
+
+    A short timeout on purpose: this is polled fast, and a visualiser that
+    stalls the panel waiting for bars is worse than one that drops a frame.
+    """
+    if not SIM_TOKEN:
+        return {"active": False, "reason": "SIM_AGENT_TOKEN unset"}
+    try:
+        with urllib.request.urlopen(_sim_url("/audio"), timeout=1) as r:
+            return json.loads(r.read(32_000).decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return {"active": False, "reason": "no link to the workstation"}
 
 
 def fetch_sim_link(os_now: str) -> dict:
@@ -1353,6 +1401,11 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, sim_state())
+
+        if path == "/api/audio":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, audio_spectrum())
 
         if path == "/api/monitor":
             if not self._authorised(query):

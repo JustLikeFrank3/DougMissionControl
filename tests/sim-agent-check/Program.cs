@@ -13,6 +13,7 @@
    there is no dotnet. */
 
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json.Nodes;
 
@@ -139,6 +140,62 @@ Expect("ap_spd off when neither is set", Mode(apOff, "ap_spd"), "off");
 // No autopilot, no bugs at all — the panel greys the tiles by their absence.
 var noAp = (JsonObject)controls.Invoke(null, new[] { apOn, MakeCaps() });
 Expect("no autopilot, no ap_spd key", noAp.ContainsKey("ap_spd") ? "present" : "absent", "absent");
+
+/* ── the FFT behind the visualiser ──────────────────────────────────────────
+   A wrong butterfly or a bad bit-reversal still produces a plausible-looking
+   spectrum: bars that move with the music and mean nothing. The only way to
+   catch that is to feed it a signal whose answer is known and check where the
+   energy lands. */
+
+var audioT = asm.GetType("FlightDeckSimAgent.AudioBridge");
+var fft = audioT.GetMethod("Fft", BindingFlags.NonPublic | BindingFlags.Static);
+
+int PeakBin(double freqHz, int rate = 48000, int n = 1024)
+{
+    var re = new double[n];
+    var im = new double[n];
+    for (var i = 0; i < n; i++) re[i] = Math.Sin(2 * Math.PI * freqHz * i / rate);
+    fft.Invoke(null, new object[] { re, im });
+    int best = 0;
+    double bestMag = -1;
+    for (var i = 1; i < n / 2; i++)   // skip DC
+    {
+        var mag = Math.Sqrt(re[i] * re[i] + im[i] * im[i]);
+        if (mag > bestMag) { bestMag = mag; best = i; }
+    }
+    return best;
+}
+
+// bin = freq * N / rate. At 48kHz over 1024 points each bin is 46.875 Hz.
+Expect("FFT puts 1 kHz in its bin", PeakBin(1000).ToString(), "21");
+Expect("FFT puts 3 kHz in its bin", PeakBin(3000).ToString(), "64");
+Expect("FFT puts 120 Hz in its bin", PeakBin(120).ToString(), "3");
+
+// DC must land in bin 0 and nowhere else - a bit-reversal that is subtly wrong
+// smears a constant across the spectrum, which on screen reads as "every bar
+// half lit" and looks like a working visualiser.
+{
+    var n = 1024;
+    var re = new double[n];
+    var im = new double[n];
+    for (var i = 0; i < n; i++) re[i] = 1.0;
+    fft.Invoke(null, new object[] { re, im });
+    var dc = Math.Sqrt(re[0] * re[0] + im[0] * im[0]);
+    double spill = 0;
+    for (var i = 1; i < n / 2; i++)
+        spill = Math.Max(spill, Math.Sqrt(re[i] * re[i] + im[i] * im[i]));
+    Expect("DC lands entirely in bin 0", $"{dc > 1000} {spill < 1e-6}", "True True");
+}
+
+// Silence in, silence out. A visualiser that draws bars from an empty buffer
+// is the exact failure this whole capture path exists to avoid.
+{
+    var re = new double[1024];
+    var im = new double[1024];
+    fft.Invoke(null, new object[] { re, im });
+    var any = re.Concat(im).Any(v => Math.Abs(v) > 1e-12);
+    Expect("silence produces no spectrum", any ? "moved" : "flat", "flat");
+}
 
 Console.WriteLine(fails == 0
     ? "sim-agent resolve and state-shape tests passed"

@@ -47,6 +47,10 @@ internal sealed class HttpApi : IDisposable
     public Func<Task<JsonObject>> Media { get; init; } = () => Task.FromResult(new JsonObject());
     public Func<(byte[] Bytes, string Id)> MediaArt { get; init; } = () => (Array.Empty<byte>(), "");
     public Func<string, Task<JsonObject>> MediaCommand { get; init; } = _ => Task.FromResult(new JsonObject());
+    /// <summary>GPU telemetry in Prometheus exposition format. Text, not JSON,
+    /// so deck-api needs no new parser for it.</summary>
+    public Func<string> Metrics { get; init; } = () => "";
+    public Func<JsonObject> Audio { get; init; } = () => new JsonObject();
 
     public HttpApi(int port, string token)
     {
@@ -165,6 +169,20 @@ internal sealed class HttpApi : IDisposable
 
             case ("GET", "/media"):
                 await WriteJsonAsync(stream, "200 OK", await Media());
+                return;
+
+            // GPU telemetry this project owns, so the DECK gauges survive the
+            // third-party exporter on :9106 dying - which it has, three times.
+            case ("GET", "/metrics"):
+                await WriteAsync(stream, "200 OK", "text/plain; version=0.0.4",
+                    Metrics());
+                return;
+
+            // The spectrum, for the panel's visualiser. Sampled from WASAPI
+            // loopback on this machine, because the panel is on the Pi and has
+            // no audio of its own to look at.
+            case ("GET", "/audio"):
+                await WriteJsonAsync(stream, "200 OK", Audio());
                 return;
 
             case ("GET", "/media/art"):

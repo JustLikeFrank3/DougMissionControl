@@ -81,6 +81,13 @@ internal static class Program
 
         var media = new MediaBridge();
         var ddc = new DdcBridge();
+        // Both sample on their own threads and are independent of SimConnect:
+        // they must keep answering with MSFS closed, the same way MEDIA and
+        // SCREENS do, because neither has anything to do with the simulator.
+        var gpu = new GpuBridge();
+        var audio = new AudioBridge();
+        gpu.Start();
+        audio.Start();
 
         _api = new HttpApi(Port, token)
         {
@@ -95,6 +102,22 @@ internal static class Program
             },
             Monitor = ddc.Snapshot,
             MonitorSwitch = ddc.Switch,
+            Metrics = gpu.Exposition,
+            Audio = () =>
+            {
+                var (active, bands, peak, why) = audio.Snapshot();
+                return new JsonObject
+                {
+                    ["active"] = active,
+                    ["peak"] = Math.Round(peak, 4),
+                    ["bands"] = new JsonArray(bands
+                        .Select(b => (JsonNode)Math.Round(b, 4)).ToArray()),
+                    // Empty while capturing. The panel shows a flat spectrum
+                    // for silence and this line for no capture session at all,
+                    // which are different facts and look identical otherwise.
+                    ["reason"] = why.Length == 0 ? null : why,
+                };
+            },
         };
 
         _api.Start();
@@ -107,6 +130,8 @@ internal static class Program
 
         _sim.Dispose();
         _api.Dispose();
+        audio.Dispose();
+        gpu.Dispose();
         return 0;
     }
 

@@ -103,6 +103,11 @@
               <button class="np-b" id="np-next" aria-label="next">⏭</button>
             </div>
           </div>
+          <!-- The output spectrum, measured on the workstation. Bars are built
+               at runtime from whatever band count the agent sends, so changing
+               it there needs no edit here. Hidden until a capture session is
+               actually live: no bars beats invented ones. -->
+          <div class="viz" id="viz" hidden aria-hidden="true"></div>
 
           <footer class="foot" id="foot">hold to arm</footer>
         </div>

@@ -85,7 +85,8 @@ tools/screenshots.mjs    renders every surface at 2560x720 for the images above
                           Windows if PowerShell blocks the npm wrapper)
 
 The Windows sim agent (docs/SIM-AGENT-BRIEF.md):
-windows/sim-agent/       flightdeck-sim-agent — SimConnect + media on :9109
+windows/sim-agent/       flightdeck-sim-agent — SimConnect, media, DDC, GPU
+                         telemetry and the output spectrum, all on :9109
 windows/setup-sim-agent.ps1   build, token, firewall, logon task
 windows/scarlett-power.ps1    keep the Scarlett on the bus (power mgmt + ghosts)
 ```
@@ -334,6 +335,33 @@ the probe hits the root path, and both agents answer `/` as well as
 it takes. Both ship with this repo, both run from startup rather than at
 logon, and both are more reliable than the exporters — which belong to
 another project and have died on their own more than once.
+
+### GPU telemetry
+
+The DECK gauges used to come only from that same third-party exporter, so each
+time it died the panel reported "no data" about a GPU sitting there at 47°.
+The sim agent now serves its own `/metrics` from `nvidia-smi`, and deck-api
+prefers it under Windows, falling back to `WIN_METRICS_URL` when it is absent —
+so a deployment without the agent behaves exactly as it always did.
+
+This introduces no metrics stack: no Prometheus, no retention, no second
+scrape history. It is the current reading, in exposition format only because
+deck-api already parses that shape, which made the Pi-side change a URL
+preference rather than a new parser. The rolling window the sparklines draw
+still lives in the browser and still dies with the page.
+
+### The visualiser
+
+`GET /api/audio` returns 48 spectrum bands measured on the workstation by the
+sim agent's WASAPI loopback capture, and the DECK rail draws them under the
+now-playing widget. It is loopback on the default *render* endpoint, so it
+needs no virtual cable and changes nothing about what reaches the Scarlett.
+
+The bands are real. There is no fallback pattern and no idle animation: when
+nothing is playing the bars are flat, and when there is no capture session the
+widget is hidden entirely. A visualiser driven by track position or a canned
+waveform would be the same class of lie as drawing a commanded gear position,
+which is the one thing this panel refuses to do anywhere else.
 
 Note what a failed probe does *not* distinguish: a machine that is off,
 a machine asleep ignoring magic packets, and a machine that is up with a

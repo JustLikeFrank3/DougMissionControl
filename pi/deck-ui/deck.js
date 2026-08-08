@@ -11,6 +11,7 @@ import { buildTrack, renderTrack,
 import { drawAllSparks } from './js/spark.js';
 import { dspPoll } from './js/screens.js';
 import { npPoll } from './js/media.js';
+import { vizPoll } from './js/viz.js';
 import { navPoll, setNavPlan, setNavPlanDisabled } from './js/nav.js';
 import { wireNav } from './js/nav.js';
 import { simPoll, simSend, wireSim } from './js/sim.js';
@@ -74,6 +75,9 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     });
     simPoll(active === 'sim');
     npPoll(active === 'deck');
+    // Same gate as the now-playing widget: no reason to hold a 10 Hz
+    // conversation with the workstation to feed a hidden surface.
+    vizPoll(active === 'deck');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
   }
