@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import re
 import subprocess
@@ -159,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authed(q):
             return self._json(403, {"error": "forbidden"})
+        if url.path == "/audio":
+            return self._json(200, audio())
         if url.path == "/media":
             snap = snapshot()
             snap.pop("art_url", None)
@@ -671,13 +674,173 @@ def monitor_switch(input_name: str, index: int) -> dict:
     return {"ok": any_ok, "input": input_name, "monitors": results}
 
 
+# ── audio spectrum (PipeWire/PulseAudio monitor capture) ──────────────────
+# The Linux twin of the sim agent's AudioBridge, publishing the SAME shape so
+# the panel's AUDIO surface never learns which OS measured the sound. The
+# workstation is always in one boot or the other, and the visualiser was
+# Windows-only for exactly as long as nobody rebooted.
+#
+# parec on the default MONITOR source: that is the loopback of whatever is
+# being played, so it needs no virtual cable and changes nothing about what
+# reaches the interface. @DEFAULT_MONITOR@ follows the default sink, which is
+# what you want on a desk where the sink changes when a monitor with speakers
+# is plugged in.
+#
+# The bands are real. Silence is a flat spectrum because silence IS a flat
+# spectrum; there is no idle animation and no fallback pattern, for the same
+# reason SIM never draws a commanded gear position.
+
+AUDIO_BANDS = 64
+_AUDIO_FFT = 4096          # 11.7 Hz per bin at 48 kHz - see AudioBridge.cs
+_AUDIO_RATE = 48000
+_AUDIO_PUBLISH = 0.05      # 20 Hz
+
+_audio_lock = threading.Lock()
+_audio_bands = [0.0] * AUDIO_BANDS
+_audio_peak = 0.0
+_audio_active = False
+_audio_why = "not started"
+
+try:
+    import numpy as _np
+except ImportError:                     # noqa: BLE001 - absence is a fact, not a fault
+    _np = None
+
+
+def _audio_fail(why: str) -> None:
+    global _audio_active, _audio_why, _audio_peak
+    with _audio_lock:
+        _audio_active = False
+        _audio_why = why
+        _audio_peak = 0.0
+        for i in range(AUDIO_BANDS):
+            _audio_bands[i] = 0.0
+
+
+def _audio_edges() -> list:
+    """Fractional FFT-bin edges for each band, log-spaced 30 Hz to 16 kHz.
+
+    Linear spacing would put four fifths of the bars above 5 kHz, where music
+    has almost nothing, and the bass would be one bar wide.
+    """
+    hz_per_bin = _AUDIO_RATE / _AUDIO_FFT
+    lo, hi = 30.0, min(16000.0, _AUDIO_RATE / 2 - hz_per_bin)
+    return [(lo * (hi / lo) ** (b / AUDIO_BANDS)) / hz_per_bin
+            for b in range(AUDIO_BANDS + 1)]
+
+
+def _audio_map(mag) -> list:
+    """Bin magnitudes onto the bars, matching AudioBridge.MapBands exactly.
+
+    A band narrower than one bin INTERPOLATES between its neighbours rather
+    than clamping to one of them. Clamping is what made the first nine bands
+    on the Windows side carry an identical number, so the whole bottom of the
+    spectrum moved as one block.
+    """
+    edges = _audio_edges()
+    bins = len(mag)
+    out = []
+    for b in range(AUDIO_BANDS):
+        x0, x1 = edges[b], edges[b + 1]
+        i0 = max(1, min(int(math.ceil(x0)), bins - 1))
+        i1 = max(0, min(int(math.floor(x1)), bins - 1))
+        if i1 >= i0:
+            v = max(mag[i0:i1 + 1])
+        else:
+            x = min(max((x0 + x1) / 2.0, 1), bins - 2)
+            i = int(x)
+            f = x - i
+            v = mag[i] * (1 - f) + mag[i + 1] * f
+        db = 20 * math.log10(v + 1e-9)
+        out.append(max(0.0, min(1.0, (db + 60) / 60.0)))
+    return out
+
+
+def _audio_pump() -> None:
+    global _audio_active, _audio_why, _audio_peak
+    window = _np.zeros(_AUDIO_FFT, dtype=_np.float32) if _np is not None else None
+    hann = _np.hanning(_AUDIO_FFT).astype(_np.float32) if _np is not None else None
+
+    while True:
+        if _np is None:
+            # A pure-Python 4096-point FFT at 20 Hz is several seconds of CPU
+            # per second of audio. Saying so beats shipping a visualiser that
+            # pins a core and still stutters.
+            _audio_fail("numpy is not installed (pip install numpy)")
+            time.sleep(30)
+            continue
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                ["parec", "--format=float32le", f"--rate={_AUDIO_RATE}",
+                 "--channels=2", "--latency-msec=50", "-d", "@DEFAULT_MONITOR@"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            with _audio_lock:
+                _audio_active, _audio_why = True, ""
+            chunk = 2048 * 2 * 4          # frames * channels * float32
+            last = 0.0
+            while True:
+                raw = proc.stdout.read(chunk)
+                if not raw:
+                    raise OSError("parec stopped")
+                # Mono-mix: a spectrum is about content, not stereo image, and
+                # one set of bars cannot honestly show two channels.
+                samples = _np.frombuffer(raw, dtype=_np.float32)
+                if samples.size % 2:
+                    samples = samples[:-1]
+                mono = samples.reshape(-1, 2).mean(axis=1)
+                if mono.size >= _AUDIO_FFT:
+                    window[:] = mono[-_AUDIO_FFT:]
+                else:
+                    window[:-mono.size] = window[mono.size:]
+                    window[-mono.size:] = mono
+
+                now = time.monotonic()
+                if now - last < _AUDIO_PUBLISH:
+                    continue
+                last = now
+                spec = _np.abs(_np.fft.rfft(window * hann)) / (_AUDIO_FFT / 2)
+                bands = _audio_map(spec.tolist())
+                with _audio_lock:
+                    for i, v in enumerate(bands):
+                        # Attack fast, release slow. A spectrum that falls as
+                        # fast as it rises reads as flicker.
+                        _audio_bands[i] = v if v > _audio_bands[i] \
+                            else _audio_bands[i] * 0.75 + v * 0.25
+                    _audio_peak = max(bands)
+        except FileNotFoundError:
+            _audio_fail("parec is not installed (pulseaudio-utils)")
+            time.sleep(30)
+        except Exception as e:                      # noqa: BLE001
+            _audio_fail(f"{type(e).__name__}: {e}")
+            time.sleep(3)
+        finally:
+            if proc is not None:
+                proc.kill()
+
+
+def audio() -> dict:
+    """The current spectrum, in the sim agent's /audio shape."""
+    with _audio_lock:
+        return {"active": _audio_active,
+                "peak": round(_audio_peak, 4),
+                "bands": [round(v, 4) for v in _audio_bands],
+                "reason": _audio_why or None}
+
+
 def main() -> int:
     if "--check" in sys.argv:
         print(json.dumps(snapshot(), indent=2))
         return 0
+    if "--audio" in sys.argv:
+        threading.Thread(target=_audio_pump, daemon=True, name="audio").start()
+        time.sleep(2)
+        print(json.dumps(audio(), indent=2))
+        return 0
     if "--monitors" in sys.argv:
         print(json.dumps(monitors(), indent=2))
         return 0
+    threading.Thread(target=_audio_pump, daemon=True, name="audio").start()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
     return 0
 

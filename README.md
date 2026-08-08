@@ -62,8 +62,9 @@ linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
 linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
 linux/seamless-displays.sh  pins EDID + forces connectors on, so a SCREENS input
                          switch does not tear the desktop down (--revert undoes it)
-linux/media-agent.py     :9110 — now-playing (MPRIS) + monitor input switching (DDC),
-                         the Linux twin of the sim-agent's /media and /monitor
+linux/media-agent.py     :9110 — now-playing (MPRIS), monitor input switching
+                         (DDC) and the output spectrum (parec + numpy), the
+                         Linux twin of the sim-agent's /media, /monitor, /audio
 tests/                   shell tests for the above — `bash tests/test_*.sh`
 
 Flight Deck — the touchscreen front-end (v0.1):
@@ -365,10 +366,18 @@ still lives in the browser and still dies with the page.
 
 ### The visualiser
 
-`GET /api/audio` returns 48 spectrum bands measured on the workstation by the
-sim agent's WASAPI loopback capture, and the DECK rail draws them under the
-now-playing widget. It is loopback on the default *render* endpoint, so it
-needs no virtual cable and changes nothing about what reaches the Scarlett.
+`GET /api/audio` returns 64 spectrum bands measured on the workstation, and
+both the AUDIO surface and the DECK rail draw them. Loopback on the default
+*render* endpoint either way, so it needs no virtual cable and changes nothing
+about what reaches the Scarlett — WASAPI under Windows, `parec` on
+`@DEFAULT_MONITOR@` under Linux, and deck-api picks by whichever OS is booted
+exactly as `/media` and `/monitor` do.
+
+The band mapping exists in both agents and is held to the same properties by
+both test suites, because two implementations of one contract is how a contract
+drifts. The Linux side needs `numpy` (`pip install numpy`); without it `/audio`
+answers with that as its reason rather than pinning a core on a pure-Python
+4096-point FFT.
 
 The bands are real. There is no fallback pattern and no idle animation: when
 nothing is playing the bars are flat, and when there is no capture session the

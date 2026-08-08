@@ -322,6 +322,42 @@ real_cached_inputs("4")
 real_cached_inputs("4")
 check("a refusal is asked once, not every poll", asked, ["4"])
 
+# ── audio spectrum ─────────────────────────────────────────────────────────
+# The band mapping exists twice - here and in AudioBridge.cs - because the
+# workstation has two boots and the panel must not be able to tell which one
+# measured the sound. Two implementations of one contract is exactly how a
+# contract drifts, so both are held to the same properties, and both were
+# checked against each other numerically when this was written (worst
+# disagreement 5e-7, which is float32 rounding).
+
+audio_map = ma._audio_map
+
+check("64 bands out", len(audio_map([0.5] * 2049)), 64)
+
+# A rising spectrum must give 64 distinct, rising values. Bands narrower than
+# an FFT bin used to clamp to that bin on the Windows side, which made the
+# first nine of them carry an identical number and moved the whole bottom of
+# the display as one block.
+ramp = audio_map([0.001 + i * 0.0004 for i in range(2049)])
+ties = sum(1 for i in range(1, len(ramp)) if ramp[i] == ramp[i - 1])
+slips = sum(1 for i in range(1, len(ramp)) if ramp[i] < ramp[i - 1])
+check("no two bands share a value on a ramp", ties, 0)
+check("a rising spectrum rises across the bars", slips, 0)
+check("the lowest twelve bands are twelve values", len(set(ramp[:12])), 12)
+
+# Silence is a floor, and one tone is a few bars rather than a lit-up bottom end.
+check("silence maps to zero everywhere",
+      any(v > 0 for v in audio_map([0.0] * 2049)), False)
+spike = [0.0] * 2049
+spike[400] = 1.0
+check("a single tone lights a few bars", sum(1 for v in audio_map(spike) if v > 0.5) <= 4, True)
+
+# Absent numpy is a stated fact, not a crash: the endpoint must still answer.
+snap = ma.audio()
+check("audio() answers the sim agent's shape",
+      sorted(snap), ["active", "bands", "peak", "reason"])
+check("and 64 bands even before capture starts", len(snap["bands"]), 64)
+
 if failures:
     print("FAIL: media-agent ddcutil parsing", file=sys.stderr)
     for f in failures:

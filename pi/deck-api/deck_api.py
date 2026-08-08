@@ -696,10 +696,21 @@ def audio_spectrum() -> dict:
     A short timeout on purpose: this is polled fast, and a visualiser that
     stalls the panel waiting for bars is worse than one that drops a frame.
     """
-    if not SIM_TOKEN:
-        return {"active": False, "reason": "SIM_AGENT_TOKEN unset"}
+    # Branch on the booted OS, exactly as /media and /monitor do. This asked
+    # the sim agent unconditionally for a while, so under Linux it interrogated
+    # a Windows service that was not running and the visualiser was simply dead
+    # on that boot - while the track name beside it, which does branch, kept
+    # working and made it look like a bug rather than a missing half.
+    os_now = DECK.state["workstation"]["os"]
+    if os_now == "windows" and SIM_TOKEN:
+        url = _sim_url("/audio")
+    elif os_now == "linux" and LINUX_MEDIA_TOKEN:
+        url = (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/audio"
+               f"?token={quote(LINUX_MEDIA_TOKEN)}")
+    else:
+        return {"active": False, "reason": "no agent answering on the booted OS"}
     try:
-        with urllib.request.urlopen(_sim_url("/audio"), timeout=1) as r:
+        with urllib.request.urlopen(url, timeout=1) as r:
             return json.loads(r.read(32_000).decode("utf-8", "replace"))
     except (urllib.error.URLError, OSError, ValueError):
         return {"active": False, "reason": "no link to the workstation"}
