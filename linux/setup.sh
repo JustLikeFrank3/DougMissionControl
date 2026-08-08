@@ -232,7 +232,15 @@ fi
 # This is a systemd USER unit, not a system one, and that is forced: playerctl
 # reads MPRIS over the user's session bus, which a system unit has no route to.
 # DDC then needs /dev/i2c-*, hence the i2c group on the same user.
-apt-get install -y -qq ddcutil playerctl >/dev/null 2>&1 || true
+# pulseaudio-utils is parec, which captures the output spectrum for the AUDIO
+# surface off the default monitor source - it works on PipeWire too, through
+# pipewire-pulse. python3-numpy does the transform: a pure-Python 4096-point
+# FFT at 20 Hz is seconds of CPU per second of audio, so without it the agent
+# answers /audio with that as its reason rather than pinning a core. Both are
+# listed here because the agent names their absence clearly and it still cost
+# an evening to find out one machine at a time.
+apt-get install -y -qq ddcutil playerctl pulseaudio-utils python3-numpy \
+    >/dev/null 2>&1 || true
 
 # ddcutil talks to monitors over I2C; the bus nodes only exist once i2c-dev is
 # loaded, and it is not autoloaded on most desktops.
