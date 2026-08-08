@@ -219,6 +219,11 @@ fi
 
 say "Done"
 cat <<NEXT
+  The panel reloads ITSELF - there is no kiosk service to restart. deck-api
+  publishes the newest mtime across the UI bundle as version.ui, and the page
+  reloads when it changes. Installing and restarting deck-api, which this
+  script has just done, is the whole deployment.
+
   The panel should now show the deck. Try it without touching anything:
 
     curl -X POST -H 'Content-Type: application/json' \\
