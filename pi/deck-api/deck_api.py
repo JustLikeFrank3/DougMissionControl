@@ -188,12 +188,17 @@ try:
 except OSError:
     BUILD = {"file": __file__, "mtime": "unknown", "ui": "unknown"}
 
-# media is gone as a surface — now-playing lives as a widget on DECK's rail.
+# media came back as "audio", and this time it has something to show. It was
+# dropped when it was a transport with three buttons on it, which the DECK rail
+# does better in a tenth of the space; the rail widget stays for exactly that
+# reason. What earns a surface is the spectrum — 2560x720 is a preposterous
+# shape for a dashboard and the right one for a spectrum analyser, and 48 bands
+# in a 600 px column is a garnish rather than a thing worth looking at.
 # squadrons came and went: without a telemetry API the surface was a blind
 # macro deck, and its SendInput keystrokes never reached the game anyway.
 # nav rides the sim agent's /state (lat/lon/gs/track readouts) via /api/sim —
 # no new endpoint, the pass-through already carries it.
-SURFACES = ("deck", "evals", "nav", "sim", "displays")
+SURFACES = ("deck", "evals", "nav", "sim", "displays", "audio")
 DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
 if DEFAULT_SURFACE not in SURFACES:
     DEFAULT_SURFACE = "evals"

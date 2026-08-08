@@ -30,6 +30,9 @@
         <button class="navb" data-surface="displays">
           <span class="t">SCREENS</span><span class="s" id="nav-displays">ddc</span>
         </button>
+        <button class="navb" data-surface="audio">
+          <span class="t">AUDIO</span><span class="s" id="nav-audio">no source</span>
+        </button>
       </nav>
 
       <div class="status" id="status">
@@ -303,6 +306,49 @@
           </div>
         </div>
         <div class="dsp" id="dsp-live" hidden></div>
+      </section>
+
+      <!-- AUDIO — what is playing, and what it actually sounds like.
+
+           The spectrum is measured on the workstation by the sim agent's
+           WASAPI loopback capture, because the panel is on the Pi and has no
+           audio of its own. Nothing here animates when nothing is playing:
+           silence draws flat bars and a missing capture session says so in
+           words. A visualiser that is not listening is a screensaver. -->
+      <section class="surface body-plain" data-name="audio">
+        <div class="placeholder" id="aud-ph">
+          <div class="ph-pill" id="aud-pill">NO SOURCE</div>
+          <div class="ph-t">AUDIO</div>
+          <div class="ph-s" id="aud-ph-s">
+            The spectrum is measured where the sound is — the workstation's own
+            output, captured by the sim agent and sent here as bands. With the
+            machine away or the agent down there is nothing to listen to, and
+            this panel would rather show you that than invent a waveform.
+          </div>
+        </div>
+        <div class="aud" id="aud-live" hidden>
+          <div class="aud-head">
+            <img class="aud-art" id="aud-art" alt="" hidden>
+            <div class="aud-noart" id="aud-noart">♪</div>
+            <div class="aud-meta">
+              <div class="aud-title" id="aud-title">—</div>
+              <div class="aud-artist" id="aud-artist"></div>
+              <div class="aud-album" id="aud-album"></div>
+              <div class="aud-barwrap" id="aud-barwrap"><i id="aud-bar"></i></div>
+              <div class="aud-time" id="aud-time"></div>
+            </div>
+            <div class="aud-btns">
+              <button class="aud-b" id="aud-prev" aria-label="previous">⏮</button>
+              <button class="aud-b" id="aud-play" aria-label="play/pause">⏯</button>
+              <button class="aud-b" id="aud-next" aria-label="next">⏭</button>
+            </div>
+          </div>
+          <!-- Full width, because that is the whole reason this is a surface
+               and not a widget. Bars are built from whatever band count the
+               agent sends. -->
+          <div class="aud-viz" id="aud-viz"></div>
+          <div class="aud-foot" id="aud-foot"></div>
+        </div>
       </section>
 
       <!-- ─────────── SIM ─────────── -->

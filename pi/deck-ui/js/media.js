@@ -52,11 +52,59 @@ export function paintNp(m) {
     $('np-play').disabled = !can.play_pause;
     $('np-next').disabled = !can.next;
   }
+  paintAud(m);
+  var nav = $('nav-audio');
+  if (nav) nav.textContent = m.active ? (m.title || 'playing') : 'no source';
 }
 
+/* The AUDIO surface's half of the same frame. Same observed playback, drawn
+   with the room a 2560 px panel actually has: art you can see from across the
+   room, and a progress bar rather than a line of small text. */
+var audArtId = null;
+
+function paintAud(m) {
+  if (!$('aud-title')) return;
+  $('aud-title').textContent = m.active ? (m.title || '(untitled)') : 'no source';
+  $('aud-artist').textContent = m.artist || '';
+  $('aud-album').textContent = m.album || '';
+  $('aud-time').textContent = !m.active ? ''
+    : (m.playing ? '▶ ' : '❚❚ ') + fmtTime(m.position_s)
+      + (m.duration_s ? ' / ' + fmtTime(m.duration_s) : '');
+
+  // Elapsed only where a duration was reported. A bar that guesses its own
+  // length is worse than no bar: it moves confidently and means nothing.
+  var pct = (m.active && m.duration_s)
+    ? Math.max(0, Math.min(100, 100 * (m.position_s || 0) / m.duration_s)) : 0;
+  $('aud-bar').style.width = pct + '%';
+  $('aud-barwrap').hidden = !(m.active && m.duration_s);
+
+  if (m.active && m.art_id && m.art_id !== audArtId) {
+    audArtId = m.art_id;
+    var img = $('aud-art');
+    img.onload = function () { img.hidden = false; $('aud-noart').hidden = true; };
+    img.onerror = function () { img.hidden = true; $('aud-noart').hidden = false; };
+    img.src = '/api/media/art?v=' + m.art_id;
+  } else if (!m.active) {
+    audArtId = null;
+    $('aud-art').hidden = true; $('aud-noart').hidden = false;
+  }
+
+  var can = m.can || {};
+  $('aud-prev').disabled = !can.prev;
+  $('aud-play').disabled = !can.play_pause;
+  $('aud-next').disabled = !can.next;
+  $('aud-foot').textContent = m.app
+    ? 'source ' + m.app + ' · ' + (m.source || '') : '';
+}
+
+// Both transports drive the same command, and a tap on either re-observes.
 [{ id: 'np-prev', a: 'prev' }, { id: 'np-play', a: 'play_pause' },
- { id: 'np-next', a: 'next' }].forEach(function (b) {
-  $(b.id).addEventListener('click', function () {
+ { id: 'np-next', a: 'next' },
+ { id: 'aud-prev', a: 'prev' }, { id: 'aud-play', a: 'play_pause' },
+ { id: 'aud-next', a: 'next' }].forEach(function (b) {
+  var el = $(b.id);
+  if (!el) return;
+  el.addEventListener('click', function () {
     post('/api/media/command', { action: b.a }).then(function () {
       setTimeout(npTick, 350);   // let the player react, then re-observe
     });

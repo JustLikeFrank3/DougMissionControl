@@ -222,6 +222,19 @@ it back.
 
 ![SCREENS](docs/img/screens.png)
 
+**AUDIO** — what is playing, and what it actually sounds like. The spectrum is
+measured on the workstation by the sim agent's WASAPI loopback capture, because
+the panel runs on the Pi and has no audio of its own to look at. Reachable from
+the strip or by tapping the now-playing widget on DECK — the transport buttons
+inside it still skip rather than navigate.
+
+The bands are real. There is no fallback pattern and no idle animation: silence
+draws flat bars, and no capture session says so in words. A visualiser driven by
+track position would be the same class of lie as drawing a commanded gear
+position, which this panel refuses to do anywhere else.
+
+![AUDIO](docs/img/audio.png)
+
 **jobContext** — the pre-existing Grafana wallboard, framed as-is. Flight Deck
 provisions no dashboards, stores no eval data, and contributes only the strip,
 the sub-nav built from Grafana's own dashboard list, and AUTO pinning.

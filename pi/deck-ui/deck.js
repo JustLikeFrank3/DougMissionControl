@@ -74,10 +74,11 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
       b.classList.toggle('on', b.dataset.surface === active);
     });
     simPoll(active === 'sim');
-    npPoll(active === 'deck');
-    // Same gate as the now-playing widget: no reason to hold a 10 Hz
-    // conversation with the workstation to feed a hidden surface.
-    vizPoll(active === 'deck');
+    // Now-playing feeds the DECK rail widget AND the AUDIO surface, so it
+    // runs for either. The spectrum is the expensive one at 10 Hz, and it
+    // stops the moment neither surface is showing it.
+    npPoll(active === 'deck' || active === 'audio');
+    vizPoll(active === 'deck' || active === 'audio');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
   }
@@ -368,6 +369,25 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
       post('/api/surface', { surface: name });
     });
   });
+
+  // Tapping the now-playing widget opens AUDIO. The rail already shows the
+  // track and a spectrum too small to be worth looking at, so the obvious
+  // gesture is to touch it and get the full-width one — and the strip button
+  // is there for anyone who does not think to try. The transport buttons sit
+  // inside this element and must NOT open the surface: a tap on ⏭ is a skip,
+  // not navigation, which is why this checks what was actually hit.
+  (function () {
+    var np = $('np');
+    if (!np) return;
+    np.addEventListener('click', function (e) {
+      if (e.target.closest('.np-b')) return;
+      if (state && state.surface) {
+        state.surface.active = 'audio';
+        renderSurface(state);
+      }
+      post('/api/surface', { surface: 'audio' });
+    });
+  })();
 
   } catch (err) {
     // Wired what we could; connect() below still runs, so the ui-stamp check

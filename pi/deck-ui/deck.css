@@ -616,8 +616,44 @@ html, body {
 /* Motion off means motion off. A spectrum is decoration, and someone who has
    asked the OS to stop animating things has asked for this too. */
 @media (prefers-reduced-motion: reduce) {
-  .viz i { transition: none; }
+  .viz i, .aud-viz i { transition: none; }
 }
+
+/* ── AUDIO ─────────────────────────────────────────────────────────────────
+   The reason this is a surface and not a widget: 2560 x 720 is a preposterous
+   shape for a dashboard and exactly the right one for a spectrum. The header
+   takes what it needs and the bars get every remaining pixel. */
+.aud { width: 100%; height: 100%; display: flex; flex-direction: column;
+       padding: 20px 26px 16px; gap: 14px; }
+.aud-head { display: flex; align-items: center; gap: 24px; flex: none; }
+.aud-art, .aud-noart { width: 132px; height: 132px; flex: none; }
+.aud-art { object-fit: cover; }
+.aud-noart { display: grid; place-items: center; font-size: 54px; color: var(--mut);
+             background: #0b1016; border: 1px solid var(--ln); }
+.aud-meta { flex: 1; min-width: 0; }
+.aud-title { font-size: 42px; line-height: 1.15; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+.aud-artist { font-size: 22px; color: var(--cy); margin-top: 6px; }
+.aud-album { font-size: 16px; color: var(--mut); margin-top: 3px; }
+.aud-barwrap { height: 4px; background: #0b1016; border: 1px solid var(--ln);
+               margin-top: 14px; }
+.aud-barwrap i { display: block; height: 100%; background: var(--acc); }
+.aud-time { font-size: 15px; color: var(--mut); margin-top: 8px; }
+.aud-btns { display: flex; gap: 10px; flex: none; }
+.aud-b { width: 86px; height: 86px; border: 1px solid var(--ln);
+         background: var(--pan2); color: var(--fg); font-size: 30px;
+         font-family: inherit; cursor: pointer; }
+.aud-b:disabled { opacity: .3; cursor: default; }
+
+/* flex:1 with min-height:0 — without the second half this grows to its
+   content and pushes the foot off the bottom of a fixed-height panel, which
+   is the same way LIVE and "hold to arm" went missing from the DECK rail. */
+.aud-viz { flex: 1; min-height: 0; display: flex; align-items: flex-end; gap: 3px; }
+.aud-viz i { flex: 1; min-width: 0; height: var(--h, 2%);
+             background: linear-gradient(to top, var(--cy), #7ee3f0);
+             opacity: .85; transition: height 90ms linear; }
+.aud-viz i.hot { background: linear-gradient(to top, var(--cy), var(--fg)); opacity: 1; }
+.aud-foot { flex: none; font-size: 12px; letter-spacing: .14em; color: var(--mut); }
 
 
 /* ── NAV ───────────────────────────────────────────────────────────────── */
