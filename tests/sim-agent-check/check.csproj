@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Deliberately net8.0 and NOT net8.0-windows: this harness runs anywhere,
+       including CI and the Linux boot of the workstation. It reflects into the
+       agent's own stub build rather than referencing it, so nothing here can
+       drag a WinRT dependency into a Linux host. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>sim-agent-check</AssemblyName>
+    <RootNamespace>SimAgentCheck</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -304,10 +304,20 @@ python3 pi/deck-api/test_phases.py
 | `tests/test_grub_entry.sh` | finding the Windows menuentry in single- and double-quoted `grub.cfg` |
 | `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
+| `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
 
 `test_deck_ui.sh` skips cleanly where node is absent; the Pi runs the panel in
-Chromium and has no reason to have node installed.
+Chromium and has no reason to have node installed. `test_sim_agent.sh` skips
+the same way without the .NET SDK, and needs neither Windows nor the MSFS SDK
+where it does run — it builds the agent against its SimConnect stub and
+reflects into the result.
+
+The sim-agent suite is aimed at one failure mode in particular: a command that
+compiles, transmits, is reported accepted, and does nothing, because the number
+in it was right-looking and wrong. `FLAPS_SET` taking a 0–16383 handle position
+rather than the detent index it is invariably handed is exactly that, and it
+sent every flap command on the panel to UP.
 
 The UI suite is deliberately weighted toward the failures this panel has
 actually had, rather than toward coverage: a trail drawn straight across a
