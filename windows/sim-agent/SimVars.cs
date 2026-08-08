@@ -166,6 +166,11 @@ internal struct SimGpsRaw
     public double NextLonDeg;
     public double PrevLatDeg;
     public double PrevLonDeg;
+    // Throttle lever position per engine, 0-100. Singles report 0 on :2, the
+    // same convention GENERAL ENG RPM uses, so the panel can tell a twin from
+    // a single without being told which airframe it is looking at.
+    public double Throttle1Pct;
+    public double Throttle2Pct;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
     public string NextId;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
@@ -254,6 +259,11 @@ internal static class SimVars
         ("GPS WP NEXT LON",             "Degrees"),           // radians natively
         ("GPS WP PREV LAT",             "Degrees"),           // radians natively
         ("GPS WP PREV LON",             "Degrees"),           // radians natively
+        // Throttle levers. Appended at the END, same rule as above — the list
+        // order IS the struct layout, so an insertion anywhere else silently
+        // shifts every field after it onto the wrong SimVar.
+        ("GENERAL ENG THROTTLE LEVER POSITION:1", "Percent"),
+        ("GENERAL ENG THROTTLE LEVER POSITION:2", "Percent"),   // 0 on singles
     };
 
     public static readonly string[] GpsStringVars =

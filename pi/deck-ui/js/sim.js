@@ -260,6 +260,33 @@ export function paintSim(d) {
   rpmEl.className = 'simt-v big' + (r.rpm_2 > 0 ? ' twin' : '');
   $('simu-rpm').textContent = r.rpm_2 > 0 ? 'ENG 1 / 2' : '';
   $('simv-fuel').textContent = r.fuel_gal === undefined ? '—' : r.fuel_gal;
+
+  // Throttle. Twins show both levers and both bars; a single reports 0 on
+  // engine 2 — the same convention RPM uses — and shows one of each, so the
+  // panel never invents a second engine an airframe has not got.
+  var t1 = r.throttle_1, t2 = r.throttle_2;
+  var thrEl = $('simv-thr'), bars = $('thr-bars');
+  if (t1 === undefined) {
+    thrEl.textContent = '—';
+    thrEl.className = 'simt-v big';
+    bars.innerHTML = '';
+    $('simu-thr').textContent = '';
+  } else {
+    var twin = t2 > 0;
+    thrEl.textContent = twin ? t1 + ' / ' + t2 : String(t1);
+    thrEl.className = 'simt-v big' + (twin ? ' twin' : '');
+    $('simu-thr').textContent = twin ? '% ENG 1 / 2' : '%';
+    var want = twin ? 2 : 1;
+    if (bars.children.length !== want) {
+      bars.innerHTML = '';
+      for (var bi = 0; bi < want; bi++) bars.appendChild(document.createElement('i'));
+    }
+    [t1, t2].slice(0, want).forEach(function (v, i) {
+      var el = bars.children[i];
+      el.style.setProperty('--p', Math.max(0, Math.min(100, v)) + '%');
+      el.classList.toggle('max', v >= 99);
+    });
+  }
   simPaintGauges(r);
 
   simRenderPending('gear', 'gear', c);

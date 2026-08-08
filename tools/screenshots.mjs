@@ -88,7 +88,8 @@ const SIM = { link: true, session: true, state: {
   aircraft: 'Beechcraft Baron G58', seq: 482,
   readouts: { lat: 28.545, lon: -81.333, gs_kt: 142, trk_true: 214, alt_ft: 3200,
               ias_kt: 148, hdg_mag: 212, vs_fpm: -240, rpm_1: 2400, rpm_2: 2395,
-              fuel_gal: 146.6, pitch_deg: -2.5, bank_deg: 8 },
+              fuel_gal: 146.6, pitch_deg: -2.5, bank_deg: 8,
+              throttle_1: 72, throttle_2: 68 },
   controls: {
     gear:           { state: 'DOWN', pct: 100, handle: 'DOWN' },
     flaps:          { index: 1, detents: 3, angle_deg: 15 },

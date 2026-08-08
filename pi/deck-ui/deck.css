@@ -363,7 +363,20 @@ html, body {
 .sim-controls > #simt-gear { grid-row: span 2; }
 .sim-reads { flex: 1.1; display: grid; gap: 14px;
              grid-template-columns: 1fr 1fr;
-             grid-template-rows: repeat(3, 1fr); }
+             grid-template-rows: repeat(4, 1fr); }
+/* Throttle takes the whole last row — six single tiles plus one double fills
+   the eight cells exactly, so no hole opens up the way SIM's control grid had
+   one under AUTOPILOT. */
+.simt.span2 { grid-column: 1 / -1; }
+
+/* Lever position as a bar per engine, because the number alone does not show
+   you that one engine is trailing the other at a glance. */
+.thr { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.thr i { display: block; height: 7px; background: var(--ln); position: relative; }
+.thr i::after { content: ''; position: absolute; inset: 0 auto 0 0;
+                width: var(--p, 0%); background: var(--cy); }
+/* Wide open reads as the target the aircraft is being flown toward. */
+.thr i.max::after { background: var(--acc); }
 
 /* EFIS gauge pair. The svg is square inside a flexible tile; height rules. */
 .sim-gauges { flex: 1; display: flex; flex-direction: column; gap: 14px; }

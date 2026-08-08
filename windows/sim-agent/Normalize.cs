@@ -191,6 +191,8 @@ internal static class Normalize
         ["vs_fpm"] = (int)Math.Round(s.VerticalSpeedFpm),
         ["rpm_1"] = (int)Math.Round(s.EngRpm1),
         ["rpm_2"] = (int)Math.Round(s.EngRpm2),
+        ["throttle_1"] = (int)Math.Round(s.Throttle1Pct),
+        ["throttle_2"] = (int)Math.Round(s.Throttle2Pct),
         ["fuel_gal"] = Math.Round(s.FuelTotalGal, 1),
         // MSFS body-frame signs are positive nose-DOWN / bank-LEFT. The panel
         // draws standard EFIS signs (nose-up / right-wing-down positive), so
