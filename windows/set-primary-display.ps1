@@ -159,61 +159,49 @@ public static class Display {
 function Get-AttachedDisplay {
     <#  Every monitor currently part of the desktop, with where it sits, what
         it is called, and whether it is primary. #>
-    # Counted so an empty result can say WHY. A list that comes back empty and
-    # prints nothing is indistinguishable from a broken tool, which is exactly
-    # what happened the first time this ran on the workstation.
-    $script:DiagSeen = 0
-    $script:DiagAttached = 0
-    $script:DiagNoMode = 0
-    $script:DiagErr = 0
+    # Enumerated through System.Windows.Forms.Screen, not EnumDisplayDevices.
+    #
+    # The interop version returned FALSE at index 0 on a machine with three
+    # displays plainly attached. The reason is PowerShell, not Windows: binding
+    # $null to a [string] parameter yields [string]::Empty, so the call that
+    # was meant to say "enumerate the adapters" asked for the adapter named ""
+    # instead, and got told there is no such thing. The reported Win32 error
+    # was 203, ERROR_ENVVAR_NOT_FOUND, which is nothing to do with displays and
+    # was simply whatever the thread had lying around.
+    #
+    # Screen.AllScreens is a managed API that needs no NULL, was verified
+    # working on that exact machine, and gives everything the matching and the
+    # origin-shift arithmetic need. The interop that remains is the one call
+    # with no managed equivalent: actually setting the primary.
+    Add-Type -AssemblyName System.Windows.Forms
 
     $out = @()
-    $i = 0
-    while ($true) {
-        $dev = New-Object DualBoot.DISPLAY_DEVICE
-        $dev.cb = [DualBoot.Display]::DisplayDeviceSize()
-        if (-not [DualBoot.Display]::EnumDisplayDevices($null, $i, [ref]$dev, 0)) {
-            if ($i -eq 0) {
-                $script:DiagErr = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            }
-            break
-        }
-        $i++
-        $script:DiagSeen++
-        if (-not ($dev.StateFlags -band [DualBoot.Display]::ATTACHED_TO_DESKTOP)) { continue }
-        $script:DiagAttached++
-
-        $mode = New-Object DualBoot.DEVMODE
-        $mode.dmSize = [short][DualBoot.Display]::DevModeSize()
-        if (-not [DualBoot.Display]::EnumDisplaySettings(
-                $dev.DeviceName, [DualBoot.Display]::ENUM_CURRENT_SETTINGS, [ref]$mode)) {
-            $script:DiagNoMode++
-            continue
-        }
-
-        # Second level: the monitor behind the adapter output. Its DeviceID is
-        # the interface path carrying the EDID vendor id.
+    foreach ($s in [System.Windows.Forms.Screen]::AllScreens) {
+        # The monitor behind the output, for its PnP id - that path carries the
+        # EDID vendor code, which is the only place "SAM" appears on a Samsung
+        # that otherwise insists it is a Generic PnP Monitor. This call passes a
+        # REAL device name, so the empty-string trap above does not apply, and
+        # it is best-effort regardless.
         $mon = New-Object DualBoot.DISPLAY_DEVICE
         $mon.cb = [DualBoot.Display]::DisplayDeviceSize()
         $monId = ''
         $monName = ''
-        if ([DualBoot.Display]::EnumDisplayDevices($dev.DeviceName, 0, [ref]$mon,
+        if ([DualBoot.Display]::EnumDisplayDevices($s.DeviceName, 0, [ref]$mon,
                 [DualBoot.Display]::EDD_GET_DEVICE_INTERFACE_NAME)) {
             $monId = $mon.DeviceID
             $monName = $mon.DeviceString
         }
 
         $out += [pscustomobject]@{
-            Device    = $dev.DeviceName
-            Adapter   = $dev.DeviceString
+            Device    = $s.DeviceName
+            Adapter   = ''
             Monitor   = $monName
             MonitorId = $monId
-            Width     = $mode.dmPelsWidth
-            Height    = $mode.dmPelsHeight
-            Refresh   = $mode.dmDisplayFrequency
-            X         = $mode.dmPosition.x
-            Y         = $mode.dmPosition.y
-            Primary   = [bool]($dev.StateFlags -band [DualBoot.Display]::PRIMARY_DEVICE)
+            Width     = $s.Bounds.Width
+            Height    = $s.Bounds.Height
+            X         = $s.Bounds.X
+            Y         = $s.Bounds.Y
+            Primary   = $s.Primary
         }
     }
     return $out
@@ -260,12 +248,14 @@ function Set-PrimaryDisplay {
     $ordered = @($target) + @($displays | Where-Object { $_.Device -ne $target.Device })
 
     foreach ($d in $ordered) {
+        # Built rather than read back. ChangeDisplaySettingsEx honours exactly
+        # the fields named in dmFields and ignores the rest, so a DEVMODE
+        # carrying nothing but a position cannot disturb anyone's resolution or
+        # refresh rate on its way past - which matters on a panel whose 120 Hz
+        # took an evening to win. It also removes the second EnumDisplaySettings
+        # dependency from this path entirely.
         $mode = New-Object DualBoot.DEVMODE
         $mode.dmSize = [short][DualBoot.Display]::DevModeSize()
-        if (-not [DualBoot.Display]::EnumDisplaySettings(
-                $d.Device, [DualBoot.Display]::ENUM_CURRENT_SETTINGS, [ref]$mode)) {
-            throw "could not read the current mode of $($d.Device)"
-        }
         $pos = New-Object DualBoot.POINTL
         $pos.x = $d.X + $dx
         $pos.y = $d.Y + $dy

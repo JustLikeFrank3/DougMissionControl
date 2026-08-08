@@ -132,13 +132,22 @@ SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
 # The Mac mini. Liveness only — it runs no exporter, so the card claims
 # nothing beyond what a ping and two TCP handshakes can observe.
 MAC_LAN = cfg("MAC_LAN", "192.168.68.68")
-# Which inputs to offer on a monitor that will not declare its own. The HP 32f
-# refuses the DDC capabilities request outright (it hung /monitor for a minute
-# when asked inline), so the operator states the fact once here rather than
-# the panel guessing from a model table. A monitor that DOES declare its
-# inputs always wins over this. Empty means offer everything.
+# Which inputs to offer on a monitor that will NOT declare its own. Empty -
+# the default - means offer everything.
+#
+# This used to default to the HP 32f's list, because that panel refused the DDC
+# capabilities request and the operator had to state the fact somewhere. The
+# background capabilities probe has since fixed that at the source: the HPs now
+# declare vga/hdmi1/hdmi2 for themselves, so the only monitors still falling
+# back here are the ones nobody knows anything about.
+#
+# For those, one desk-wide list is worse than nothing. A 49" Samsung that
+# answers no capabilities request and misreports its own input as hdmi2 while
+# sitting on DisplayPort got offered VGA, HDMI 1 and HDMI 2 and no way back to
+# DP - a button that does nothing costs a tap, and a missing button costs a
+# walk to the monitor's OSD.
 MON_DEFAULT_INPUTS = [s for s in
-                      cfg("MON_DEFAULT_INPUTS", "vga,hdmi1,hdmi2").split(",") if s.strip()]
+                      cfg("MON_DEFAULT_INPUTS", "").split(",") if s.strip()]
 # Now-playing under Linux, when someone builds the endpoint: same /media shape
 # on this port. Absent is fine — the widget reads "no source".
 LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
