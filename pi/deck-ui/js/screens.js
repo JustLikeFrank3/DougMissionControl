@@ -16,12 +16,35 @@ var DSP_INPUTS = [
   ['vga', 'VGA'], ['hdmi1', 'HDMI 1'], ['hdmi2', 'HDMI 2'],
   ['dp1', 'DP 1'], ['dp2', 'DP 2']
 ];
-// Windows reports "Generic PnP Monitor" for these panels, so the model name
-// is stated here rather than guessed from EDID. Only used when the monitor
-// does not name itself.
-var DSP_MODEL = 'HP32F';
 var dspTimer = null, dspSig = null;
 var dspDefaults = null;   // deck-api's stated fallback for silent panels
+
+/**
+ * The inputs to offer for one monitor.
+ *
+ * A panel that declares its own inputs wins outright. One that refuses — the
+ * HP 32f refuses the capabilities request flatly — falls back to deck-api's
+ * operator-stated list, which is a fact about this desk rather than a guess
+ * from a model table.
+ *
+ * Whatever that list says, the input the monitor is CURRENTLY on is always
+ * offered. The fallback was written for two identical HPs and names no
+ * DisplayPort, so when a third panel arrived on DP the card showed VGA,
+ * HDMI 1 and HDMI 2 — one tap from moving that monitor to HDMI with no
+ * button anywhere on the panel to bring it back. A one-way door to the far
+ * side of the desk. An input a monitor is demonstrably sitting on is an
+ * input that monitor has, whatever any fallback list forgot to mention.
+ */
+function dspAllowed(m) {
+  var list = m.inputs || dspDefaults;
+  if (!list) return null;                       // null means offer everything
+  // 'other' is the agents' word for a code neither of them recognises. There
+  // is no button for it, so it cannot be offered and cannot be returned to.
+  if (m.input && m.input !== 'other' && list.indexOf(m.input) === -1) {
+    list = list.concat([m.input]);
+  }
+  return list;
+}
 
 export function dspPoll(on) {
   if (on && !dspTimer) { dspTick(); dspTimer = setInterval(dspTick, 3000); }
@@ -59,7 +82,7 @@ export function paintDsp(d) {
   var sig = mons.map(function (m) {
     return m.index + ':' + m.desc + ':' + (m.position || '') + ':' +
       (m.w || '') + 'x' + (m.h || '') +
-      ':' + (m.inputs || dspDefaults || []).join(',');
+      ':' + (dspAllowed(m) || []).join(',');
   }).join('|');
   if (sig !== dspSig) {
     dspSig = sig;
@@ -75,7 +98,13 @@ export function paintDsp(d) {
       // Name from the panel's own EDID model where it gives one — Windows
       // says "Generic PnP Monitor" for plenty of screens, so fall back to
       // the geometry-derived position rather than inventing a model.
-      var model = (m.desc && !/generic/i.test(m.desc)) ? m.desc : DSP_MODEL;
+      //
+      // It used to fall back to a hardcoded 'HP32F', which was true of every
+      // monitor on this desk right up until it wasn't: a Samsung arrived and
+      // the panel labelled it HP32F. A card that names the wrong screen is
+      // worse than one that declines to name it, because the name is what you
+      // steer by when you are about to switch an input.
+      var model = (m.desc && !/generic/i.test(m.desc)) ? m.desc : '';
       card.querySelector('.h-name').textContent =
         (model ? model + ' ' : 'MON ') + (m.position || (m.index + 1));
       // Every geometry field is optional. DRM knows the resolution without a
@@ -93,10 +122,7 @@ export function paintDsp(d) {
       if (m.primary) bits.push('primary');
       card.querySelector('.dsp-desc').textContent = bits.length ? bits.join(' · ') : '—';
       var btns = card.querySelector('.dsp-btns');
-      // Inputs the panel DECLARED win; a panel that refuses to say (the HP
-      // 32f refuses outright) falls back to deck-api's configured default,
-      // which is an operator-stated fact rather than a guess from a model.
-      var allowed = m.inputs || dspDefaults;
+      var allowed = dspAllowed(m);
       var offer = DSP_INPUTS.filter(function (inp) {
         return !allowed || allowed.indexOf(inp[0]) !== -1;
       });

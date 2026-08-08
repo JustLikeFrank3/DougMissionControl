@@ -217,26 +217,115 @@ MON_INPUTS = {"vga": 0x01, "dp1": 0x0F, "dp2": 0x10, "hdmi1": 0x11, "hdmi2": 0x1
 _buses: list[dict] | None = None
 _last_error: str | None = None
 
+# What each monitor DECLARES it has, cached, and never probed on the request
+# path. `ddcutil capabilities` is the slow call: the HP 32f refuses it outright
+# and takes about a minute to say so, which hangs /monitor and takes the whole
+# SCREENS surface down with it. So the probe runs once per bus on its own
+# thread and callers are served from cache; until it lands the monitor reports
+# None and the panel falls back to deck-api's stated default. A panel's input
+# list cannot change, so one attempt is enough. This mirrors
+# DdcBridge.CachedInputs on the Windows side deliberately — the two agents
+# publish the same shape, and they should reach it the same way.
+_caps: dict[str, list[str] | None] = {}
+_caps_asked: set[str] = set()
+_caps_lock = threading.Lock()
 
-def _ddcutil(args: list[str], timeout: float = 10) -> str | None:
+# ddcutil emits the input list two different ways depending on version and on
+# whether --brief was honoured. The raw MCCS string carries "60(01 11 12)"
+# inline; the pretty-printed form has a "Feature: 60" heading with one indented
+# "11: HDMI-1" per value beneath it. Parse either rather than pinning a version
+# and finding out on the workstation.
+_CAPS_INLINE_RE = re.compile(r"(?<![0-9A-Fa-f])60\s*\(([0-9A-Fa-f ]*)\)")
+_CAPS_FEATURE_RE = re.compile(r"Feature:\s*60\b")
+_CAPS_VALUE_RE = re.compile(r"^\s+([0-9A-Fa-f]{2}):")
+
+
+def _parse_caps_inputs(text: str) -> list[str] | None:
+    """Input names a capabilities reply declares, or None if it names none."""
+    codes: list[int] = []
+    inline = _CAPS_INLINE_RE.search(text)
+    if inline:
+        codes = [int(t, 16) for t in inline.group(1).split()]
+    else:
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if not _CAPS_FEATURE_RE.search(line):
+                continue
+            for nxt in lines[i + 1:]:
+                # The values are indented under the feature. A line back at the
+                # margin, or the next Feature:, ends this one — without that
+                # the input list would swallow every value of every feature
+                # below it and offer buttons for colour presets.
+                if nxt.strip() and not nxt[0].isspace():
+                    break
+                if "Feature:" in nxt:
+                    break
+                found = _CAPS_VALUE_RE.match(nxt)
+                if found:
+                    codes.append(int(found.group(1), 16))
+            break
+    names = [name for code in codes
+             for name, value in MON_INPUTS.items() if value == code]
+    return names or None
+
+
+def _declared_inputs(bus: str) -> list[str] | None:
+    text = _ddcutil(["capabilities", "--bus", bus, "--brief"],
+                    timeout=25, quiet=True)
+    return _parse_caps_inputs(text) if text else None
+
+
+def _cached_inputs(bus: str) -> list[str] | None:
+    """This monitor's declared inputs if we have them, else None right now and
+    a background probe so the next poll can do better."""
+    with _caps_lock:
+        if bus in _caps:
+            return _caps[bus]
+        if bus in _caps_asked:
+            return None                       # already in flight
+        _caps_asked.add(bus)
+
+    def probe() -> None:
+        got = _declared_inputs(bus)
+        with _caps_lock:
+            _caps[bus] = got
+
+    threading.Thread(target=probe, daemon=True, name="ddc-caps").start()
+    return None
+
+
+def _ddcutil(args: list[str], timeout: float = 10,
+             quiet: bool = False) -> str | None:
     """Run ddcutil, keeping why it failed. Every caller here treats None as
     "no monitors", so without _last_error an empty SCREENS cannot tell a
-    missing binary from a permission denial from a GPU that has no DDC."""
+    missing binary from a permission denial from a GPU that has no DDC.
+
+    `quiet` suppresses that bookkeeping, for calls whose failure is not a
+    fault: a capabilities probe that a monitor refuses is ordinary, and
+    letting it write _last_error would have SCREENS report ddcutil as broken
+    while it was busy working perfectly for every other call."""
     global _last_error
+
+    def fail(msg: str) -> None:
+        global _last_error
+        if not quiet:
+            _last_error = msg
+
     try:
         out = subprocess.run(["ddcutil", *args], capture_output=True, text=True,
                              timeout=timeout)
     except FileNotFoundError:
-        _last_error = "ddcutil is not installed"
+        fail("ddcutil is not installed")
         return None
     except (OSError, subprocess.SubprocessError) as e:
-        _last_error = f"ddcutil did not run: {e}"
+        fail(f"ddcutil did not run: {e}")
         return None
     if out.returncode != 0:
-        _last_error = (out.stderr or out.stdout or "").strip()[:400] \
-            or f"ddcutil exited {out.returncode}"
+        fail((out.stderr or out.stdout or "").strip()[:400]
+             or f"ddcutil exited {out.returncode}")
         return None
-    _last_error = None
+    if not quiet:
+        _last_error = None
     return out.stdout
 
 
@@ -475,7 +564,8 @@ def monitors() -> dict:
             "ddc": raw is not None,
             "input_raw": raw,
             "input": name,
-            "inputs": None,
+            # Cached/background — never blocks this response. See _cached_inputs.
+            "inputs": _cached_inputs(disp["bus"]),
         }
         conn = disp.get("connector") or ""
         # DRM knows the mode with no display server and no session, so

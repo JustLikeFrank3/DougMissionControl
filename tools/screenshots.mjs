@@ -115,11 +115,19 @@ const SIM = { link: true, session: true, state: {
     baro:           { inhg: 29.92 },
   } } };
 
+// Three panels, because two identical ones hid two bugs for months. The middle
+// one is the awkward case on purpose: it names itself "Generic PnP Monitor"
+// (so the card must fall back to its position rather than borrow a model that
+// belongs to a different make), and it sits on DisplayPort, which the
+// operator's default input list does not mention — the card has to offer DP
+// anyway, or the panel can move that monitor somewhere it cannot return from.
 const MONITORS = { available: true, default_inputs: ['vga', 'hdmi1', 'hdmi2'],
   monitors: [
     { index: 1, desc: 'HP M32f FHD', position: 'LEFT',  x: 0,    y: 0,
       w: 1920, h: 1080, primary: true,  ddc: true, input_raw: 18, input: 'hdmi2', inputs: null },
-    { index: 0, desc: 'HP M32f FHD', position: 'RIGHT', x: 1920, y: 0,
+    { index: 2, desc: 'Generic PnP Monitor', position: 'CENTRE', x: 1920, y: 0,
+      w: 2560, h: 1440, primary: false, ddc: true, input_raw: 15, input: 'dp1', inputs: null },
+    { index: 0, desc: 'HP M32f FHD', position: 'RIGHT', x: 4480, y: 0,
       w: 1920, h: 1080, primary: false, ddc: true, input_raw: 17, input: 'hdmi1', inputs: null },
   ] };
 

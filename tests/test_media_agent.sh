@@ -11,6 +11,7 @@ python3 - "$repo_dir" <<'PY'
 import importlib.util
 import json
 import sys
+import time
 
 spec = importlib.util.spec_from_file_location(
     "media_agent", f"{sys.argv[1]}/linux/media-agent.py")
@@ -19,12 +20,18 @@ spec.loader.exec_module(ma)
 
 failures = []
 
+# The capabilities probe spawns a background thread and is exercised on its own
+# at the end. Everywhere else it is stubbed off, so no probe races an assertion
+# or leaves a cached answer behind for the next section to trip over.
+real_cached_inputs = ma._cached_inputs
+ma._cached_inputs = lambda bus: None
+
 
 def detect(text):
     """Run _detect() with ddcutil stubbed to return `text`."""
     ma._buses = None
     ma._last_error = None
-    ma._ddcutil = lambda args, timeout=10: text
+    ma._ddcutil = lambda args, timeout=10, quiet=False: text
     return ma._detect()
 
 
@@ -70,9 +77,9 @@ check("no displays", detect(""), [])
 # there would keep SCREENS dark until someone restarted the service.
 ma._buses = None
 ma._last_error = None
-ma._ddcutil = lambda args, timeout=10: ""
+ma._ddcutil = lambda args, timeout=10, quiet=False: ""
 ma._detect()
-ma._ddcutil = lambda args, timeout=10: """Display 1
+ma._ddcutil = lambda args, timeout=10, quiet=False: """Display 1
    I2C bus:  /dev/i2c-3
    Monitor:  DEL:DELL:X
 """
@@ -82,7 +89,7 @@ if ma._detect() != [{"bus": "3", "model": "DELL", "connector": ""}]:
 # An empty monitor list has to say why, or a blank SCREENS is undiagnosable.
 ma._buses = None
 ma._last_error = "ddcutil: permission denied opening /dev/i2c-4"
-ma._ddcutil = lambda args, timeout=10: ""
+ma._ddcutil = lambda args, timeout=10, quiet=False: ""
 payload = ma.monitors()
 if payload.get("monitors") != []:
     failures.append(f"expected no monitors, got {payload}")
@@ -107,7 +114,7 @@ class _Ran:
 def monitors_with(xrandr, buses):
     ma._buses = [dict(b) for b in buses]
     ma._last_error = None
-    ma._ddcutil = lambda args, timeout=10: "VCP 60 SNC x12"
+    ma._ddcutil = lambda args, timeout=10, quiet=False: "VCP 60 SNC x12"
     if xrandr is None:
         def boom(*a, **k):
             raise FileNotFoundError("xrandr")
@@ -171,7 +178,7 @@ def monitors_from(tool, text, env=None):
     """Only `tool` answers; every other display-server query fails."""
     ma._buses = [dict(b) for b in BUSES]
     ma._last_error = None
-    ma._ddcutil = lambda args, timeout=10: "VCP 60 SNC x12"
+    ma._ddcutil = lambda args, timeout=10, quiet=False: "VCP 60 SNC x12"
     ma.os.environ.pop("MON_ORDER", None)
     if env:
         ma.os.environ.update(env)
@@ -217,7 +224,7 @@ def switched_bus(index):
     """Which I2C bus does monitor_switch actually write to for this index?"""
     seen = []
 
-    def spy(args, timeout=10):
+    def spy(args, timeout=10, quiet=False):
         if args and args[0] == "setvcp":
             seen.append(args[args.index("--bus") + 1])
             return "ok"
@@ -232,7 +239,7 @@ def switched_bus(index):
 # where a renumbering bug is visible and an index-preserving sort is not.
 ma._buses = [dict(b) for b in BUSES]
 ma._last_error = None
-ma._ddcutil = lambda args, timeout=10: "VCP 60 SNC x12"
+ma._ddcutil = lambda args, timeout=10, quiet=False: "VCP 60 SNC x12"
 ma.subprocess.run = lambda *a, **k: _Ran(
     "DP-1 connected primary 1920x1080+0+0 (normal) 698mm x 392mm\n"
     "HDMI-1 connected 1920x1080+1920+0 (normal) 698mm x 392mm\n")
@@ -253,6 +260,67 @@ for card in cards:
 ma._buses = [dict(b) for b in BUSES]
 if sorted(switched_bus(-1)) != ["5", "6"]:
     failures.append("index -1 did not reach every monitor")
+
+# ── declared inputs ────────────────────────────────────────────────────────
+# Which inputs a card offers. Getting this wrong is not cosmetic: the panel
+# only draws buttons for inputs it believes exist, so an input left off the
+# list is an input the monitor cannot be brought back to from the touchscreen.
+
+caps = ma._parse_caps_inputs
+
+# The raw MCCS string, which is what --brief gives. Feature 14's values must
+# not be swallowed into feature 60's, or the panel offers colour presets as
+# though they were inputs.
+check("caps, inline MCCS", caps(
+    "(prot(monitor)type(lcd)model(S27)cmds(01 02 03)"
+    "vcp(02 04 14(01 05 08) 60(01 11 12 0F) AC B6)mswhql(1))"),
+    ["vga", "hdmi1", "hdmi2", "dp1"])
+
+# Codes this panel has no button for are dropped rather than rendered as a
+# button that cannot be pressed.
+check("caps, unknown code dropped", caps("vcp(60(01 21))"), ["vga"])
+
+# The pretty-printed form, which some ddcutil versions emit even with --brief.
+check("caps, pretty printed", caps("""Model: SAMSUNG
+VCP Features:
+   Feature: 60 (Input Source)
+      Values:
+         0f: DisplayPort-1
+         11: HDMI-1
+   Feature: 62 (Audio speaker volume)
+      Values:
+         01: Fixed
+"""), ["dp1", "hdmi1"])
+
+# A monitor that answers but declares no input list at all is "unknown", which
+# the panel reads as "offer the operator's default" — never as "no inputs".
+check("caps, no feature 60", caps("vcp(02 04 10 12)"), None)
+check("caps, empty reply", caps(""), None)
+
+# The probe never blocks the response: the first call reports nothing and
+# starts the work, and a later poll gets the answer.
+ma._caps, ma._caps_asked = {}, set()
+ma._declared_inputs = lambda bus: ["dp1", "hdmi1"]
+check("first call does not block", real_cached_inputs("9"), None)
+for _ in range(200):
+    if "9" in ma._caps:
+        break
+    time.sleep(0.01)
+check("the probe lands in the cache", real_cached_inputs("9"), ["dp1", "hdmi1"])
+
+# A panel that refuses caches its refusal, so it is asked exactly once and
+# never again — the HP 32f takes about a minute to say no.
+asked = []
+ma._caps, ma._caps_asked = {}, set()
+ma._declared_inputs = lambda bus: asked.append(bus)
+real_cached_inputs("4")
+for _ in range(200):
+    if "4" in ma._caps:
+        break
+    time.sleep(0.01)
+real_cached_inputs("4")
+real_cached_inputs("4")
+check("a refusal is asked once, not every poll", asked, ["4"])
 
 if failures:
     print("FAIL: media-agent ddcutil parsing", file=sys.stderr)

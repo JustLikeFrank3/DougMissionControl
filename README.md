@@ -209,6 +209,14 @@ a number sitting there looking authoritative.
 button per input the panel declares. DDC/CI over whichever OS is booted:
 Windows answers through the sim agent, Linux through `media-agent.py`.
 
+Panels that won't declare their inputs — the HP 32f refuses the capabilities
+request outright — fall back to `MON_DEFAULT_INPUTS`, an operator-stated fact
+about this desk rather than a guess from a model table. Whatever that list
+says, the input a monitor is *observed on* is always offered too: a default
+written for two identical HPs mentions no DisplayPort, and without that rule
+the panel could move a third monitor to HDMI with no button anywhere to bring
+it back.
+
 ![SCREENS](docs/img/screens.png)
 
 **jobContext** — the pre-existing Grafana wallboard, framed as-is. Flight Deck
