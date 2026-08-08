@@ -21,8 +21,9 @@ export function npPoll(on) {
 export function npTick() {
   fetch('/api/media', { cache: 'no-store' })
     .then(function (r) { return r.json(); })
-    .then(paintNp)
-    .catch(function () { paintNp({ active: false }); });
+    // Fetch only — a paint exception must not be reported as a dead link.
+    .catch(function () { paintNp({ active: false }); return null; })
+    .then(function (d) { if (d) paintNp(d); });
 }
 
 export function paintNp(m) {

@@ -58,10 +58,14 @@ export function navPoll(on) {
 }
 
 export function navTick() {
+  // The catch covers the FETCH only. Wrapping the paint in it too means any
+  // exception while drawing gets repainted as "the link is down", which is a
+  // lie about a different machine and sends you debugging the agent. Same bug
+  // simTick had; it cost an evening there.
   fetch('/api/sim', { cache: 'no-store' })
     .then(function (r) { return r.json(); })
-    .then(paintNav)
-    .catch(function () { paintNav({ link: false }); });
+    .catch(function () { paintNav({ link: false }); return null; })
+    .then(function (d) { if (d) paintNav(d); });
 }
 
 /* Grow the plan from the GPS's observed legs. deck-api still owns the plan

@@ -31,8 +31,12 @@ export function dspPoll(on) {
 export function dspTick() {
   fetch('/api/monitor', { cache: 'no-store' })
     .then(function (r) { return r.json(); })
-    .then(paintDsp)
-    .catch(function () { paintDsp({ available: false, reason: 'deck-api unreachable' }); });
+    // Fetch only — a paint exception must not be reported as a dead link.
+    .catch(function () {
+      paintDsp({ available: false, reason: 'deck-api unreachable' });
+      return null;
+    })
+    .then(function (d) { if (d) paintDsp(d); });
 }
 
 export function paintDsp(d) {
