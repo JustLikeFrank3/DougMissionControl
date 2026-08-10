@@ -129,14 +129,26 @@ to the workstation's Linux boot. Substitute your own throughout.
 4. **BIOS**: enable "Resume by PCI-E/PME" (Wake on LAN) and **disable**
    ErP/EuP deep-off, or the NIC loses standby power at S5 and cold-boot
    wake silently fails.
-5. **Auto sign-in** (needed for a truly hands-free cold boot — the
+5. **Pin the workstation's IP** — DHCP reservation at the router, or a
+   static address in both OSes. A machine that is powered off cannot renew
+   or defend its DHCP lease, so the first genuinely cold night is when some
+   other gadget takes its address — and every probe, token callback and
+   agent call in this system dials a number a stranger now answers. Found
+   the hard way: an Echo took `.50` overnight and the panel called a
+   running workstation "off" while WOL woke it perfectly. Two subnet traps
+   while you are in there: mesh routers commonly hand out a **/22**, so a
+   `.255` broadcast address copied from a /24 example is just a
+   nonexistent host (the WOL sender now also unicasts for this reason),
+   and a hand-typed static mask of `255.255.255.0` on a /22 LAN recreates
+   the same bug one layer down.
+6. **Auto sign-in** (needed for a truly hands-free cold boot — the
    greeting and launches are logon-triggered): `netplwiz` → uncheck
    "Users must enter a user name and password". On Windows 11 that
    checkbox is hidden until you set
    `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device`
    → `DevicePasswordLessBuildVersion` = 0. Sysinternals Autologon also
    works and ignores the whole dance.
-6. **Alexa app**: "Alexa, discover devices" finds the virtual plugs
+7. **Alexa app**: "Alexa, discover devices" finds the virtual plugs
    (they appear under Plugs). Then More → Routines → **+** → When:
    *Voice* → your phrase → Action 1 *Alexa Says* (your Jarvis line) →
    Action 2 *Smart Home* → the device → **On**.

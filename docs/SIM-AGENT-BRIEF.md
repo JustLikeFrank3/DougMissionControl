@@ -26,7 +26,7 @@ Design notes in `docs/DESIGN.md`.
 | Host | Address | Runs |
 |---|---|---|
 | Pi (`Node1`) | `192.168.68.51` LAN · `192.168.101.2` direct link | `deck-api` on :8088, the panel, k3s + Prometheus + Grafana (jobContext's, untouched) |
-| Workstation, Windows | `192.168.68.50` | `boot-agent.ps1` on :9107, GPU exporter on :9106, MSFS 2024 |
+| Workstation, Windows | `192.168.71.50` (static — see the WOL note in the README) | `boot-agent.ps1` on :9107, GPU exporter on :9106, MSFS 2024 |
 | Workstation, Linux | `192.168.101.1` direct link | exporter on :9105/metrics |
 
 The workstation dual-boots. The Pi is the always-on node.
