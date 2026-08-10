@@ -218,7 +218,7 @@ internal static class Program
             };
         }
 
-        var sent = _sim.TransmitAsync(resolved.Event.Value, resolved.Data);
+        var sent = _sim.TransmitAsync(resolved.Event.Value, resolved.Data0, resolved.Data1);
         var done = await Task.WhenAny(sent, Task.Delay(TimeSpan.FromMilliseconds(500)));
         if (done != sent) return Reject("agent busy");
         if (!await sent) return Reject("sim not connected");
@@ -231,11 +231,11 @@ internal static class Program
         };
     }
 
-    private readonly record struct Resolved(Event? Event, uint Data, string? Reason);
+    private readonly record struct Resolved(Event? Event, uint Data0, uint Data1, string? Reason);
 
-    private static Resolved Invalid(string reason) => new(null, 0, reason);
-    private static Resolved Send(Event e, uint data = 0) => new(e, data, null);
-    private static readonly Resolved Noop = new(null, 0, null);
+    private static Resolved Invalid(string reason) => new(null, 0, 0, reason);
+    private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0) => new(e, data0, data1, null);
+    private static readonly Resolved Noop = new(null, 0, 0, null);
 
     /// <summary>
     /// Flight Deck vocabulary in, one sim event out.
@@ -339,7 +339,14 @@ internal static class Program
                 if (action == "mode") return Mode(value, s.ApAltLock, Event.ApAltHoldOn, Event.ApAltHoldOff);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var alt) || alt < 0 || alt > 60000) return Invalid("invalid value");
-                return Send(Event.ApAltVarSet, (uint)alt);
+                // The event's second argument selects the altitude slot.  A
+                // modern airliner may be tracking slots 1–3 instead of the
+                // legacy default (0); writing only the first argument can then
+                // be accepted by SimConnect while leaving the visible AP bug
+                // untouched.
+                var slot = (int)Math.Round(s.ApAltitudeSlotIndex);
+                if (slot < 0 || slot > 3) slot = 0;
+                return Send(Event.ApAltVarSet, (uint)alt, (uint)slot);
 
             case "ap_vs":
                 if (action == "mode") return Mode(value, s.ApVsHold, Event.ApVsHoldOn, Event.ApVsHoldOff);

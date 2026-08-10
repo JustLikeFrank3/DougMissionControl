@@ -278,6 +278,11 @@ internal static class Normalize
         || (int)Math.Round(a.ApAltFt) != (int)Math.Round(b.ApAltFt)
         || (int)Math.Round(a.ApVsFpm) != (int)Math.Round(b.ApVsFpm)
         || (int)Math.Round(a.ApSpdKt) != (int)Math.Round(b.ApSpdKt)
+        || Flag(a.ApHdgLock) != Flag(b.ApHdgLock)
+        || Flag(a.ApAltLock) != Flag(b.ApAltLock)
+        || Flag(a.ApVsHold) != Flag(b.ApVsHold)
+        || Flag(a.ApFlcActive) != Flag(b.ApFlcActive)
+        || Flag(a.ApIasHold) != Flag(b.ApIasHold)
         // Same reasoning for the comms drawer — a swap must land on the next frame.
         || Math.Abs(a.Com1ActMHz - b.Com1ActMHz) >= 0.001
         || Math.Abs(a.Com1SbyMHz - b.Com1SbyMHz) >= 0.001

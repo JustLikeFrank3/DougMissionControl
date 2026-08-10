@@ -160,6 +160,9 @@ internal struct SimStateRaw
     public double ApVsHold;
     public double ApFlcActive;
     public double ApIasHold;
+    // MSFS can keep several altitude references.  The AP follows this slot,
+    // so AP_ALT_VAR_SET_ENGLISH must receive it as its second parameter.
+    public double ApAltitudeSlotIndex;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -270,6 +273,8 @@ internal static class SimVars
         ("AUTOPILOT VERTICAL HOLD",       "Bool"),
         ("AUTOPILOT FLIGHT LEVEL CHANGE", "Bool"),
         ("AUTOPILOT AIRSPEED HOLD",       "Bool"),
+        // Appended only: StateVars and SimStateRaw are positional.
+        ("AUTOPILOT ALTITUDE SLOT INDEX",  "Number"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =

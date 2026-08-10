@@ -52,7 +52,7 @@ internal sealed class SimBridge : IDisposable
     /// assumed. Empty while offline.</summary>
     public string SimName => _simName;
 
-    private sealed record Command(Event Id, uint Data, TaskCompletionSource<bool> Result);
+    private sealed record Command(Event Id, uint Data0, uint Data1, TaskCompletionSource<bool> Result);
 
     public SimBridge()
     {
@@ -66,11 +66,11 @@ internal sealed class SimBridge : IDisposable
     /// the pump thread has actually transmitted it, false if there is no session
     /// or the transmit threw. True means "sent", never "it worked".
     /// </summary>
-    public Task<bool> TransmitAsync(Event id, uint data = 0)
+    public Task<bool> TransmitAsync(Event id, uint data0 = 0, uint data1 = 0)
     {
         if (!Connected) return Task.FromResult(false);
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _commands.Enqueue(new Command(id, data, tcs));
+        _commands.Enqueue(new Command(id, data0, data1, tcs));
         _simEvent.Set();   // wake the pump so the command does not wait on a frame
         return tcs.Task;
     }
@@ -230,8 +230,20 @@ internal sealed class SimBridge : IDisposable
 
             try
             {
-                _sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, cmd.Id, cmd.Data,
-                    Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+                // AP_ALT_VAR_SET_ENGLISH takes both an altitude and an altitude
+                // slot. The single-argument API silently writes the default
+                // slot, which is not necessarily the slot the aircraft tracks.
+                if (cmd.Id == Event.ApAltVarSet)
+                {
+                    _sim.TransmitClientEvent_EX1(SimConnect.SIMCONNECT_OBJECT_ID_USER, cmd.Id,
+                        Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY,
+                        cmd.Data0, cmd.Data1, 0, 0, 0);
+                }
+                else
+                {
+                    _sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, cmd.Id, cmd.Data0,
+                        Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+                }
                 cmd.Result.TrySetResult(true);
             }
             catch (COMException)

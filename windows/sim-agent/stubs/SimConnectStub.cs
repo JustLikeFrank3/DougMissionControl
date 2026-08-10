@@ -76,6 +76,8 @@ public class SimConnect : IDisposable
     public void SetNotificationGroupPriority(Enum GroupID, uint uPriority) { }
     public void RequestDataOnSimObject(Enum RequestID, Enum DefineID, uint ObjectID, SIMCONNECT_PERIOD Period, SIMCONNECT_DATA_REQUEST_FLAG Flags, uint origin, uint interval, uint limit) { }
     public void TransmitClientEvent(uint ObjectID, Enum EventID, uint dwData, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags) { }
+    public void TransmitClientEvent_EX1(uint ObjectID, Enum EventID, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags,
+        uint dwData0, uint dwData1, uint dwData2, uint dwData3, uint dwData4) { }
     public uint GetLastSentPacketID() => 0;
     public void ReceiveMessage() { }
     public void Dispose() { GC.SuppressFinalize(this); }
