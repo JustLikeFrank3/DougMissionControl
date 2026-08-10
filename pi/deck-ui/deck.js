@@ -25,6 +25,17 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
 
   var state = null;
 
+  // A transient line for the DECK foot. render() repaints the foot on every
+  // frame, so a one-off textContent write would survive less than a second -
+  // the notice has to outlive the next frame, not fight it.
+  var footMsg = '', footUntil = 0;
+  function footNotice(msg) {
+    footMsg = msg;
+    footUntil = Date.now() + 6000;
+    var f = $('foot');
+    if (f) f.textContent = msg;
+  }
+
   /* ── scale to fit ─────────────────────────────────────────────────────
      On the Edge the viewport is exactly 2560x720 and this is a no-op. */
   function fit() {
@@ -280,8 +291,8 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     var canOff = !boot.in_flight && (ws.os === 'windows' || ws.os === 'linux');
     $('shutdown').hidden = !canOff;
     if (canOff) $('shutdown-sub').textContent = ws.os.toUpperCase();
-    $('foot').textContent = boot.in_flight
-      ? 'a WOL packet already sent cannot be recalled'
+    $('foot').textContent = Date.now() < footUntil ? footMsg
+      : boot.in_flight ? 'a WOL packet already sent cannot be recalled'
       : 'hold to arm';
 
     // Workstation — only what the existing probes can honestly say.
@@ -352,7 +363,17 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
-  wireHold($('shutdown'), function () { post('/api/shutdown', {}); });
+  // A refused shutdown SAYS SO. The first field deployment had the panel
+  // updated and both boot agents not, so every hold was answered "the boot
+  // agent did not answer" - and the panel swallowed it, which reads as a
+  // broken button rather than a stale agent. The refusal goes to the foot
+  // line for a few seconds; render() honours the notice window.
+  wireHold($('shutdown'), function () {
+    post('/api/shutdown', {}).then(function (r) {
+      if (r && !r.ok && r.message) footNotice(r.message);
+      else if (!r) footNotice('deck-api did not answer');
+    });
+  });
   // The idle tiles drive the same endpoint through the same shape of call -
   // one implementation of "start a boot", two places to press it.
   wireIdle(function (intent) { post('/api/boot', { intent: intent }); });
