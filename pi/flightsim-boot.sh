@@ -98,14 +98,36 @@ linux_up() {
 pingable() { ping -c1 -W1 "$WS_LAN" >/dev/null 2>&1; }
 
 send_wol() {
-    python3 - "$WS_MAC" "$WS_BROADCAST" <<'PY'
+    # Three destinations, because one silently failed for the life of this
+    # project: WS_BROADCAST held x.x.68.255 while the router handed out a /22,
+    # whose real broadcast is x.x.71.255 - so the kernel treated it as an
+    # ordinary host, ARPed for a machine that does not exist, and the magic
+    # packet NEVER LEFT this Pi. Eight taps, zero frames on the wire, every
+    # machine-side check passing truthfully.
+    #
+    #   1. WS_BROADCAST     - the operator's stated broadcast, kept
+    #   2. 255.255.255.255  - the limited broadcast; needs no ARP, ever
+    #   3. WS_LAN unicast   - the copy PROVEN to reach the NIC on this
+    #      network. A powered-off machine cannot answer ARP, so the
+    #      neighbour entry is pinned first (root only; skipped quietly
+    #      otherwise - the broadcasts still go).
+    if [ "$(id -u)" = 0 ]; then
+        wol_iface=$(ip -o route get "$WS_LAN" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+        [ -n "$wol_iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" \
+            dev "$wol_iface" nud permanent 2>/dev/null || true
+    fi
+    python3 - "$WS_MAC" "$WS_BROADCAST" "$WS_LAN" <<'PY'
 import socket, sys
 mac = bytes.fromhex(sys.argv[1].replace(":", "").replace("-", ""))
 pkt = b"\xff" * 6 + mac * 16
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-for port in (9, 7):
-    s.sendto(pkt, (sys.argv[2], port))
+for dst in (sys.argv[2], "255.255.255.255", sys.argv[3]):
+    for port in (9, 7):
+        try:
+            s.sendto(pkt, (dst, port))
+        except OSError:
+            pass          # one refused destination must not cost the others
 PY
 }
 

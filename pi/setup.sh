@@ -166,8 +166,29 @@ RestartSec=10
 WantedBy=multi-user.target
 UNIT
 
+# Pin the workstation's neighbour entry at every Pi boot. The orchestrator
+# sends a unicast copy of the magic packet - the only copy proven to arrive
+# on this network - and a powered-off machine cannot answer ARP, so without
+# this pin the unicast frame has no destination MAC exactly when it matters.
+# Values come from boot.env at fire time, so correcting an address there
+# still needs no unit edit.
+sudo tee /etc/systemd/system/flightsim-neigh.service >/dev/null <<'UNIT'
+[Unit]
+Description=Pin the workstation neighbour entry for unicast Wake-on-LAN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; iface=$(ip -o route get "$WS_LAN" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" dev "$iface" nud permanent'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 sudo systemctl daemon-reload
 sudo systemctl enable fauxmo.service
+sudo systemctl enable --now flightsim-neigh.service
 sudo systemctl restart fauxmo.service
 sleep 2
 systemctl is-active fauxmo.service
