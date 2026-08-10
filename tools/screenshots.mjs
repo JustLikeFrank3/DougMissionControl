@@ -56,7 +56,7 @@ const FRAME = {
   mini: { up: true, ssh: true, screen: false, ip: '192.168.68.68', last_alive: now - 4 },
   surface: { active: 'deck', default: 'evals', previous: null, episode: 'boot',
              manual_in_episode: false,
-             all: ['deck', 'evals', 'nav', 'sim', 'displays', 'audio'] },
+             all: ['deck', 'evals', 'nav', 'sim', 'displays', 'audio', 'idle'] },
   // The jobContext surface is a frame around a Grafana wallboard that is NOT
   // part of this repo. Rendering it against a stand-in shows what Flight Deck
   // contributes — the sub-nav, AUTO pinning, the unreachable overlay — without
@@ -213,6 +213,7 @@ const SHOTS = [
   ['sim',     'sim',      'SIM — observed aircraft state and controls'],
   ['screens', 'displays', 'SCREENS — one card per monitor, DDC input switching'],
   ['audio',   'audio',     'AUDIO — now playing, and the workstation\'s real output spectrum'],
+  ['idle',    'idle',      'IDLE — the resting state: clock, boot tiles, three dots'],
   ['evals',   'evals',    'jobContext — the existing Grafana wallboard, framed'],
 ];
 

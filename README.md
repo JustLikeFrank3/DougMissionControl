@@ -236,6 +236,21 @@ position, which this panel refuses to do anywhere else.
 
 ![AUDIO](docs/img/audio.png)
 
+**IDLE** — the resting state, and the default surface: a clock, the boot
+tiles, and three status dots. The panel spends most of its life with nothing
+happening, and its previous default was the densest surface it has. Nothing
+here updates faster than once a second, nothing glows, and the only colour is
+the green of a machine that is actually up. The strip has no IDLE button on
+purpose — you do not navigate to rest, the panel returns there by itself.
+`DEFAULT_SURFACE=evals` in `boot.env` restores the old behaviour.
+
+A SHUT DOWN control lives on DECK beside ABORT — same hold-to-arm, amber
+rather than red, powering the workstation off through whichever OS is up
+(`/shutdown` on either boot agent). It hides during a boot, ABORT hides
+outside one, so the two never appear together and each keeps the full width.
+
+![IDLE](docs/img/idle.png)
+
 **jobContext** — the pre-existing Grafana wallboard, framed as-is. Flight Deck
 provisions no dashboards, stores no eval data, and contributes only the strip,
 the sub-nav built from Grafana's own dashboard list, and AUTO pinning.

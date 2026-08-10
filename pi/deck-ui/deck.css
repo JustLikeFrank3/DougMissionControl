@@ -199,8 +199,16 @@ html, body {
 /* justify-content: center overrides the flex-end the tiles share, which is
    there so a tile's name sits under its corner glyph. ABORT has no glyph, so
    flex-end just left it hanging at the bottom of a tall box. */
+.stoprow { display: flex; gap: 12px; flex: none; }
+.stoprow .abort { flex: 1; }
 .abort { height: 96px; flex: none; justify-content: center;
          border-color: var(--rd); color: var(--rd); }
+/* SHUTDOWN is deliberate, not alarming: amber, not the abort red. It ends a
+   session; it does not rescue one. */
+.abort.off { border-color: var(--am); color: var(--am); flex-direction: column;
+             gap: 4px; }
+.abort.off .hold { background: var(--am); }
+.abort.off .t-sub { font-size: 11px; letter-spacing: .14em; opacity: .8; }
 
 .tile .glyph {
   position: absolute; top: 14px; right: 14px; width: 34px; height: 34px;
@@ -627,6 +635,28 @@ html, body {
   .viz i::before, .viz i::after,
   .aud-viz i::before, .aud-viz i::after { transition: none; }
 }
+
+/* ── IDLE ──────────────────────────────────────────────────────────────────
+   The resting state. Muted almost everywhere on purpose: this is what the
+   panel shows all night, so nothing glows, nothing animates, and the only
+   colour is the green of a machine that is actually up. */
+.idle { display: flex; flex-direction: column; align-items: center; gap: 30px; }
+.idle-clock { font-size: 170px; line-height: 1; letter-spacing: .04em; }
+.idle-date { font-size: 22px; color: var(--mut); letter-spacing: .18em;
+             text-transform: uppercase; }
+.idle-tiles { display: flex; gap: 14px; margin-top: 10px; }
+.idletile { position: relative; overflow: hidden; width: 240px; padding: 20px 8px;
+            border: 1px solid var(--ln); background: transparent; color: var(--mut);
+            font-family: inherit; font-size: 16px; letter-spacing: .16em;
+            cursor: pointer; }
+.idletile.arming { border-color: var(--acc); color: var(--fg); }
+.idletile:disabled { opacity: .35; cursor: default; }
+.idle-fleet { display: flex; gap: 46px; margin-top: 14px; }
+.idle-host { display: flex; align-items: center; gap: 10px; font-size: 14px;
+             letter-spacing: .14em; color: var(--mut); }
+.idle-host i { width: 9px; height: 9px; border-radius: 50%; background: var(--ln); }
+.idle-host.up i { background: var(--gr); }
+.idle-host b { font-weight: 400; text-transform: uppercase; }
 
 /* ── AUDIO ─────────────────────────────────────────────────────────────────
    The reason this is a surface and not a widget: 2560 x 720 is a preposterous

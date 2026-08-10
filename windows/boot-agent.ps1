@@ -27,6 +27,7 @@ while ($true) {
     $client = $listener.AcceptTcpClient()
     $reboot = $false
     $launch = $false
+    $off = $false
     try {
         $stream = $client.GetStream()
         $stream.ReadTimeout = 3000
@@ -40,11 +41,17 @@ while ($true) {
         # Mirrors linux/boot-agent.py. Both are reads, so both stay open.
         if ($request -match '^GET /(status)?(\s|\?)') {
             $status = '200 OK'; $body = 'windows'
-        } elseif ($request -match '^GET /(reboot|launch)\?token=([^ ]+)') {
+        } elseif ($request -match '^GET /(reboot|launch|shutdown)\?token=([^ ]+)') {
             if ($token -and ($Matches[2] -ceq $token)) {
                 $status = '200 OK'
-                if ($Matches[1] -eq 'reboot') { $body = 'rebooting'; $reboot = $true }
-                else { $body = 'launching'; $launch = $true }
+                # /shutdown, not just /reboot. The panel could start this
+                # machine and send it to the other OS but never stop it, so the
+                # desk had a touchscreen that could only ever turn things ON.
+                switch ($Matches[1]) {
+                    'reboot'   { $body = 'rebooting';    $reboot = $true }
+                    'launch'   { $body = 'launching';    $launch = $true }
+                    'shutdown' { $body = 'powering off'; $off    = $true }
+                }
             } else {
                 $status = '403 Forbidden'; $body = 'forbidden'
             }
@@ -59,5 +66,8 @@ while ($true) {
     } catch { } finally { $client.Close() }
 
     if ($reboot) { & shutdown /r /t 5 /f }
+    # /t 5 like the reboot: long enough for the reply to leave the wire, short
+    # enough that nobody wonders whether the tap registered.
+    if ($off) { & shutdown /s /t 5 /f }
     if ($launch) { Start-ScheduledTask -TaskName 'JarvisGreeting' }
 }

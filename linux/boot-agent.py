@@ -5,6 +5,7 @@
 #
 #   GET /status                  -> 200 "linux"
 #   GET /reboot?token=<token>    -> 200 "rebooting", then boot-to-windows
+#   GET /shutdown?token=<token>  -> 200 "powering off", then systemctl poweroff
 #
 # Token: first line of /etc/flightsim/boot-agent.token (created by
 # linux/setup.sh, mirrored into /etc/flightsim/boot.env on the Pi as
@@ -23,6 +24,10 @@ from urllib.parse import parse_qs, urlparse
 PORT = int(os.environ.get("FLIGHTSIM_BOOT_PORT", "9108"))
 # Overridable so tests can exercise the auth matrix without rebooting.
 BOOT_CMD = os.environ.get("FLIGHTSIM_BOOT_CMD", "/usr/local/bin/boot-to-windows")
+# Same override, same reason: a test must be able to exercise the auth matrix
+# without taking the machine down.
+POWEROFF_CMD = os.environ.get(
+    "FLIGHTSIM_POWEROFF_CMD", "/usr/bin/systemctl poweroff -i").split()
 TOKEN_FILE = os.environ.get("FLIGHTSIM_TOKEN_FILE", "/etc/flightsim/boot-agent.token")
 
 
@@ -56,22 +61,26 @@ class BootHandler(BaseHTTPRequestHandler):
             self._respond(200, "linux")
             return
 
-        if parsed.path == "/reboot":
+        # /shutdown, not just /reboot. The panel could start this machine and
+        # send it to the other OS but never stop it, so the desk was left with
+        # a touchscreen that could only ever turn things ON.
+        if parsed.path in ("/reboot", "/shutdown"):
             token = read_token()
             supplied = parse_qs(parsed.query).get("token", [""])[0]
             if not token or not hmac.compare_digest(supplied, token):
                 self._respond(403, "forbidden")
                 return
-            # Answer before rebooting: boot-to-windows calls `systemctl
-            # reboot -i`, which can take the machine down before a response
-            # written afterwards ever reaches the caller.
-            self._respond(200, "rebooting")
+            off = parsed.path == "/shutdown"
+            # Answer BEFORE acting: both commands can take the machine down
+            # before a response written afterwards ever reaches the caller.
+            self._respond(200, "powering off" if off else "rebooting")
             try:
                 self.wfile.flush()
             except OSError:
                 pass
             subprocess.Popen(
-                [BOOT_CMD], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                POWEROFF_CMD if off else [BOOT_CMD],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             return
 

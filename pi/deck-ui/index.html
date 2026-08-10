@@ -84,9 +84,20 @@
             </button>
           </div>
 
-          <button class="abort" id="abort" hidden>
-            <span class="t-name">ABORT</span><span class="hold"></span>
-          </button>
+          <!-- ABORT and SHUTDOWN share the row because they share a moment:
+               one exists only while a boot is in flight, the other only while
+               a machine is up and no boot is in flight. deck.js enforces that
+               they are never visible together, so each gets the full width
+               it had before the other existed. -->
+          <div class="stoprow">
+            <button class="abort" id="abort" hidden>
+              <span class="t-name">ABORT</span><span class="hold"></span>
+            </button>
+            <button class="abort off" id="shutdown" hidden>
+              <span class="t-name">SHUT DOWN</span><span class="t-sub" id="shutdown-sub"></span>
+              <span class="hold"></span>
+            </button>
+          </div>
 
           <!-- Now-playing, from whichever OS is up. Replaces the old MEDIA
                surface: album art never needed 2560 px. Reads observed playback
@@ -306,6 +317,25 @@
           </div>
         </div>
         <div class="dsp" id="dsp-live" hidden></div>
+      </section>
+
+      <!-- IDLE — the resting state. A clock, the boot tiles, and three status
+           dots. This is what the desk looks like when nothing is happening,
+           which is most of the time, so it is deliberately the quietest thing
+           this panel can draw: nothing on it updates faster than once a
+           second, and nothing on it is red unless something really is. -->
+      <section class="surface body-plain" data-name="idle">
+        <div class="idle">
+          <div class="idle-clock" id="idle-clock">--:--</div>
+          <div class="idle-date" id="idle-date"></div>
+          <div class="idle-tiles" id="idle-tiles">
+            <button class="idletile" data-intent="sim">FLIGHT SIM<i class="hold"></i></button>
+            <button class="idletile" data-intent="squadrons">SQUADRONS<i class="hold"></i></button>
+            <button class="idletile" data-intent="plain">WINDOWS<i class="hold"></i></button>
+            <button class="idletile" data-intent="code">LINUX<i class="hold"></i></button>
+          </div>
+          <div class="idle-fleet" id="idle-fleet"></div>
+        </div>
       </section>
 
       <!-- AUDIO — what is playing, and what it actually sounds like.

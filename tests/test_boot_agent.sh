@@ -22,6 +22,7 @@ chmod 755 "$tmpdir/fake-boot"
 FLIGHTSIM_BOOT_PORT="$port" \
 FLIGHTSIM_TOKEN_FILE="$tmpdir/token" \
 FLIGHTSIM_BOOT_CMD="$tmpdir/fake-boot" \
+FLIGHTSIM_POWEROFF_CMD="$tmpdir/fake-boot" \
     python3 "$repo_dir/linux/boot-agent.py" >"$tmpdir/agent.log" 2>&1 &
 agent_pid=$!
 
@@ -44,6 +45,13 @@ code() { curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$
 [ ! -f "$tmpdir/boot-calls" ] || fail "a rejected request ran the boot command"
 
 [ "$(code '/reboot?token=test-token-abc123')" = 200 ] || fail "a good token must be 200"
+
+# /shutdown holds the same auth line as /reboot: powering a machine off is not
+# less sensitive than rebooting it, and a stub stands in for systemctl so a
+# passing test does not power anything down.
+[ "$(code /shutdown)" = 403 ]                          || fail "/shutdown with no token must be 403"
+[ "$(code '/shutdown?token=wrong')" = 403 ]            || fail "/shutdown with a wrong token must be 403"
+[ "$(code '/shutdown?token=test-token-abc123')" = 200 ] || fail "/shutdown with a good token must be 200"
 for _ in $(seq 30); do
     [ -f "$tmpdir/boot-calls" ] && break
     sleep 0.1

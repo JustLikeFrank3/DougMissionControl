@@ -12,6 +12,7 @@ import { drawAllSparks } from './js/spark.js';
 import { dspPoll } from './js/screens.js';
 import { npPoll } from './js/media.js';
 import { vizPoll } from './js/viz.js';
+import { wireIdle, idlePoll, paintIdle } from './js/idle.js';
 import { navPoll, setNavPlan, setNavPlanDisabled } from './js/nav.js';
 import { wireNav } from './js/nav.js';
 import { simPoll, simSend, wireSim } from './js/sim.js';
@@ -81,6 +82,7 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     vizPoll(active === 'deck' || active === 'audio');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
+    idlePoll(active === 'idle');
   }
 
   function renderSimNav(s) {
@@ -227,6 +229,7 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     renderSurface(s);
     renderEvals(s);
     renderStrip(s);
+    paintIdle(s);
     renderSimNav(s);
     setNavPlan(s.nav_plan || []);   // deck-api owns the plan; SSE delivers it
     // Here, not in the NAV paint: that path only runs once the sim is feeding
@@ -267,6 +270,12 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
       t.disabled = !!boot.in_flight;
     });
     $('abort').hidden = !boot.in_flight;
+    // SHUTDOWN only when there is something to shut down and no boot to race:
+    // the same gate deck-api enforces, mirrored so the button is never an
+    // invitation to a 409.
+    var canOff = !boot.in_flight && (ws.os === 'windows' || ws.os === 'linux');
+    $('shutdown').hidden = !canOff;
+    if (canOff) $('shutdown-sub').textContent = ws.os.toUpperCase();
     $('foot').textContent = boot.in_flight
       ? 'a WOL packet already sent cannot be recalled'
       : 'hold to arm';
@@ -339,6 +348,10 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
+  wireHold($('shutdown'), function () { post('/api/shutdown', {}); });
+  // The idle tiles drive the same endpoint through the same shape of call -
+  // one implementation of "start a boot", two places to press it.
+  wireIdle(function (intent) { post('/api/boot', { intent: intent }); });
 
 
   // Same hold-to-confirm as the boot tiles. wireHold already refuses a

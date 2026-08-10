@@ -127,6 +127,10 @@ AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 # windows/sim-agent — the SimConnect owner, on its own port and its own token.
 # Windows-only by construction, and gone whenever MSFS is not running. Both are
 # normal operation, so neither is reported as a fault.
+# The Linux boot agent, so the panel can stop that OS as well as start it.
+# deck-api knew only the Windows one until there was a reason to.
+LINUX_AGENT_PORT = int(cfg("LINUX_AGENT_PORT", "9108"))
+LINUX_AGENT_TOKEN = cfg("LINUX_AGENT_TOKEN", "")
 SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
 SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
 # The Mac mini. Liveness only — it runs no exporter, so the card claims
@@ -207,10 +211,14 @@ except OSError:
 # macro deck, and its SendInput keystrokes never reached the game anyway.
 # nav rides the sim agent's /state (lat/lon/gs/track readouts) via /api/sim —
 # no new endpoint, the pass-through already carries it.
-SURFACES = ("deck", "evals", "nav", "sim", "displays", "audio")
-DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "evals")
+SURFACES = ("deck", "evals", "nav", "sim", "displays", "audio", "idle")
+# idle is the resting state: a clock and the boot tiles, nothing that updates
+# faster than once a second. The panel spends most of its life with nothing
+# happening, and its previous default - a dense wallboard for a stack that has
+# since moved to cloud LLMs - meant maximum pixels at minimum relevance.
+DEFAULT_SURFACE = cfg("DEFAULT_SURFACE", "idle")
 if DEFAULT_SURFACE not in SURFACES:
-    DEFAULT_SURFACE = "evals"
+    DEFAULT_SURFACE = "idle"
 
 # Launch profiles the UI offers. Keys are the FLIGHT_INTENT values
 # windows/jarvis-greeting.ps1 already understands.
@@ -1333,6 +1341,35 @@ def fire_boot(target: str, intent: str) -> tuple[bool, str]:
     return True, "started"
 
 
+def fire_shutdown() -> tuple[bool, str]:
+    """Power the workstation off, through whichever OS is holding it.
+
+    Refused while a boot is in flight: the two would race, and there is
+    already a control for stopping a boot. ABORT stops a launch; this stops a
+    machine, and conflating them would make the more destructive one reachable
+    by accident.
+    """
+    os_now = DECK.state["workstation"]["os"]
+    if os_now == "off":
+        return False, "the workstation is already off"
+    if DECK.state["boot"]["in_flight"]:
+        return False, "a boot is in flight - abort it first"
+    if os_now == "windows":
+        if not AGENT_TOKEN:
+            return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
+        url = f"http://{WS_LAN}:{AGENT_PORT}/shutdown?token={AGENT_TOKEN}"
+    elif os_now == "linux":
+        if not LINUX_AGENT_TOKEN:
+            return False, "LINUX_AGENT_TOKEN unset in /etc/flightsim/boot.env"
+        url = f"http://{WS_LAN}:{LINUX_AGENT_PORT}/shutdown?token={LINUX_AGENT_TOKEN}"
+    else:
+        return False, f"nothing to shut down: workstation is {os_now}"
+    if http_ok(url, timeout=5):
+        DECK.event("deck", f"shutdown requested via the {os_now} agent")
+        return True, "powering off"
+    return False, "the boot agent did not answer"
+
+
 def fire_launch() -> tuple[bool, str]:
     if not AGENT_TOKEN:
         return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
@@ -1498,6 +1535,10 @@ class Handler(BaseHTTPRequestHandler):
             target = str(body.get("target")
                          or PROFILES.get(intent, {}).get("target") or "windows")
             ok, msg = fire_boot(target, intent)
+            return self._json(200 if ok else 409, {"ok": ok, "message": msg})
+
+        if path == "/api/shutdown":
+            ok, msg = fire_shutdown()
             return self._json(200 if ok else 409, {"ok": ok, "message": msg})
 
         if path == "/api/launch":
