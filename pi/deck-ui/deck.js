@@ -68,6 +68,10 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
 
   function renderSurface(s) {
     var active = (s.surface && s.surface.active) || 'evals';
+    // HOME follows the configured default. idle has no strip button, so HOME
+    // is the only touch route back to it.
+    var home = $('home-btn');
+    if (home && s.surface && s.surface.default) home.dataset.surface = s.surface.default;
     [].forEach.call(document.querySelectorAll('.surface'), function (el) {
       el.classList.toggle('on', el.dataset.name === active);
     });

@@ -42,7 +42,11 @@
         <span id="clock">--:--</span>
       </div>
 
-      <button class="home" data-surface="deck">HOME</button>
+      <!-- HOME goes to the DEFAULT surface, not DECK. The default (idle)
+           has no strip button of its own, so without this there is no way
+           back to it by touch at all. The dataset is retargeted from each
+           frame in case boot.env moves the default. -->
+      <button class="home" id="home-btn" data-surface="idle">HOME</button>
     </header>
 
     <!-- ══ surfaces ══ -->
@@ -51,10 +55,23 @@
       <!-- ─────────── DECK ─────────── -->
       <section class="surface body-deck" data-name="deck">
         <div class="rail">
-          <div class="state" id="state-card">
-            <span class="pill" id="state-pill">CONNECTING</span>
-            <div class="os" id="state-os">—</div>
-            <div class="meta" id="state-meta">waiting for deck-api</div>
+          <!-- SHUT DOWN shares the status card's row, not the tiles' space:
+               it is a state-adjacent control (it ends whatever the card says
+               is running), and parking it under the tiles read as a fifth
+               boot option in warning colours. ABORT keeps its own full-width
+               slab below - its obtrusiveness is the point, and it only
+               exists while a boot is in flight. -->
+          <div class="staterow">
+            <div class="state" id="state-card">
+              <span class="pill" id="state-pill">CONNECTING</span>
+              <div class="os" id="state-os">—</div>
+              <div class="meta" id="state-meta">waiting for deck-api</div>
+            </div>
+            <button class="offbtn" id="shutdown" hidden>
+              <span class="t-name">SHUT<br>DOWN</span>
+              <span class="t-sub" id="shutdown-sub"></span>
+              <span class="hold"></span>
+            </button>
           </div>
 
           <div class="tiles" id="tiles">
@@ -84,20 +101,9 @@
             </button>
           </div>
 
-          <!-- ABORT and SHUTDOWN share the row because they share a moment:
-               one exists only while a boot is in flight, the other only while
-               a machine is up and no boot is in flight. deck.js enforces that
-               they are never visible together, so each gets the full width
-               it had before the other existed. -->
-          <div class="stoprow">
-            <button class="abort" id="abort" hidden>
-              <span class="t-name">ABORT</span><span class="hold"></span>
-            </button>
-            <button class="abort off" id="shutdown" hidden>
-              <span class="t-name">SHUT DOWN</span><span class="t-sub" id="shutdown-sub"></span>
-              <span class="hold"></span>
-            </button>
-          </div>
+          <button class="abort" id="abort" hidden>
+            <span class="t-name">ABORT</span><span class="hold"></span>
+          </button>
 
           <!-- Now-playing, from whichever OS is up. Replaces the old MEDIA
                surface: album art never needed 2560 px. Reads observed playback
