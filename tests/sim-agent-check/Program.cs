@@ -141,6 +141,13 @@ Expect("ap mode with a bad value", Call("ap_spd", "mode", "maybe", apOff, baron)
 /* ── the bugs themselves ──────────────────────────────────────────────────── */
 
 Expect("ap_spd set 165", Call("ap_spd", "set", "165", apOff, baron), "ApSpdVarSet data=165");
+Expect("ap_spd set_mach scales to hundredths", Call("ap_spd", "set_mach", "0.85", apOff, baron), "ApMachVarSet data=85");
+Expect("ap_spd set_mach beyond the window", Call("ap_spd", "set_mach", "1.4", apOff, baron), "REJECT(invalid value)");
+Expect("ap_spd ref mach is explicit", Call("ap_spd", "ref", "mach", apOff, baron), "ApMachRefOn data=0");
+Expect("ap_spd ref kt is explicit", Call("ap_spd", "ref", "kt", apOff, baron), "ApMachRefOff data=0");
+var machRef = MakeState(("ApSpeedIsMach", 1));
+Expect("ap_spd ref toggle leaves mach", Call("ap_spd", "ref", "toggle", machRef, baron), "ApMachRefOff data=0");
+Expect("ap_spd ref toggle enters mach", Call("ap_spd", "ref", "toggle", apOff, baron), "ApMachRefOn data=0");
 Expect("ap_hdg set wraps past 360", Call("ap_hdg", "set", "370", apOff, baron), "HeadingBugSet data=10");
 Expect("ap_hdg set wraps negative", Call("ap_hdg", "set", "-10", apOff, baron), "HeadingBugSet data=350");
 Expect("ap_alt above the ceiling", Call("ap_alt", "set", "70000", apOff, baron), "REJECT(invalid value)");
@@ -167,6 +174,11 @@ Expect("ap_vs publishes its mode", Mode(apOn, "ap_vs"), "on");
 Expect("ap_spd reads FLC", Mode(apOn, "ap_spd"), "on");
 Expect("ap_spd also reads IAS hold", Mode(iasOnly, "ap_spd"), "on");
 Expect("ap_spd off when neither is set", Mode(apOff, "ap_spd"), "off");
+
+var machCtl = (JsonObject)controls.Invoke(null,
+    new object[] { MakeState(("ApSpeedIsMach", 1), ("ApMachVar", 0.8449)), baron });
+Expect("ap_spd publishes the mach reference",
+    machCtl["ap_spd"]["ref"] + " " + machCtl["ap_spd"]["mach"], "mach 0.845");
 
 // No autopilot, no bugs at all — the panel greys the tiles by their absence.
 var noAp = (JsonObject)controls.Invoke(null, new[] { apOn, MakeCaps() });

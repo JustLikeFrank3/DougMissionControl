@@ -153,6 +153,10 @@ internal static class Normalize
                 { ["fpm"] = (int)Math.Round(s.ApVsFpm), ["mode"] = Mode(s.ApVsHold) };
             controls["ap_spd"] = new JsonObject
                 { ["kt"] = (int)Math.Round(s.ApSpdKt),
+                  ["mach"] = Math.Round(s.ApMachVar, 3),
+                  // Which reference the speed window is flying — the MCP
+                  // changeover, observed, so the panel never guesses units.
+                  ["ref"] = Flag(s.ApSpeedIsMach) ? "mach" : "kt",
                   ["mode"] = Flag(s.ApFlcActive) || Flag(s.ApIasHold) ? "on" : "off" };
         }
 

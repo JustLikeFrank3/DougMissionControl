@@ -92,6 +92,9 @@ internal enum Event
     XpdrIdent,
     BaroSet,
     HeadingSlotSet,
+    ApMachVarSet,
+    ApMachRefOn,
+    ApMachRefOff,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -188,6 +191,10 @@ internal struct SimStateRaw
     // Local magnetic variation (east positive), so a true bearing computed
     // from lat/lon can be shown against the magnetic compass rose.
     public double MagVarDeg;
+    // The MCP speed changeover: which reference the window is flying, and
+    // the mach bug itself — a separate bug from the knots one in the sim.
+    public double ApMachVar;
+    public double ApSpeedIsMach;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -339,6 +346,8 @@ internal static class SimVars
         ("GENERAL ENG RPM:4",              "Rpm"),
         ("AIRSPEED MACH",                  "Mach"),
         ("MAGVAR",                         "Degrees"),
+        ("AUTOPILOT MACH HOLD VAR",        "Number"),
+        ("AUTOPILOT MANAGED SPEED IN MACH", "Bool"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -407,6 +416,10 @@ internal static class SimVars
         // autothrottle that means PITCH, not throttle: the aeroplane trades
         // altitude for the speed you asked for.
         (Event.ApFlcToggle,      "FLIGHT_LEVEL_CHANGE"),
+        // The MCP speed changeover and the mach bug it reveals.
+        (Event.ApMachVarSet,     "AP_MACH_VAR_SET"),
+        (Event.ApMachRefOn,      "AP_MANAGED_SPEED_IN_MACH_ON"),
+        (Event.ApMachRefOff,     "AP_MANAGED_SPEED_IN_MACH_OFF"),
         // Radios take Hz — the _HZ family avoids the BCD encoding entirely.
         (Event.Com1StbySet,      "COM_STBY_RADIO_SET_HZ"),
         (Event.Com1Swap,         "COM_STBY_RADIO_SWAP"),

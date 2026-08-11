@@ -82,7 +82,9 @@ function simObserved(control, c) {
   var hash = control.indexOf('#');
   if (hash > 0) {
     var base = control.slice(0, hash);
-    return c[base] ? c[base].mode || null : null;
+    var fld = control.slice(hash + 1);
+    if (!c[base]) return null;
+    return fld === 'ref' ? c[base].ref || null : c[base].mode || null;
   }
   if (control === 'gear') return c.gear ? c.gear.state : null;
   if (control === 'flaps') return c.flaps ? String(c.flaps.index) : null;
@@ -94,7 +96,14 @@ function simObserved(control, c) {
   if (control === 'xpdr') return c.xpdr ? c.xpdr.code : null;
   if (control === 'baro') return c.baro ? c.baro.inhg.toFixed(2) : null;
   var ap = AP_VARS[control];
-  if (ap) return c[control] ? String(c[control][ap.field]) : null;
+  if (ap) {
+    if (!c[control]) return null;
+    // After the changeover the speed window IS the mach bug — confirming a
+    // mach set against the knots figure would wait forever.
+    if (control === 'ap_spd' && c.ap_spd.ref === 'mach')
+      return typeof c.ap_spd.mach === 'number' ? c.ap_spd.mach.toFixed(2) : null;
+    return String(c[control][ap.field]);
+  }
   return null;
 }
 
@@ -104,7 +113,7 @@ export function simSend(control, action, value) {
   // A mode toggle gets its own pending slot: it and the bug it belongs to are
   // different things to wait on, and sharing a key made the later one erase
   // the earlier one's PENDING without either having landed.
-  var key = action === 'mode' ? control + '#mode' : control;
+  var key = action === 'mode' || action === 'ref' ? control + '#' + action : control;
   // `from` is what it looked like when we asked — the fallback for the few
   // commands whose landing position cannot be known up front.
   simPending[key] = { id: id, want: value || null,
@@ -303,7 +312,11 @@ export function paintSim(d) {
     $('simv-apvs').textContent = (c.ap_vs.fpm > 0 ? '+' : '') + c.ap_vs.fpm;
   }
   if (simAvail('apspd', !!c.ap_spd)) {
-    $('simv-apspd').textContent = c.ap_spd.kt;
+    var machRef = c.ap_spd.ref === 'mach';
+    $('simv-apspd').textContent = machRef
+      ? (typeof c.ap_spd.mach === 'number' ? 'M' + c.ap_spd.mach.toFixed(2).slice(1) : '—')
+      : c.ap_spd.kt;
+    $('simu-apspd').textContent = machRef ? 'MACH' : 'KT';
   }
   simPaintModes(c);
 
@@ -467,8 +480,23 @@ export function wireSim() {
       var ap = AP_VARS[ctl];
       var c = (simLast && simLast.controls) || {};
       if (!c[ctl]) return;
+      // Past the changeover the same buttons step hundredths of mach.
+      if (ctl === 'ap_spd' && c.ap_spd.ref === 'mach') {
+        var m = Math.min(0.99, Math.max(0.1,
+          (Number(c.ap_spd.mach) || 0.7) + Number(b.dataset.d) * 0.01));
+        simSend('ap_spd', 'set_mach', m.toFixed(2));
+        return;
+      }
       simSend(ctl, 'set', String(stepBug(c[ctl][ap.field], Number(b.dataset.d), ap)));
     });
+  });
+
+  // The MCP speed changeover. Explicit target from observed state, so a
+  // dropped command can only fail to change over, never invert it.
+  wireTap($('simb-spdco'), function () {
+    var spd = (simLast && simLast.controls || {}).ap_spd;
+    if (!spd) return;
+    simSend('ap_spd', 'ref', spd.ref === 'mach' ? 'kt' : 'mach');
   });
 
   // AP mode chips. A tap engages or disengages the mode that reads the bug
@@ -566,6 +594,12 @@ export function wireSim() {
     el.addEventListener('click', function () {
       var c = (simLast && simLast.controls) || {};
       if (!c[ctl]) return;                  // no autopilot, no pad
+      if (ctl === 'ap_spd' && c.ap_spd.ref === 'mach') {
+        showNumericInput({ title: 'AP SPD', unit: 'MACH', min: 0.1, max: 0.99,
+          decimals: 2, hint: 'MCP is in mach — C/O for knots',
+          onSet: function (v) { simSend('ap_spd', 'set_mach', v.toFixed(2)); } });
+        return;
+      }
       showNumericInput({ title: o.title, unit: o.unit, min: o.min, max: o.max,
         decimals: 0, allowNeg: !!o.allowNeg, hint: o.hint,
         onSet: function (v) { simSend(ctl, 'set', String(Math.round(v))); } });

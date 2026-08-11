@@ -614,7 +614,7 @@
                   <button class="simbtn" data-c="ap_vs" data-a="set_mode" data-v="off">OFF<i class="hold"></i></button>
                 </div>
               </div>
-              <div class="simt" id="simt-apspd"><h3>AP SPD</h3><span class="simt-u">KT</span>
+              <div class="simt" id="simt-apspd"><h3>AP SPD</h3><span class="simt-u" id="simu-apspd">KT</span>
                 <div class="simt-v" id="simv-apspd">—</div>
                 <button class="simmode" id="simm-apspd" hidden></button>
                 <div class="simnote" id="simn-apspd" hidden></div>
@@ -624,6 +624,10 @@
                   <button class="simstep" data-c="ap_spd" data-d="-1">&minus;1</button>
                   <button class="simstep" data-c="ap_spd" data-d="1">+1</button>
                   <button class="simstep" data-c="ap_spd" data-d="10">+10</button>
+                </div>
+                <!-- The MCP changeover: same window, different reference. -->
+                <div class="simcmd">
+                  <button class="simbtn" id="simb-spdco">KT ⇄ MACH</button>
                 </div>
               </div>
             </div>

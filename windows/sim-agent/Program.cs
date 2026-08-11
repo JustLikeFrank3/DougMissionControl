@@ -407,6 +407,25 @@ internal static class Program
                                 : On(s.ApAltLock) ? Event.ApAltHoldToggle : null);
                     return Mode(value, active ? 1 : 0, Event.ApFlcToggle, Event.ApFlcToggle);
                 }
+                if (action == "ref")
+                    return value switch
+                    {
+                        // Explicit and idempotent, same posture as ap_hdg.
+                        "mach" => Send(Event.ApMachRefOn),
+                        "kt" => Send(Event.ApMachRefOff),
+                        // From observed state, so a dropped frame can only
+                        // fail to change over — never invert it.
+                        "toggle" => Send(On(s.ApSpeedIsMach) ? Event.ApMachRefOff : Event.ApMachRefOn),
+                        _ => Invalid("invalid value"),
+                    };
+                if (action == "set_mach")
+                {
+                    if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var machBug)
+                        || machBug < 0.1 || machBug > 0.99) return Invalid("invalid value");
+                    // AP_MACH_VAR_SET takes hundredths. Step-0: verify on the 747-8i.
+                    return Send(Event.ApMachVarSet, (uint)Math.Round(machBug * 100));
+                }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
                 return Send(Event.ApSpdVarSet, (uint)spd);
