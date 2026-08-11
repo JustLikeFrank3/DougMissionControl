@@ -281,10 +281,10 @@
           <canvas id="navp-canvas"></canvas>
 
           <div class="navflight" aria-label="Primary flight readouts">
-            <div class="navflight-readout">
-              <span>IAS</span>
+            <div class="navflight-readout" id="navp-ias-tile">
+              <span>IAS · TAP</span>
               <strong id="navp-ias">—</strong>
-              <small>KT</small>
+              <small id="navp-ias-u">KT</small>
             </div>
             <div class="navflight-readout">
               <span>ALT</span>
@@ -662,7 +662,7 @@
               </div>
             </div>
             <div class="sim-reads">
-              <div class="simt"><h3>IAS</h3><span class="simt-u">KT</span>
+              <div class="simt" id="simt-ias-tile"><h3>IAS</h3><span class="simt-u">KT · TAP</span>
                 <div class="simt-v big" id="simv-ias">—</div></div>
               <div class="simt"><h3>ALT</h3><span class="simt-u">FT</span>
                 <div class="simt-v big" id="simv-alt">—</div></div>

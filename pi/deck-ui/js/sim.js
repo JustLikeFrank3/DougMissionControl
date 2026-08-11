@@ -7,7 +7,7 @@
    MSFS declined — over gear speed, on the ground, wrong aircraft — read as a
    failed command instead of a lie. */
 
-import { $, wireTap, wireHold, post } from './ui.js';
+import { $, wireTap, wireHold, post, speedUnit, speedUnitToggle, fmtMach } from './ui.js';
 import { fmtAgo } from './format.js';
 import { nextDetent, stepBug, atcHandoff } from './simmath.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
@@ -326,7 +326,11 @@ export function paintSim(d) {
   missionUpdate(d);
   paintMissionStrip();
   cxPaint(c, r);
-  $('simv-ias').textContent = r.ias_kt;
+  // KT or MACH is presentation, not data — the tap flips it everywhere.
+  var showMach = speedUnit() === 'mach' && typeof r.mach === 'number';
+  $('simv-ias').textContent = showMach ? fmtMach(r.mach) : r.ias_kt;
+  var iasUnit = document.querySelector('#simt-ias-tile .simt-u');
+  if (iasUnit) iasUnit.textContent = showMach ? 'MACH · TAP' : 'KT · TAP';
   $('simv-alt').textContent = r.alt_ft;
   $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
   // Bearing to the steer target, as a heading to fly. The bearing is true and
@@ -492,6 +496,9 @@ export function wireSim() {
       simSend(ctl, 'set', String(stepBug(c[ctl][ap.field], Number(b.dataset.d), ap)));
     });
   });
+
+  // KT/MACH display toggle — shared with NAV via the same stored preference.
+  wireTap($('simt-ias-tile'), function () { speedUnitToggle(); simTick(); });
 
   // The MCP speed changeover. Explicit target from observed state, so a
   // dropped command can only fail to change over, never invert it.

@@ -806,6 +806,8 @@ html, body {
 .navflight { position: absolute; z-index: 2; top: 16px; left: 448px;
              display: grid; grid-template-columns: repeat(3, 150px); gap: 8px;
              pointer-events: none; }
+/* The one readout that is also a control: tap flips KT/MACH. */
+#navp-ias-tile { pointer-events: auto; cursor: pointer; }
 .navflight-readout { height: 78px; display: grid;
                      grid-template-columns: 1fr auto; grid-template-rows: 18px 1fr;
                      padding: 9px 12px; border-left: 3px solid var(--cy);

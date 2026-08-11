@@ -9,7 +9,7 @@
    steer arrow is derived from observed track, and nothing here draws a
    commanded anything. */
 
-import { $, wireHold, post, getJSON } from './ui.js';
+import { $, wireHold, post, getJSON, speedUnit, speedUnitToggle, fmtMach } from './ui.js';
 import { fmtEte, fmtAgo, fmtDur, fmtClock } from './format.js';
 import { paintAtcCue } from './atc.js';
 import { calculateDescent } from './descent.js';
@@ -349,7 +349,9 @@ export function paintNav(d) {
   }
   $('navp-trk').textContent = ('00' + (r.trk_true || 0)).slice(-3) + '°T · ' + r.gs_kt + ' kt';
   $('navp-alt').textContent = r.alt_ft + ' ft · ' + r.ias_kt + ' kt ias';
-  $('navp-ias').textContent = Number(r.ias_kt).toLocaleString();
+  var navMach = speedUnit() === 'mach' && typeof r.mach === 'number';
+  $('navp-ias').textContent = navMach ? fmtMach(r.mach) : Number(r.ias_kt).toLocaleString();
+  $('navp-ias-u').textContent = navMach ? 'MACH' : 'KT';
   $('navp-flight-alt').textContent = Number(r.alt_ft).toLocaleString();
   paintSpeedTarget(st, r);
 
@@ -836,6 +838,8 @@ function navSetZoom(zOrNull) {
 }
 
 export function wireNav() {
+  // Presentation toggle only — repaints on the next poll tick.
+  $('navp-ias-tile').addEventListener('click', function () { speedUnitToggle(); navTick(); });
   navKbdBuild();   // the on-screen keyboard: this panel has no physical keys
   // NAV zoom. Steps start from wherever the auto-fit currently sits, so the
   // first tap nudges rather than jumps; FIT hands framing back to auto.

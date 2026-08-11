@@ -112,3 +112,23 @@ export function getJSON(path) {
     .then(function (r) { return r.json(); })
     .catch(function () { return null; });
 }
+
+/* Display preference: show airspeed as KT or MACH. Presentation only — it
+   never touches a command — so it lives here and survives a kiosk reload. */
+var spdUnit = null;
+export function speedUnit() {
+  if (spdUnit === null) {
+    try { spdUnit = localStorage.getItem('deck-spd-unit') || 'kt'; }
+    catch (e) { spdUnit = 'kt'; }
+  }
+  return spdUnit;
+}
+export function speedUnitToggle() {
+  spdUnit = speedUnit() === 'kt' ? 'mach' : 'kt';
+  try { localStorage.setItem('deck-spd-unit', spdUnit); } catch (e) { /* tmpfs kiosk */ }
+  return spdUnit;
+}
+/** "M.85" from 0.8449, or a dash when the agent predates mach. */
+export function fmtMach(mach) {
+  return typeof mach === 'number' ? 'M' + mach.toFixed(2).slice(1) : '—';
+}
