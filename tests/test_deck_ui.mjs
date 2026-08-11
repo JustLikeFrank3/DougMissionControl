@@ -19,6 +19,7 @@ const geo = await import(pathToFileURL(path.join(UI, 'geo.js')));
 const { createSeries } = await import(pathToFileURL(path.join(UI, 'series.js')));
 const sim = await import(pathToFileURL(path.join(UI, 'simmath.js')));
 const descent = await import(pathToFileURL(path.join(UI, 'descent.js')));
+const spd = await import(pathToFileURL(path.join(UI, 'speedprofile.js')));
 const nav = await import(pathToFileURL(path.join(UI, 'nav.js')));
 
 let passed = 0;
@@ -379,6 +380,52 @@ test('the heading bug wraps and the rest clamp', () => {
   const vs = { min: -8000, max: 8000 };
   assert.equal(sim.stepBug(-500, -500, vs), -1000, 'a descent bug goes further negative');
   assert.equal(sim.stepBug(-7900, -500, vs), -8000);
+});
+
+/* ── speed profiles ─────────────────────────────────────────── */
+
+test('profiles match by title and unknown airframes get no advice', () => {
+  assert.equal(spd.speedProfile('747-8i').name, '747');
+  assert.equal(spd.speedProfile('Salty Boeing 747-8').name, '747');
+  assert.equal(spd.speedProfile('Cessna CJ4 Citation').name, 'CJ4');
+  assert.equal(spd.speedProfile('Cessna 152'), null, 'no profile beats a wrong one');
+  assert.equal(spd.speedProfile(null), null);
+});
+
+test('the 747 climb schedule: 250 below 10k, 290 to transition, then Mach', () => {
+  const p = spd.speedProfile('747-8i');
+  assert.deepEqual(spd.speedTarget(p, 'CLIMB', 4000), { mode: 'KIAS', kt: 250 });
+  assert.deepEqual(spd.speedTarget(p, 'TAKEOFF', 1200), { mode: 'KIAS', kt: 250 });
+  assert.deepEqual(spd.speedTarget(p, 'CLIMB', 15000), { mode: 'KIAS', kt: 290 });
+  assert.deepEqual(spd.speedTarget(p, 'CLIMB', 31000), { mode: 'MACH', mach: 0.85 });
+  assert.deepEqual(spd.speedTarget(p, 'CRUISE', 35000), { mode: 'MACH', mach: 0.85 });
+});
+
+test('the descent schedule mirrors: Mach, then 280, then 250', () => {
+  const p = spd.speedProfile('747-8i');
+  assert.deepEqual(spd.speedTarget(p, 'DESCENT', 35000), { mode: 'MACH', mach: 0.85 });
+  assert.deepEqual(spd.speedTarget(p, 'DESCENT', 20000), { mode: 'KIAS', kt: 280 });
+  assert.deepEqual(spd.speedTarget(p, 'DESCENT', 8000), { mode: 'KIAS', kt: 250 });
+  assert.deepEqual(spd.speedTarget(p, 'APPROACH', 3000), { mode: 'KIAS', kt: 250 });
+});
+
+test('the schedule is silent on the ground and without an altitude', () => {
+  const p = spd.speedProfile('747-8i');
+  assert.equal(spd.speedTarget(p, 'TAXI', 600), null);
+  assert.equal(spd.speedTarget(p, 'RAMP', 600), null);
+  assert.equal(spd.speedTarget(p, null, 600), null);
+  assert.equal(spd.speedTarget(p, 'CLIMB', undefined), null);
+  assert.equal(spd.speedTarget(null, 'CLIMB', 5000), null);
+});
+
+test('deviation is signed, and never invented from a reading the mode lacks', () => {
+  const kias = { mode: 'KIAS', kt: 290 };
+  assert.deepEqual(spd.speedDeviation(kias, 171, undefined), { off: -119, unit: 'KT' });
+  assert.deepEqual(spd.speedDeviation(kias, 305, undefined), { off: 15, unit: 'KT' });
+  const mach = { mode: 'MACH', mach: 0.85 };
+  assert.deepEqual(spd.speedDeviation(mach, 250, 0.81), { off: -0.04, unit: 'MACH' });
+  assert.equal(spd.speedDeviation(mach, 250, undefined), null,
+    'an old agent sends no mach — no deviation, not a lie from IAS');
 });
 
 if (failures.length) {

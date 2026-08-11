@@ -452,6 +452,10 @@ html, body {
 /* Two engines on one line: "2410 / 2395" at 56px wraps, and a wrapped RPM
    reads like two stacked instruments. */
 .simt-v.big.twin { font-size: 30px; }
+/* Four engines need less again — a quad's figures matter as a set. */
+.simt-v.big.quad { font-size: 19px; }
+/* Waypoint bearing on the compass rose — a bug, not a command. */
+.rose-brg { fill: var(--cy); }
 .simt-s { margin-top: 8px; min-height: 1.1em; font-size: 14px;
           letter-spacing: .06em; color: var(--mut); }
 
@@ -800,7 +804,7 @@ html, body {
    already-full rail, and the dark instrument backing keeps terrain from
    changing their contrast. */
 .navflight { position: absolute; z-index: 2; top: 16px; left: 448px;
-             display: grid; grid-template-columns: repeat(2, 150px); gap: 8px;
+             display: grid; grid-template-columns: repeat(3, 150px); gap: 8px;
              pointer-events: none; }
 .navflight-readout { height: 78px; display: grid;
                      grid-template-columns: 1fr auto; grid-template-rows: 18px 1fr;
@@ -812,6 +816,12 @@ html, body {
                             line-height: 1; font-weight: 400; letter-spacing: 0; }
 .navflight-readout small { align-self: end; padding-bottom: 3px; color: var(--mut);
                            font-size: 11px; letter-spacing: .1em; }
+/* Off the schedule: the tile says so, it does not command a correction. */
+.navflight-readout.warn { border-left-color: var(--am); }
+.navflight-readout.warn small { color: var(--am); }
+/* KIAS → MACH announcement — brief, then back to the plain target. */
+.navflight-readout.switch { border-left-color: var(--fg); }
+.navflight-readout.switch span { color: var(--fg); }
 
 /* NAV zoom — big enough for fingers, clear of the waypoint drawer */
 .navmap { position: relative; }

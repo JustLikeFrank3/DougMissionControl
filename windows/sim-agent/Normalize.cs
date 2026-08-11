@@ -192,8 +192,12 @@ internal static class Normalize
     public static JsonObject Readouts(SimStateRaw s) => new()
     {
         ["ias_kt"] = (int)Math.Round(s.AirspeedIndicatedKt),
+        ["mach"] = Math.Round(s.AirspeedMach, 3),
         ["alt_ft"] = (int)Math.Round(s.IndicatedAltitudeFt),
         ["hdg_mag"] = (int)Math.Round(Heading(s.PlaneHeadingMagneticDeg)) % 360,
+        // East positive. Lets the panel place a true bearing on the magnetic
+        // rose without inventing a variation of its own.
+        ["magvar_deg"] = Math.Round(s.MagVarDeg, 1),
         // NAV. 5 decimal places is ~1 m — plenty for a wall map, small enough
         // not to churn the JSON with sub-metre noise every frame.
         ["lat"] = Math.Round(s.PlaneLatDeg, 5),
@@ -206,6 +210,13 @@ internal static class Normalize
         ["agl_ft"] = Math.Max(0, (int)Math.Round(s.PlaneAltitudeAboveGroundFt)),
         ["rpm_1"] = (int)Math.Round(s.EngRpm1),
         ["rpm_2"] = (int)Math.Round(s.EngRpm2),
+        // One entry per engine, same convention as throttles below — rpm_1/2
+        // stay for panels that predate quads.
+        ["rpms"] = new JsonArray(
+            new[] { s.EngRpm1, s.EngRpm2, s.EngRpm3, s.EngRpm4 }
+                .Take(Math.Clamp((int)Math.Round(s.EngineCount), 1, 4))
+                .Select(v => (JsonNode)(int)Math.Round(v))
+                .ToArray()),
         // One entry per engine the airframe has, in order. An array rather
         // than throttle_1..4 so the panel renders what it is given and a
         // single, a twin and a quad need no special cases anywhere.

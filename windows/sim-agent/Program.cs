@@ -345,7 +345,22 @@ internal static class Program
                 };
 
             case "ap_hdg":
-                if (action == "mode") return Mode(value, s.ApHdgLock, Event.ApHdgHoldOn, Event.ApHdgHoldOff);
+                if (action == "mode")
+                {
+                    // Not differ-guarded like the toggles: stock Boeings report
+                    // HEADING LOCK while LNAV owns the roll, so the guard read
+                    // real taps as already-done and transmitted nothing. These
+                    // events are explicit and idempotent — send regardless, and
+                    // point the heading slot back at the selected bug, which is
+                    // where airliner MCPs park it while a managed mode flies.
+                    return value switch
+                    {
+                        "on" => Send(Event.ApHdgHoldOn,
+                            followupEvent: Event.HeadingSlotSet, followupData: 1),
+                        "off" => Send(Event.ApHdgHoldOff),
+                        _ => Invalid("invalid value"),
+                    };
+                }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
                 return Send(Event.HeadingBugSet, (uint)(((hdg % 360) + 360) % 360));

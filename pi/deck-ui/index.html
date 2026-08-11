@@ -291,6 +291,14 @@
               <strong id="navp-flight-alt">—</strong>
               <small>FT</small>
             </div>
+            <!-- The schedule's target for a recognized airframe. Advisory,
+                 same posture as the descent card. Hidden for aircraft with
+                 no profile rather than guessed from the wrong handbook. -->
+            <div class="navflight-readout" id="navp-tgt-tile" hidden>
+              <span id="navp-tgt-cap">TGT</span>
+              <strong id="navp-tgt">—</strong>
+              <small id="navp-tgt-u">KT</small>
+            </div>
           </div>
 
           <section class="todcard cruise" id="tod-card" aria-label="Descent advisory" hidden>
@@ -655,7 +663,8 @@
               <div class="simt"><h3>ALT</h3><span class="simt-u">FT</span>
                 <div class="simt-v big" id="simv-alt">—</div></div>
               <div class="simt"><h3>HDG</h3><span class="simt-u">MAG</span>
-                <div class="simt-v big" id="simv-hdg">—</div></div>
+                <div class="simt-v big" id="simv-hdg">—</div>
+                <div class="simt-s" id="simv-hdg-tgt"></div></div>
               <div class="simt"><h3>V/S</h3><span class="simt-u">FPM</span>
                 <div class="simt-v big" id="simv-vs">—</div></div>
               <div class="simt"><h3>RPM</h3><span class="simt-u" id="simu-rpm"></span>

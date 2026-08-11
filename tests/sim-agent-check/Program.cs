@@ -111,10 +111,15 @@ var apOff = MakeState();
 var apOn = MakeState(("ApHdgLock", 1), ("ApAltLock", 1), ("ApVsHold", 1), ("ApFlcActive", 1));
 var iasOnly = MakeState(("ApIasHold", 1));
 
-Expect("ap_hdg mode on while off", Call("ap_hdg", "mode", "on", apOff, baron), "ApHdgHoldOn data=0");
-Expect("ap_hdg mode on while on", Call("ap_hdg", "mode", "on", apOn, baron), "NOOP");
+// Not differ-guarded: stock Boeings report HEADING LOCK while LNAV owns the
+// roll, which turned real taps into noops. Explicit events are idempotent, so
+// they transmit regardless, and ON re-aims the heading slot at the bug.
+Expect("ap_hdg mode on while off", Call("ap_hdg", "mode", "on", apOff, baron),
+    "ApHdgHoldOn data=0 then HeadingSlotSet data=1");
+Expect("ap_hdg mode on through a lying lock var", Call("ap_hdg", "mode", "on", apOn, baron),
+    "ApHdgHoldOn data=0 then HeadingSlotSet data=1");
 Expect("ap_hdg mode off while on", Call("ap_hdg", "mode", "off", apOn, baron), "ApHdgHoldOff data=0");
-Expect("ap_hdg mode off while off", Call("ap_hdg", "mode", "off", apOff, baron), "NOOP");
+Expect("ap_hdg mode off is explicit too", Call("ap_hdg", "mode", "off", apOff, baron), "ApHdgHoldOff data=0");
 Expect("ap_alt mode on", Call("ap_alt", "mode", "on", apOff, baron), "ApAltHoldToggle data=0");
 var apTargets = MakeState(("ApVsFpm", 500), ("ApSpdKt", 174));
 Expect("ap_vs mode on", Call("ap_vs", "mode", "on", apTargets, baron),
@@ -181,6 +186,18 @@ Expect("ATC invalid frequency stays absent", AtcNext(42), "absent");
 var aglReadouts = (JsonObject)readouts.Invoke(null,
     new[] { MakeState(("PlaneAltitudeAboveGroundFt", 843.6)) });
 Expect("AGL publishes observed height for takeoff phase", aglReadouts["agl_ft"].ToString(), "844");
+
+var quadReadouts = (JsonObject)readouts.Invoke(null, new[] { MakeState(
+    ("EngineCount", 4), ("EngRpm1", 900), ("EngRpm2", 905), ("EngRpm3", 910), ("EngRpm4", 915)) });
+Expect("rpms publishes one figure per engine", quadReadouts["rpms"].ToJsonString(), "[900,905,910,915]");
+var twinReadouts = (JsonObject)readouts.Invoke(null, new[] { MakeState(
+    ("EngineCount", 2), ("EngRpm1", 2410), ("EngRpm2", 2395), ("EngRpm3", 999)) });
+Expect("rpms stops at the engines the airframe has", twinReadouts["rpms"].ToJsonString(), "[2410,2395]");
+
+var machReadouts = (JsonObject)readouts.Invoke(null, new[] { MakeState(
+    ("AirspeedMach", 0.8449), ("MagVarDeg", -11.24)) });
+Expect("mach publishes rounded for the speed schedules", machReadouts["mach"].ToString(), "0.845");
+Expect("magvar publishes east-positive for the rose bug", machReadouts["magvar_deg"].ToString(), "-11.2");
 
 JsonObject WarningState(params (string, double)[] values) =>
     (JsonObject)warnings.Invoke(null, new[] { MakeState(values) });

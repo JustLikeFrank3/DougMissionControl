@@ -91,6 +91,7 @@ internal enum Event
     XpdrSet,
     XpdrIdent,
     BaroSet,
+    HeadingSlotSet,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -179,6 +180,14 @@ internal struct SimStateRaw
     // Observed height above terrain for departure-phase detection. Keep this
     // at the tail: StateVars and SimStateRaw are positionally paired.
     public double PlaneAltitudeAboveGroundFt;
+    // Quads. RPM:1/:2 predate these; :3/:4 read 0 on twins and singles.
+    public double EngRpm3;
+    public double EngRpm4;
+    // Mach for the speed schedules — above the crossover a KIAS target decays.
+    public double AirspeedMach;
+    // Local magnetic variation (east positive), so a true bearing computed
+    // from lat/lon can be shown against the magnetic compass rose.
+    public double MagVarDeg;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -325,6 +334,11 @@ internal static class SimVars
         ("GEAR DAMAGE BY SPEED",           "Bool"),
         ("GEAR SPEED EXCEEDED",            "Bool"),
         ("PLANE ALT ABOVE GROUND",          "Feet"),
+        // Appended only — same positional rule as everything above.
+        ("GENERAL ENG RPM:3",              "Rpm"),
+        ("GENERAL ENG RPM:4",              "Rpm"),
+        ("AIRSPEED MACH",                  "Mach"),
+        ("MAGVAR",                         "Degrees"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -384,6 +398,9 @@ internal static class SimVars
         // on/off behavior at the Flight Deck boundary.
         (Event.ApHdgHoldOn,      "AP_HDG_HOLD_ON"),
         (Event.ApHdgHoldOff,     "AP_HDG_HOLD_OFF"),
+        // Boeings park the heading reference in a slot the way the altitude
+        // events do — HDG SEL only reads the bug once the slot points at it.
+        (Event.HeadingSlotSet,   "HEADING_SLOT_INDEX_SET"),
         (Event.ApAltHoldToggle,  "AP_ALT_HOLD"),
         (Event.ApVsHoldToggle,   "AP_PANEL_VS_HOLD"),
         // Speed is flown by FLC on everything modern. On an airframe with no

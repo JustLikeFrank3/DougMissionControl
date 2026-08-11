@@ -5,6 +5,7 @@
    whole panel stuttering. */
 
 import { $ } from './ui.js';
+import { missionTarget } from './nav.js';
 
 /* ── EFIS gauges: attitude + compass rose ────────────────────────────
    Drawn from readouts the agent may not send yet: the ATT gauge covers
@@ -50,6 +51,16 @@ export function simBuildGauges() {
       rose.appendChild(lbl);
     }
   }
+
+  // Waypoint bearing bug. It lives inside the rose group so the card's
+  // rotation carries it; paint only re-aims it around the card. Drawn only
+  // with an observed magvar — the bearing is true, the rose is magnetic.
+  var bug = document.createElementNS(SVG_NS, 'path');
+  bug.setAttribute('id', 'simg-brg-bug');
+  bug.setAttribute('class', 'rose-brg');
+  bug.setAttribute('d', 'M100 7 L93 18 L107 18 Z');
+  bug.setAttribute('visibility', 'hidden');
+  rose.appendChild(bug);
 }
 
 export function simPaintGauges(r) {
@@ -72,6 +83,16 @@ export function simPaintGauges(r) {
     simHdgPrev = r.hdg_mag;
     $('simg-rose').style.transform = 'rotate(' + (-simHdgCum) + 'deg)';
     $('simg-hdg-txt').textContent = ('00' + r.hdg_mag).slice(-3);
+  }
+  var bug = $('simg-brg-bug');
+  if (bug) {
+    var steer = missionTarget();
+    var aimed = steer.brg !== null && typeof r.magvar_deg === 'number';
+    bug.setAttribute('visibility', aimed ? 'visible' : 'hidden');
+    if (aimed) {
+      var mag = (((steer.brg - r.magvar_deg) % 360) + 360) % 360;
+      bug.setAttribute('transform', 'rotate(' + mag + ' 100 100)');
+    }
   }
 }
 

@@ -11,7 +11,7 @@ import { $, wireTap, wireHold, post } from './ui.js';
 import { fmtAgo } from './format.js';
 import { nextDetent, stepBug, atcHandoff } from './simmath.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
-import { missionUpdate, paintMissionStrip } from './nav.js';
+import { missionUpdate, paintMissionStrip, missionTarget } from './nav.js';
 import { paintAtcCue } from './atc.js';
 
 /* ── SIM ───────────────────────────────────────────────────────────────
@@ -314,16 +314,29 @@ export function paintSim(d) {
   $('simv-ias').textContent = r.ias_kt;
   $('simv-alt').textContent = r.alt_ft;
   $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
+  // Bearing to the steer target, as a heading to fly. The bearing is true and
+  // the tile is magnetic, so without an observed magvar it is marked °T
+  // rather than silently mixing references on one instrument.
+  var steer = missionTarget();
+  $('simv-hdg-tgt').textContent = steer.brg === null ? ''
+    : typeof r.magvar_deg === 'number'
+      ? '\u2192 ' + ('00' + Math.round((((steer.brg - r.magvar_deg) % 360) + 360) % 360)).slice(-3) + '\u00b0 WPT'
+      : '\u2192 ' + ('00' + steer.brg).slice(-3) + '\u00b0T WPT';
   // Second-batch readouts: an agent that predates them sends nothing, and
   // a dash reads as "not reported" where 'undefined' would read as broken.
   $('simv-vs').textContent = r.vs_fpm === undefined ? '—'
     : (r.vs_fpm > 0 ? '+' : '') + r.vs_fpm;
-  // Twins report both engines; singles report rpm_2 = 0 and show one figure.
+  // One figure per engine the airframe declares. Old agents send no `rpms`;
+  // rpm_1/rpm_2 keep the twin and single working exactly as before.
   var rpmEl = $('simv-rpm');
-  rpmEl.textContent = r.rpm_1 === undefined ? '—'
-    : r.rpm_2 > 0 ? r.rpm_1 + ' / ' + r.rpm_2 : String(r.rpm_1);
-  rpmEl.className = 'simt-v big' + (r.rpm_2 > 0 ? ' twin' : '');
-  $('simu-rpm').textContent = r.rpm_2 > 0 ? 'ENG 1 / 2' : '';
+  var rpms = Array.isArray(r.rpms) ? r.rpms
+    : r.rpm_1 === undefined ? null
+    : r.rpm_2 > 0 ? [r.rpm_1, r.rpm_2] : [r.rpm_1];
+  rpmEl.textContent = rpms === null ? '—' : rpms.join(' / ');
+  rpmEl.className = 'simt-v big'
+    + (rpms && rpms.length > 2 ? ' quad' : rpms && rpms.length === 2 ? ' twin' : '');
+  $('simu-rpm').textContent = !rpms || rpms.length < 2 ? ''
+    : 'ENG 1\u2013' + rpms.length;
   $('simv-fuel').textContent = r.fuel_gal === undefined ? '—' : r.fuel_gal;
 
   // Throttle: one row per engine, however many the airframe has. The agent

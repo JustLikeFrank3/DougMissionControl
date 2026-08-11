@@ -13,6 +13,7 @@ import { $, wireHold, post, getJSON } from './ui.js';
 import { fmtEte, fmtAgo, fmtDur, fmtClock } from './format.js';
 import { paintAtcCue } from './atc.js';
 import { calculateDescent } from './descent.js';
+import { speedProfile, speedTarget, speedDeviation } from './speedprofile.js';
 import { xy as navXY, distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
          isTeleport, isStaleGpsLeg, zoomForSpan, TILE, NM_PER_DEG,
          ZMIN as NAV_ZMIN, ZMAX as NAV_ZMAX } from './geo.js';
@@ -168,6 +169,11 @@ function navSyncFeed(g, r) {
 var mission = { kind: null, vehicle: null, phase: null, dest: null,
                 brg: null, dist: null, ete_s: null, eta: null, xte: null };
 
+/** The steer target as SIM's instruments need it — read-only. */
+export function missionTarget() {
+  return { brg: mission.brg, dest: mission.dest };
+}
+
 export function missionPhase(r, distanceNm = mission.dist) {
   if (r.on_ground === undefined) return null;   // agent predates phase data
   if (r.on_ground) {
@@ -216,8 +222,7 @@ export function missionUpdate(d) {
 }
 
 export function paintMissionStrip() {
-  $('ms-phase').textContent = mission.phase || '—';
-  $('ms-dest').textContent = mission.dest || '—';
+  $('ms-phase').textContent = mission.phase || '—';  $('ms-dest').textContent = mission.dest || '—';
   $('ms-brg').textContent = mission.brg !== null ? ('00' + mission.brg).slice(-3) + '°' : '—';
   $('ms-dist').textContent = mission.dist !== null
     ? (mission.dist >= 10 ? Math.round(mission.dist) : mission.dist.toFixed(1)) + ' nm' : '—';
@@ -230,6 +235,42 @@ export function paintMissionStrip() {
   var appr = mission.phase === 'APPROACH';
   $('simt-gear').classList.toggle('hot', appr);
   $('simt-flaps').classList.toggle('hot', appr);
+}
+
+/* ── Speed schedule tile ─────────────────────────────────────────────
+   The profile's target for the observed phase and altitude, plus how far
+   off it the aircraft is. A mode change (KIAS → MACH) is announced on the
+   tile for a few seconds instead of the number silently changing meaning. */
+var spdModePrev = null;
+var spdSwitch = null;   // { text, until } — the announcement being shown
+
+function paintSpeedTarget(st, r) {
+  var tile = $('navp-tgt-tile');
+  if (!tile) return;
+  var prof = speedProfile(st && st.aircraft);
+  var tgt = prof && r ? speedTarget(prof, mission.phase, r.alt_ft) : null;
+  tile.hidden = !tgt;
+  if (!tgt) { spdModePrev = null; spdSwitch = null; return; }
+
+  if (spdModePrev && spdModePrev !== tgt.mode) {
+    spdSwitch = { text: spdModePrev + ' \u2192 ' + tgt.mode, until: Date.now() + 6000 };
+  }
+  spdModePrev = tgt.mode;
+  var flash = spdSwitch && Date.now() < spdSwitch.until;
+
+  $('navp-tgt').textContent = tgt.mode === 'MACH'
+    ? 'M' + tgt.mach.toFixed(2).slice(1) : String(tgt.kt);
+  $('navp-tgt-cap').textContent = flash ? spdSwitch.text
+    : 'TGT \u00b7 ' + (mission.phase || prof.name);
+  tile.classList.toggle('switch', !!flash);
+
+  var dev = speedDeviation(tgt, r.ias_kt, r.mach);
+  var off = dev ? Math.abs(dev.off) : 0;
+  var warn = dev && (dev.unit === 'KT' ? off > 15 : off > 0.02);
+  $('navp-tgt-u').textContent = !warn ? (tgt.mode === 'MACH' ? 'MACH' : 'KT')
+    : (dev.unit === 'KT' ? Math.round(off) + ' KT ' : 'M' + off.toFixed(2).slice(1) + ' ')
+      + (dev.off < 0 ? 'SLOW' : 'FAST');
+  tile.classList.toggle('warn', !!warn);
 }
 
 export function paintNav(d) {
@@ -308,6 +349,7 @@ export function paintNav(d) {
   $('navp-alt').textContent = r.alt_ft + ' ft · ' + r.ias_kt + ' kt ias';
   $('navp-ias').textContent = Number(r.ias_kt).toLocaleString();
   $('navp-flight-alt').textContent = Number(r.alt_ft).toLocaleString();
+  paintSpeedTarget(st, r);
 
   paintDescent(r, st.controls || {});
 
