@@ -223,7 +223,9 @@ export function missionUpdate(d) {
 
 export function paintMissionStrip() {
   $('ms-phase').textContent = mission.phase || '—';  $('ms-dest').textContent = mission.dest || '—';
-  $('ms-brg').textContent = mission.brg !== null ? ('00' + mission.brg).slice(-3) + '°' : '—';
+  // °T, because it is one: computed from lat/lon. The magnetic figure to fly
+  // lives next to HDG on SIM, where the compass it belongs to is.
+  $('ms-brg').textContent = mission.brg !== null ? ('00' + mission.brg).slice(-3) + '°T' : '—';
   $('ms-dist').textContent = mission.dist !== null
     ? (mission.dist >= 10 ? Math.round(mission.dist) : mission.dist.toFixed(1)) + ' nm' : '—';
   $('ms-ete').textContent = mission.ete_s !== null ? fmtDur(mission.ete_s) : '—';
