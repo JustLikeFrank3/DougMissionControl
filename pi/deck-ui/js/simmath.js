@@ -30,3 +30,42 @@ export function stepBug(value, delta, spec) {
   if (spec.wrap) return ((v % 360) + 360) % 360;
   return Math.max(spec.min, Math.min(spec.max, v));
 }
+
+/** What remains for the pilot to do for an observed ATC handoff. */
+export function atcHandoff(nextMHz, com1) {
+  if (typeof nextMHz !== 'number' || !com1 ||
+      Math.abs(nextMHz - com1.act) < 0.005) return null;
+  return {
+    frequency: nextMHz,
+    action: Math.abs(nextMHz - com1.sby) < 0.005 ? 'swap' : 'stage',
+  };
+}
+
+/** Highest-priority observed aircraft-neutral cockpit hazard. */
+export function cockpitWarning(state) {
+  var warnings = state && state.warnings;
+  var readouts = state && state.readouts;
+  if (!warnings) return null;
+  if (Array.isArray(warnings.engine_fire) && warnings.engine_fire.length) return {
+    kind: 'engine_fire', label: 'ENGINE FIRE',
+    detail: 'ENG ' + warnings.engine_fire.join(' / '),
+  };
+  if (warnings.stall) return { kind: 'stall', label: 'STALL' };
+  if (warnings.gear_damage) return { kind: 'gear_damage', label: 'GEAR DAMAGE' };
+  if (warnings.gear_warning) {
+    var gearLabels = {
+      gear_up: 'GEAR UP', amphibious_gear_up: 'AMPHIB GEAR UP',
+      amphibious_gear_down: 'AMPHIB GEAR DOWN',
+      on_ground_handle_up: 'GEAR HANDLE UP',
+    };
+    return { kind: 'gear_warning', label: gearLabels[warnings.gear_warning] || 'GEAR WARNING' };
+  }
+  if (warnings.gear_speed_exceeded) return { kind: 'gear_overspeed', label: 'GEAR OVERSPEED' };
+  if (warnings.overspeed) return {
+    kind: 'overspeed',
+    label: 'OVERSPEED',
+    detail: readouts && typeof readouts.ias_kt === 'number'
+      ? readouts.ias_kt + ' KT' : null,
+  };
+  return null;
+}

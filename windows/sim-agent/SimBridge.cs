@@ -20,6 +20,7 @@ namespace FlightDeckSimAgent;
 internal sealed class SimBridge : IDisposable
 {
     private const int ReconnectDelayMs = 3000;
+    private static readonly TimeSpan FlightPlanPollInterval = TimeSpan.FromSeconds(5);
 
     // Every 6th sim frame: ~5-10 Hz at 30-60 fps, comfortably above the 4 Hz
     // the brief asks for and cheap enough to leave running all flight.
@@ -38,9 +39,16 @@ internal sealed class SimBridge : IDisposable
     private bool _haveCaps;
     private string _aircraft = "";
     private string _simName = "";
+    private IReadOnlyList<FlightPlanWaypoint> _flightPlan = [];
+    private string _flightPlanSource = "";
+    private FlightPlanInfo? _pendingFlightPlan;
+    private string _requestedDestination = "";
+    private readonly List<RunwayFacilityRaw> _facilityRunways = [];
+    private DateTime _nextFlightPlanPoll = DateTime.MinValue;
 
     /// <summary>Raised on the pump thread each time a fresh state frame lands.</summary>
-    public event Action<SimStateRaw, SimCapsRaw, SimGpsRaw, string>? StateReceived;
+    public event Action<SimStateRaw, SimCapsRaw, SimGpsRaw, string,
+        IReadOnlyList<FlightPlanWaypoint>, string>? StateReceived;
 
     /// <summary>A live SimConnect session — not merely "the process is running".</summary>
     public bool Connected { get; private set; }
@@ -103,6 +111,7 @@ internal sealed class SimBridge : IDisposable
                     _sim!.ReceiveMessage();
                 }
                 DrainCommands(connected: true);
+                PollFlightPlan();
             }
             catch (COMException)
             {
@@ -125,6 +134,9 @@ internal sealed class SimBridge : IDisposable
             sim.OnRecvQuit += (_, _) => Close();
             sim.OnRecvException += OnException;
             sim.OnRecvSimobjectData += OnSimObjectData;
+            sim.OnRecvSystemState += OnSystemState;
+            sim.OnRecvFacilityData += OnFacilityData;
+            sim.OnRecvFacilityDataEnd += OnFacilityDataEnd;
 
             foreach (var (name, unit) in SimVars.StateVars)
                 sim.AddToDataDefinition(Definition.State, name, unit, SIMCONNECT_DATATYPE.FLOAT64, 0.0f, SimConnect.SIMCONNECT_UNUSED);
@@ -142,6 +154,14 @@ internal sealed class SimBridge : IDisposable
             foreach (var name in SimVars.GpsStringVars)
                 sim.AddToDataDefinition(Definition.Gps, name, null, SIMCONNECT_DATATYPE.STRING32, 0.0f, SimConnect.SIMCONNECT_UNUSED);
             sim.RegisterDataDefineStruct<SimGpsRaw>(Definition.Gps);
+
+            foreach (var field in new[] { "OPEN AIRPORT", "LATITUDE", "LONGITUDE", "ALTITUDE", "N_RUNWAYS",
+                                          "OPEN RUNWAY", "LATITUDE", "LONGITUDE", "ALTITUDE", "HEADING", "LENGTH",
+                                          "PRIMARY_NUMBER", "PRIMARY_DESIGNATOR", "SECONDARY_NUMBER", "SECONDARY_DESIGNATOR",
+                                          "CLOSE RUNWAY", "CLOSE AIRPORT" })
+                sim.AddToFacilityDefinition(FacilityDefinition.Airport, field);
+            sim.RegisterFacilityDataDefineStruct<AirportFacilityRaw>(SIMCONNECT_FACILITY_DATA_TYPE.AIRPORT);
+            sim.RegisterFacilityDataDefineStruct<RunwayFacilityRaw>(SIMCONNECT_FACILITY_DATA_TYPE.RUNWAY);
 
             foreach (var (id, name) in SimVars.ClientEvents)
             {
@@ -164,6 +184,7 @@ internal sealed class SimBridge : IDisposable
     {
         _simName = data.szApplicationName?.Trim() ?? "";
         Connected = true;
+        _nextFlightPlanPoll = DateTime.MinValue;
 
         sender.RequestDataOnSimObject(Request.State, Definition.State,
             SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SIM_FRAME,
@@ -200,7 +221,8 @@ internal sealed class SimBridge : IDisposable
             case Request.State:
                 _state = (SimStateRaw)data.dwData[0];
                 _haveState = true;
-                if (_haveCaps) StateReceived?.Invoke(_state, _caps, _gps, _aircraft);
+                if (_haveCaps) StateReceived?.Invoke(_state, _caps, _gps, _aircraft,
+                    _flightPlan, _flightPlanSource);
                 break;
 
             case Request.Caps:
@@ -215,6 +237,53 @@ internal sealed class SimBridge : IDisposable
             case Request.Gps:
                 _gps = (SimGpsRaw)data.dwData[0];
                 break;
+        }
+    }
+
+    private void PollFlightPlan()
+    {
+        if (_sim is null || DateTime.UtcNow < _nextFlightPlanPoll) return;
+        _sim.RequestSystemState(Request.FlightPlan, "FlightPlan");
+        _nextFlightPlanPoll = DateTime.UtcNow + FlightPlanPollInterval;
+    }
+
+    private void OnSystemState(SimConnect sender, SIMCONNECT_RECV_SYSTEM_STATE data)
+    {
+        if ((Request)data.dwRequestID != Request.FlightPlan) return;
+        var plan = FlightPlan.LoadInfo(data.szString?.Trim() ?? "");
+        if (plan.Waypoints.Count > 0)
+        {
+            _flightPlan = plan.Waypoints;
+            _flightPlanSource = "file";
+            return;
+        }
+        if (plan.Destination.Length == 0 || plan.RunwayNumber == 0) return;
+        _pendingFlightPlan = plan;
+        if (_requestedDestination == plan.Destination) return;
+        _requestedDestination = plan.Destination;
+        _facilityRunways.Clear();
+        sender.RequestFacilityData(FacilityDefinition.Airport, Request.Facility,
+            plan.Destination, "");
+    }
+
+    private void OnFacilityData(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA data)
+    {
+        if ((Request)data.UserRequestId != Request.Facility ||
+            (SIMCONNECT_FACILITY_DATA_TYPE)data.Type != SIMCONNECT_FACILITY_DATA_TYPE.RUNWAY ||
+            data.Data.Length == 0) return;
+        _facilityRunways.Add((RunwayFacilityRaw)data.Data[0]);
+    }
+
+    private void OnFacilityDataEnd(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA_END data)
+    {
+        if ((Request)data.RequestId != Request.Facility || _pendingFlightPlan is null) return;
+        foreach (var runway in _facilityRunways)
+        {
+            var route = FlightPlan.BuildVisualPattern(_pendingFlightPlan, runway);
+            if (route.Count == 0) continue;
+            _flightPlan = route;
+            _flightPlanSource = "visual_pattern";
+            return;
         }
     }
 
@@ -260,6 +329,12 @@ internal sealed class SimBridge : IDisposable
         _haveState = false;
         _haveCaps = false;
         _gps = default;
+        _flightPlan = [];
+        _flightPlanSource = "";
+        _pendingFlightPlan = null;
+        _requestedDestination = "";
+        _facilityRunways.Clear();
+        _nextFlightPlanPoll = DateTime.MinValue;
         _aircraft = "";
         _simName = "";
         try { _sim?.Dispose(); } catch (COMException) { }

@@ -876,8 +876,14 @@ def _clean_waypoints(wpts) -> list | None:
             lat, lon = float(w["lat"]), float(w["lon"])
             if not (-90 <= lat <= 90 and -180 <= lon <= 180):
                 raise ValueError
-            clean.append({"name": str(w.get("name", "WPT"))[:40] or "WPT",
-                          "lat": lat, "lon": lon})
+            waypoint = {"name": str(w.get("name", "WPT"))[:40] or "WPT",
+                        "lat": lat, "lon": lon}
+            if w.get("altitude_ft") is not None:
+                altitude = float(w["altitude_ft"])
+                if not (0 <= altitude <= 60000):
+                    raise ValueError
+                waypoint["altitude_ft"] = altitude
+            clean.append(waypoint)
         except (KeyError, TypeError, ValueError):
             return None
     return clean

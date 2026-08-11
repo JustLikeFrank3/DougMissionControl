@@ -4,7 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File windows\setup-sim-agent.ps1
 #
 # Does:
-#   * builds windows\sim-agent into C:\ProgramData\dualboot\sim-agent
+#   * builds windows\sim-agent into a versioned directory under
+#     C:\ProgramData\dualboot\sim-agent\releases
 #   * creates sim-agent.token if it does not exist and prints it for the Pi
 #   * opens TCP 9109 inbound on Profile Any
 #   * registers the FlightDeckSimAgent logon task and starts it
@@ -24,6 +25,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $dest = 'C:\ProgramData\dualboot'
 $appDir = "$dest\sim-agent"
+$releaseRoot = "$appDir\releases"
+$releaseId = '{0}-{1}' -f (Get-Date -Format 'yyyyMMddHHmmss'), $PID
+$releaseDir = "$releaseRoot\$releaseId"
 $port = 9109
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -39,23 +43,26 @@ if (-not (Test-Path "$MsfsSdk\SimConnect SDK\lib\managed\Microsoft.FlightSimulat
 }
 
 # --- Build -----------------------------------------------------------------
-# Stop any previous instance FIRST. On a re-run the logon task is already
-# running and its exe holds the very files publish is about to overwrite, so
-# publishing first fails with a file lock. Restarted at the end either way.
+# Stop the previous instance before publishing. Each build goes into a fresh
+# release directory so an unrelated process retaining an old DLL handle cannot
+# block upgrades. The task is repointed to the new release below.
 if (Get-ScheduledTask -TaskName 'FlightDeckSimAgent' -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName 'FlightDeckSimAgent' -ErrorAction SilentlyContinue
     # The task reports stopped before the process has actually exited.
     for ($i = 0; $i -lt 20 -and (Get-Process flightdeck-sim-agent -ErrorAction SilentlyContinue); $i++) {
         Start-Sleep -Milliseconds 250
     }
+    Get-Process flightdeck-sim-agent -ErrorAction SilentlyContinue |
+        Where-Object Path -Like "$appDir\*" |
+        Stop-Process -Force -ErrorAction Stop
     Write-Host 'Stopped the running FlightDeckSimAgent task'
 }
 
-New-Item -ItemType Directory -Force $appDir | Out-Null
+New-Item -ItemType Directory -Force $releaseDir | Out-Null
 & dotnet publish "$PSScriptRoot\sim-agent\FlightDeckSimAgent.csproj" `
-    -c Release -o $appDir -p:MsfsSdk="$MsfsSdk"
+    -c Release -o $releaseDir -p:MsfsSdk="$MsfsSdk"
 if ($LASTEXITCODE -ne 0) { Write-Error 'dotnet publish failed.' }
-Write-Host "Published to $appDir"
+Write-Host "Published to $releaseDir"
 
 # --- Token -----------------------------------------------------------------
 # Its own token, not the boot agent's: the two endpoints grant different
@@ -75,7 +82,7 @@ if (-not (Get-NetFirewallRule -DisplayName "FlightDeck SimAgent $port" -ErrorAct
 Write-Host "Firewall: TCP $port inbound allowed on all profiles"
 
 # --- Logon task ------------------------------------------------------------
-$action = New-ScheduledTaskAction -Execute "$appDir\flightdeck-sim-agent.exe" -WorkingDirectory $appDir
+$action = New-ScheduledTaskAction -Execute "$releaseDir\flightdeck-sim-agent.exe" -WorkingDirectory $releaseDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
@@ -85,6 +92,14 @@ Register-ScheduledTask -TaskName 'FlightDeckSimAgent' -Action $action -Trigger $
 Stop-ScheduledTask -TaskName 'FlightDeckSimAgent' -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName 'FlightDeckSimAgent'
 Write-Host 'FlightDeckSimAgent logon task registered and started'
+
+# Old releases are no longer task targets. A process may still retain a handle
+# briefly; leave that release for the next installer run instead of failing an
+# otherwise successful deployment.
+Get-ChildItem $releaseRoot -Directory | Where-Object FullName -ne $releaseDir | ForEach-Object {
+    try { Remove-Item $_.FullName -Recurse -Force -ErrorAction Stop }
+    catch { Write-Warning "Could not remove old release '$($_.FullName)': $($_.Exception.Message)" }
+}
 
 Write-Host "Sim-agent token (put on the Pi as SIM_AGENT_TOKEN=): $(Get-Content $tokenFile -TotalCount 1)"
 Write-Host @"

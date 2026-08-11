@@ -13,18 +13,29 @@
    there is no dotnet. */
 
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.Json.Nodes;
 
 var dll = args.Length > 0 ? args[0] : throw new ArgumentException("pass the agent dll");
-var asm = Assembly.LoadFrom(dll);
+var dllDir = Path.GetDirectoryName(Path.GetFullPath(dll));
+AssemblyLoadContext.Default.Resolving += (context, name) =>
+{
+    var dependency = Path.Combine(dllDir, name.Name + ".dll");
+    return File.Exists(dependency) ? context.LoadFromAssemblyPath(dependency) : null;
+};
+var asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(dll));
 var prog = asm.GetType("FlightDeckSimAgent.Program");
 var norm = asm.GetType("FlightDeckSimAgent.Normalize");
 var resolve = prog.GetMethod("Resolve", BindingFlags.NonPublic | BindingFlags.Static);
 var controls = norm.GetMethod("Controls", BindingFlags.Public | BindingFlags.Static);
+var readouts = norm.GetMethod("Readouts", BindingFlags.Public | BindingFlags.Static);
+var warnings = norm.GetMethod("Warnings", BindingFlags.Public | BindingFlags.Static);
 var stateT = asm.GetType("FlightDeckSimAgent.SimStateRaw");
 var capsT = asm.GetType("FlightDeckSimAgent.SimCapsRaw");
+var varsT = asm.GetType("FlightDeckSimAgent.SimVars");
 
 object MakeState(params (string, double)[] set)
 {
@@ -47,7 +58,13 @@ string Call(string control, string action, string value, object s, object c)
     var t = r.GetType();
     if (t.GetProperty("Reason").GetValue(r) is object reason) return $"REJECT({reason})";
     var ev = t.GetProperty("Event").GetValue(r);
-    return ev is null ? "NOOP" : $"{ev} data={t.GetProperty("Data").GetValue(r)}";
+    if (ev is null) return "NOOP";
+    var result = $"{ev} data={t.GetProperty("Data0").GetValue(r)}";
+    var followup = t.GetProperty("FollowupEvent").GetValue(r);
+    if (followup is not null)
+        result = $"{result} then {followup} data={t.GetProperty("FollowupData").GetValue(r)}";
+    var pre = t.GetProperty("PreEvent").GetValue(r);
+    return pre is null ? result : $"{pre} data=0 then {result}";
 }
 
 int fails = 0;
@@ -98,13 +115,22 @@ Expect("ap_hdg mode on while off", Call("ap_hdg", "mode", "on", apOff, baron), "
 Expect("ap_hdg mode on while on", Call("ap_hdg", "mode", "on", apOn, baron), "NOOP");
 Expect("ap_hdg mode off while on", Call("ap_hdg", "mode", "off", apOn, baron), "ApHdgHoldOff data=0");
 Expect("ap_hdg mode off while off", Call("ap_hdg", "mode", "off", apOff, baron), "NOOP");
-Expect("ap_alt mode on", Call("ap_alt", "mode", "on", apOff, baron), "ApAltHoldOn data=0");
-Expect("ap_vs mode on", Call("ap_vs", "mode", "on", apOff, baron), "ApVsHoldOn data=0");
-Expect("ap_spd mode on (FLC)", Call("ap_spd", "mode", "on", apOff, baron), "ApFlcOn data=0");
+Expect("ap_alt mode on", Call("ap_alt", "mode", "on", apOff, baron), "ApAltHoldToggle data=0");
+var apTargets = MakeState(("ApVsFpm", 500), ("ApSpdKt", 174));
+Expect("ap_vs mode on", Call("ap_vs", "mode", "on", apTargets, baron),
+    "ApVsHoldToggle data=0 then ApVsVarSet data=500");
+Expect("ap_spd mode on (FLC)", Call("ap_spd", "mode", "on", apTargets, baron),
+    "ApFlcToggle data=0 then ApSpdVarSet data=174");
+var vsActive = MakeState(("ApVsHold", 1), ("ApSpdKt", 210));
+Expect("ap_spd leaves VS before FLC", Call("ap_spd", "mode", "on", vsActive, baron),
+    "ApVsHoldToggle data=0 then ApFlcToggle data=0 then ApSpdVarSet data=210");
+var flcActive = MakeState(("ApFlcActive", 1), ("ApVsFpm", 500));
+Expect("ap_vs leaves FLC before VS", Call("ap_vs", "mode", "on", flcActive, baron),
+    "ApFlcToggle data=0 then ApVsHoldToggle data=0 then ApVsVarSet data=500");
 // IAS hold and FLC fly the same bug, so an aircraft already in IAS hold is
 // already flying it — engaging FLC on top would be a second mode, not a fix.
 Expect("ap_spd mode on under IAS hold", Call("ap_spd", "mode", "on", iasOnly, baron), "NOOP");
-Expect("ap_spd mode off under IAS hold", Call("ap_spd", "mode", "off", iasOnly, baron), "ApFlcOff data=0");
+Expect("ap_spd mode off under IAS hold", Call("ap_spd", "mode", "off", iasOnly, baron), "ApFlcToggle data=0");
 Expect("ap mode with a bad value", Call("ap_spd", "mode", "maybe", apOff, baron), "REJECT(invalid value)");
 
 /* ── the bugs themselves ──────────────────────────────────────────────────── */
@@ -140,6 +166,46 @@ Expect("ap_spd off when neither is set", Mode(apOff, "ap_spd"), "off");
 // No autopilot, no bugs at all — the panel greys the tiles by their absence.
 var noAp = (JsonObject)controls.Invoke(null, new[] { apOn, MakeCaps() });
 Expect("no autopilot, no ap_spd key", noAp.ContainsKey("ap_spd") ? "present" : "absent", "absent");
+
+string AtcNext(double mhz)
+{
+    var state = MakeState(("AtcFutureAgentMHz", mhz));
+    var r = (JsonObject)readouts.Invoke(null, new[] { state });
+    return r["atc_next_mhz"]?.ToString() ?? "absent";
+}
+
+Expect("ATC handoff publishes valid COM frequency", AtcNext(124.675), "124.675");
+Expect("ATC idle frequency stays absent", AtcNext(0), "absent");
+Expect("ATC invalid frequency stays absent", AtcNext(42), "absent");
+
+var aglReadouts = (JsonObject)readouts.Invoke(null,
+    new[] { MakeState(("PlaneAltitudeAboveGroundFt", 843.6)) });
+Expect("AGL publishes observed height for takeoff phase", aglReadouts["agl_ft"].ToString(), "844");
+
+JsonObject WarningState(params (string, double)[] values) =>
+    (JsonObject)warnings.Invoke(null, new[] { MakeState(values) });
+
+Expect("overspeed warning publishes observed true",
+    WarningState(("OverspeedWarning", 1))["overspeed"].ToString(), "true");
+Expect("stall warning publishes observed true",
+    WarningState(("StallWarning", 1))["stall"].ToString(), "true");
+Expect("engine fire identifies affected engines",
+    WarningState(("EngineCount", 4), ("EngOnFire2", 1), ("EngOnFire4", 1))["engine_fire"].ToJsonString(),
+    "[2,4]");
+Expect("fire state ignores engines the aircraft does not have",
+    WarningState(("EngineCount", 2), ("EngOnFire4", 1))["engine_fire"].ToJsonString(), "[]");
+Expect("gear warning enum is normalized",
+    WarningState(("GearWarning", 1))["gear_warning"].ToString(), "gear_up");
+Expect("gear speed hazards stay distinct",
+    WarningState(("GearDamageBySpeed", 1), ("GearSpeedExceeded", 1))["gear_damage"] + " " +
+    WarningState(("GearDamageBySpeed", 1), ("GearSpeedExceeded", 1))["gear_speed_exceeded"],
+    "true true");
+Expect("inactive warnings publish false",
+    WarningState()["overspeed"] + " " + WarningState()["stall"], "false false");
+
+var stateVars = (Array)varsT.GetField("StateVars", BindingFlags.Public | BindingFlags.Static).GetValue(null);
+Expect("SimConnect state rows match positional struct",
+    stateVars.Length.ToString(), stateT.GetFields().Length.ToString());
 
 /* ── the FFT behind the visualiser ──────────────────────────────────────────
    A wrong butterfly or a bad bit-reversal still produces a plausible-looking
@@ -249,6 +315,87 @@ float[] Bands(double[] mag, int rate = 48000, int fftSize = 4096, int count = 64
     Expect("a single tone lights a few bars, not the spectrum",
         lit <= 4 ? "focused" : $"{lit} bars", "focused");
 }
+
+/* ── loaded flight plan ────────────────────────────────────────────────────
+     SimVars reveal only the active leg. The complete route comes from the
+     simulator's loaded .PLN file, whose WorldPosition values use DMS notation. */
+{
+        var flightPlanT = asm.GetType("FlightDeckSimAgent.FlightPlan");
+        var loadPlan = flightPlanT.GetMethod("Load", BindingFlags.Public | BindingFlags.Static);
+        var planJson = flightPlanT.GetMethod("Json", BindingFlags.Public | BindingFlags.Static);
+        var path = Path.Combine(Path.GetTempPath(), $"flightdeck-{Guid.NewGuid():N}.pln");
+        File.WriteAllText(path, """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <SimBase.Document Type="AceXML">
+                    <FlightPlan.FlightPlan>
+                        <ATCWaypoint id="KJFK"><WorldPosition>N40° 38' 23.75",W073° 46' 43.28",+000013.00</WorldPosition></ATCWaypoint>
+                        <ATCWaypoint id="KORD"><WorldPosition>N41° 58' 41.89",W087° 54' 17.55",+000672.00</WorldPosition></ATCWaypoint>
+                    </FlightPlan.FlightPlan>
+                </SimBase.Document>
+                """);
+        try
+        {
+                var loaded = loadPlan.Invoke(null, new object[] { path });
+                var json = (JsonArray)planJson.Invoke(null, new[] { loaded });
+                Expect("PLN preserves waypoint order", $"{json[0]["id"]} {json[1]["id"]}", "KJFK KORD");
+                Expect("PLN parses DMS coordinates",
+                        $"{json[1]["lat"]} {json[1]["lon"]}", "41.9783 -87.90488");
+                Expect("PLN publishes route indices", $"{json[0]["i"]} {json[1]["i"]}", "0 1");
+        }
+        finally { File.Delete(path); }
+}
+
+    /* MSFS 2024 VFR plans can contain no ATCWaypoint coordinates at all. Instead
+       they name a destination runway and visual-pattern entry; the agent resolves
+       the runway through FacilityData and derives the geometry from that. */
+    {
+        var flightPlanT = asm.GetType("FlightDeckSimAgent.FlightPlan");
+        var loadInfo = flightPlanT.GetMethod("LoadInfo", BindingFlags.Public | BindingFlags.Static);
+        var buildPattern = flightPlanT.GetMethod("BuildVisualPattern", BindingFlags.Public | BindingFlags.Static);
+        var planJson = flightPlanT.GetMethod("Json", BindingFlags.Public | BindingFlags.Static);
+        var runwayT = asm.GetType("FlightDeckSimAgent.RunwayFacilityRaw");
+        var path = Path.Combine(Path.GetTempPath(), $"flightdeck-{Guid.NewGuid():N}.pln");
+        File.WriteAllText(path, """
+            <SimBase.Document><FlightPlan.FlightPlan>
+              <DepartureID>KJFK</DepartureID><DestinationID>KORD</DestinationID>
+              <ArrivalDetails><RunwayNumberFP>10</RunwayNumberFP><RunwayDesignatorFP>LEFT</RunwayDesignatorFP></ArrivalDetails>
+              <ApproachDetails><ApproachVisualPattern>
+                <ApproachVisualPatternType>Downwind</ApproachVisualPatternType>
+                <VisualPatternDistance>1.500</VisualPatternDistance>
+                <VisualPatternAltitude>1500.000</VisualPatternAltitude>
+              </ApproachVisualPattern></ApproachDetails>
+            </FlightPlan.FlightPlan></SimBase.Document>
+            """);
+        try
+        {
+            var info = loadInfo.Invoke(null, new object[] { path });
+            var infoT = info.GetType();
+            Expect("2024 PLN reads destination runway",
+                $"{infoT.GetProperty("Destination").GetValue(info)} " +
+                $"{infoT.GetProperty("RunwayNumber").GetValue(info)} " +
+                $"{infoT.GetProperty("RunwayDesignator").GetValue(info)}",
+                "KORD 10 1");
+
+            var runway = Activator.CreateInstance(runwayT);
+            foreach (var (name, value) in new (string, object)[] {
+                ("Latitude", 41.9742), ("Longitude", -87.9073), ("Altitude", 204.0),
+                ("Heading", 94.7f), ("Length", 3962.0f),
+                ("PrimaryNumber", 10), ("PrimaryDesignator", 1),
+                ("SecondaryNumber", 28), ("SecondaryDesignator", 2) })
+                runwayT.GetField(name).SetValue(runway, value);
+            var route = buildPattern.Invoke(null, new[] { info, runway });
+            var json = (JsonArray)planJson.Invoke(null, new[] { route });
+            Expect("visual pattern has named landing legs",
+                $"{json.Count} {json[0]["id"]} {json[1]["id"]} {json[2]["id"]} {json[3]["id"]}",
+                "4 KORD DW KORD BASE KORD FINAL KORD 10L");
+            var thresholdLon = (double)json[3]["lon"];
+            var finalLon = (double)json[2]["lon"];
+            var downwindLat = (double)json[0]["lat"];
+            Expect("10L pattern lies behind and left of final",
+                $"{finalLon < thresholdLon} {downwindLat > 41.9742}", "True True");
+        }
+        finally { File.Delete(path); }
+    }
 
 Console.WriteLine(fails == 0
     ? "sim-agent resolve and state-shape tests passed"

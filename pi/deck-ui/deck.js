@@ -16,6 +16,8 @@ import { wireIdle, idlePoll, paintIdle } from './js/idle.js';
 import { navPoll, setNavPlan, setNavPlanDisabled } from './js/nav.js';
 import { wireNav } from './js/nav.js';
 import { simPoll, simSend, wireSim } from './js/sim.js';
+import { paintAtcCue } from './js/atc.js';
+import { warningPoll } from './js/warnings.js';
 
 (function () {
   'use strict';
@@ -93,7 +95,7 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     // Now-playing feeds the DECK rail widget AND the AUDIO surface, so it
     // runs for either. The spectrum is the expensive one at 10 Hz, and it
     // stops the moment neither surface is showing it.
-    npPoll(active === 'deck' || active === 'audio');
+    npPoll(active === 'deck' || active === 'nav' || active === 'audio');
     vizPoll(active === 'deck' || active === 'audio');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
@@ -102,6 +104,7 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
 
   function renderSimNav(s) {
     var sim = s.sim || {};
+    if (!sim.session) paintAtcCue(null);
     var el = $('nav-sim');
     if (!el) return;
     var ac = sim.aircraft || '';
@@ -246,6 +249,7 @@ import { simPoll, simSend, wireSim } from './js/sim.js';
     renderStrip(s);
     paintIdle(s);
     renderSimNav(s);
+    warningPoll(!!(s.sim && s.sim.session));
     setNavPlan(s.nav_plan || []);   // deck-api owns the plan; SSE delivers it
     // Here, not in the NAV paint: that path only runs once the sim is feeding
     // a position, so with no sim the button sat enabled and did nothing —

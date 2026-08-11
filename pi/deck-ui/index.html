@@ -36,6 +36,8 @@
       </nav>
 
       <div class="status" id="status">
+        <div class="cockpit-cue" id="cockpit-cue" role="status" hidden></div>
+        <button class="atc-cue" id="atc-cue" hidden>ATC → —</button>
         <span id="st-os">—</span>
         <span id="st-gpu"></span>
         <span id="st-conn">connecting…</span>
@@ -245,14 +247,6 @@
               <div class="navac-n" id="navp-ac">—</div>
               <div class="navac-s" id="navp-acs"></div>
             </div>
-            <!-- The flight plan: ordered, tap to target, ✕ to drop. -->
-            <div class="navplan" id="navp-plan"></div>
-            <div class="navbtns">
-              <button class="navadd" id="navp-add">+ ADD</button>
-              <button class="navadd" id="navp-save">SAVE</button>
-              <button class="navadd" id="navp-plansbtn">PLANS</button>
-              <button class="navadd" id="navp-sync">SYNC</button>
-            </div>
             <div class="navsteer">
               <svg viewBox="0 0 100 100" id="navp-arrow">
                 <circle cx="50" cy="50" r="46" class="ns-ring"/>
@@ -269,8 +263,90 @@
             <div class="simt"><h3>TRK · GS</h3>
               <div class="simt-v sm2" id="navp-trk">—</div>
               <div class="simt-s" id="navp-alt"></div></div>
+            <div class="np navnp" id="navnp">
+              <img class="np-art" id="navnp-art" alt="" hidden>
+              <div class="np-noart" id="navnp-noart">♪</div>
+              <div class="np-mid">
+                <div class="np-title" id="navnp-title">no source</div>
+                <div class="np-artist" id="navnp-artist"></div>
+                <div class="np-time" id="navnp-time"></div>
+              </div>
+              <div class="np-btns">
+                <button class="np-b" id="navnp-prev" aria-label="previous">⏮</button>
+                <button class="np-b" id="navnp-play" aria-label="play/pause">⏯</button>
+                <button class="np-b" id="navnp-next" aria-label="next">⏭</button>
+              </div>
+            </div>
           </div>
           <canvas id="navp-canvas"></canvas>
+
+          <div class="navflight" aria-label="Primary flight readouts">
+            <div class="navflight-readout">
+              <span>IAS</span>
+              <strong id="navp-ias">—</strong>
+              <small>KT</small>
+            </div>
+            <div class="navflight-readout">
+              <span>ALT</span>
+              <strong id="navp-flight-alt">—</strong>
+              <small>FT</small>
+            </div>
+          </div>
+
+          <section class="todcard cruise" id="tod-card" aria-label="Descent advisory" hidden>
+            <div class="tod-head">
+              <span>DESCENT</span>
+              <div class="tod-head-right">
+                <b id="tod-state">UNAVAILABLE</b>
+                <button id="tod-close" aria-label="Close descent advisory">✕</button>
+              </div>
+            </div>
+            <div class="tod-call" id="tod-call">—</div>
+            <div class="tod-sub" id="tod-sub">NO USABLE ROUTE</div>
+            <div class="tod-grid">
+              <span><b>TARGET</b><strong id="tod-target">—</strong></span>
+              <span><b>PROFILE</b><strong id="tod-profile">3.0°</strong></span>
+              <span><b>ALT TO LOSE</b><strong id="tod-lose">—</strong></span>
+              <span><b>REQ VS</b><strong id="tod-vs">—</strong></span>
+              <span class="wide"><b>PATH</b><strong id="tod-path">—</strong></span>
+            </div>
+            <div class="tod-source" id="tod-source">TERMINAL DEFAULT</div>
+            <div class="tod-controls">
+              <button id="tod-target-down" aria-label="Lower TOD target 1000 feet">−1000</button>
+              <button id="tod-auto" class="on">AUTO</button>
+              <button id="tod-target-up" aria-label="Raise TOD target 1000 feet">+1000</button>
+              <div class="tod-profile-set" aria-label="Descent profile">
+                <button data-angle="2.5">2.5°</button>
+                <button data-angle="3" class="on">3.0°</button>
+                <button data-angle="3.5">3.5°</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Full-height route drawer. A row selects the steer target; its
+               crosshair only changes map framing, keeping those actions
+               deliberately independent. -->
+          <aside class="navdrawer open" id="navp-drawer" aria-label="Waypoints">
+            <div class="navdrawer-head">
+              <div>
+                <div class="navdrawer-title">WAYPOINTS</div>
+                <div class="navdrawer-count" id="navp-count">0 IN PLAN</div>
+              </div>
+              <button class="navdrawer-close" id="navp-drawer-close"
+                      aria-label="Collapse waypoints" title="Collapse waypoints">✕</button>
+            </div>
+            <div class="navplan" id="navp-plan"></div>
+            <div class="navbtns">
+              <button class="navadd" id="navp-add">+ ADD</button>
+              <button class="navadd" id="navp-save">SAVE</button>
+              <button class="navadd" id="navp-plansbtn">PLANS</button>
+              <button class="navadd" id="navp-sync">SYNC</button>
+            </div>
+          </aside>
+          <button class="navdrawer-tab" id="navp-drawer-open"
+                  aria-label="Show waypoints" aria-expanded="true" title="Show waypoints">
+            WPTS <span id="navp-tab-count">0</span>
+          </button>
 
           <!-- Search overlay: type a place, tap a result, it joins the plan.
                Full on-screen keyboard — this panel has no physical keys. -->
@@ -303,6 +379,8 @@
             <button id="navp-zin">+</button>
             <button id="navp-fit" class="on">FIT</button>
             <button id="navp-zout">&minus;</button>
+            <button id="tod-open" aria-label="Show descent advisory"
+                    aria-expanded="false">TOD</button>
           </div>
         </div>
       </section>
@@ -598,6 +676,10 @@
           <div class="comms" id="comms" hidden>
             <div class="cx-head">COMMS
               <button class="nsx-close" id="comms-close">✕</button></div>
+            <div class="atc-next" id="atc-next" hidden>
+              <span><b>ATC HANDOFF</b><strong id="atc-next-freq">—</strong></span>
+              <button id="atc-stage">SET STANDBY</button>
+            </div>
             <div class="cx-row" id="cx-com1">
               <span class="cx-l">COM1</span><span class="cx-act" id="cx-com1-act">—</span>
               <button class="cx-sby" id="cx-com1-sby">—</button>

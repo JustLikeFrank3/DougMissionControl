@@ -47,7 +47,9 @@ namespace FlightDeckSimAgent;
 
 internal enum Definition { State = 0, Caps = 1, Title = 2, Gps = 3 }
 
-internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3 }
+internal enum FacilityDefinition { Airport = 100 }
+
+internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3, FlightPlan = 4, Facility = 5 }
 
 internal enum Group { Main = 0 }
 
@@ -75,12 +77,9 @@ internal enum Event
     ApSpdVarSet,
     ApHdgHoldOn,
     ApHdgHoldOff,
-    ApAltHoldOn,
-    ApAltHoldOff,
-    ApVsHoldOn,
-    ApVsHoldOff,
-    ApFlcOn,
-    ApFlcOff,
+    ApAltHoldToggle,
+    ApVsHoldToggle,
+    ApFlcToggle,
     Com1StbySet,
     Com1Swap,
     Com2StbySet,
@@ -163,6 +162,23 @@ internal struct SimStateRaw
     // MSFS can keep several altitude references.  The AP follows this slot,
     // so AP_ALT_VAR_SET_ENGLISH must receive it as its second parameter.
     public double ApAltitudeSlotIndex;
+    // Built-in ATC's next assigned controller frequency. Zero when no handoff
+    // is pending; published only after Normalize validates the COM band.
+    public double AtcFutureAgentMHz;
+    // Generic aural warnings exposed by SimConnect. These are observed warning
+    // states, not limits inferred from a particular aircraft's handbook.
+    public double OverspeedWarning;
+    public double StallWarning;
+    public double EngOnFire1;
+    public double EngOnFire2;
+    public double EngOnFire3;
+    public double EngOnFire4;
+    public double GearWarning;
+    public double GearDamageBySpeed;
+    public double GearSpeedExceeded;
+    // Observed height above terrain for departure-phase detection. Keep this
+    // at the tail: StateVars and SimStateRaw are positionally paired.
+    public double PlaneAltitudeAboveGroundFt;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -203,6 +219,29 @@ internal struct SimGpsRaw
     public string NextId;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
     public string PrevId;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct AirportFacilityRaw
+{
+    public double Latitude;
+    public double Longitude;
+    public double Altitude;
+    public int RunwayCount;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct RunwayFacilityRaw
+{
+    public double Latitude;
+    public double Longitude;
+    public double Altitude;
+    public float Heading;
+    public float Length;
+    public int PrimaryNumber;
+    public int PrimaryDesignator;
+    public int SecondaryNumber;
+    public int SecondaryDesignator;
 }
 
 internal static class SimVars
@@ -275,6 +314,17 @@ internal static class SimVars
         ("AUTOPILOT AIRSPEED HOLD",       "Bool"),
         // Appended only: StateVars and SimStateRaw are positional.
         ("AUTOPILOT ALTITUDE SLOT INDEX",  "Number"),
+        ("ATC FUTURE AGENT FREQUENCY",     "MHz"),
+        ("OVERSPEED WARNING",              "Bool"),
+        ("STALL WARNING",                  "Bool"),
+        ("ENG ON FIRE:1",                  "Bool"),
+        ("ENG ON FIRE:2",                  "Bool"),
+        ("ENG ON FIRE:3",                  "Bool"),
+        ("ENG ON FIRE:4",                  "Bool"),
+        ("GEAR WARNING:1",                 "Enum"),
+        ("GEAR DAMAGE BY SPEED",           "Bool"),
+        ("GEAR SPEED EXCEEDED",            "Bool"),
+        ("PLANE ALT ABOVE GROUND",          "Feet"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
@@ -328,20 +378,18 @@ internal static class SimVars
         (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
         (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm
         (Event.ApSpdVarSet,      "AP_SPD_VAR_SET"),             // takes knots
-        // Mode engagement, explicit on/off rather than the _TOGGLE variants —
-        // same reasoning as the landing lights. A bug without its mode is a
-        // number on a panel and nothing else.
+        // Mode engagement. These are toggles because they are the events the
+        // SDK cockpit templates send and the Working Title CJ4 responds to.
+        // Resolve guards them against observed state, preserving explicit
+        // on/off behavior at the Flight Deck boundary.
         (Event.ApHdgHoldOn,      "AP_HDG_HOLD_ON"),
         (Event.ApHdgHoldOff,     "AP_HDG_HOLD_OFF"),
-        (Event.ApAltHoldOn,      "AP_ALT_HOLD_ON"),
-        (Event.ApAltHoldOff,     "AP_ALT_HOLD_OFF"),
-        (Event.ApVsHoldOn,       "AP_VS_HOLD_ON"),
-        (Event.ApVsHoldOff,      "AP_VS_HOLD_OFF"),
+        (Event.ApAltHoldToggle,  "AP_ALT_HOLD"),
+        (Event.ApVsHoldToggle,   "AP_PANEL_VS_HOLD"),
         // Speed is flown by FLC on everything modern. On an airframe with no
         // autothrottle that means PITCH, not throttle: the aeroplane trades
         // altitude for the speed you asked for.
-        (Event.ApFlcOn,          "FLIGHT_LEVEL_CHANGE_ON"),
-        (Event.ApFlcOff,         "FLIGHT_LEVEL_CHANGE_OFF"),
+        (Event.ApFlcToggle,      "FLIGHT_LEVEL_CHANGE"),
         // Radios take Hz — the _HZ family avoids the BCD encoding entirely.
         (Event.Com1StbySet,      "COM_STBY_RADIO_SET_HZ"),
         (Event.Com1Swap,         "COM_STBY_RADIO_SWAP"),

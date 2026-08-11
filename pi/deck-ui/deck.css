@@ -81,6 +81,8 @@ html, body {
 .status b { color: var(--fg); font-weight: 400; }
 .status .live { color: var(--gr); }
 .status .dead { color: var(--rd); }
+.status .cockpit-cue { margin-left: 0; flex: none; }
+.status .atc-cue { margin-left: 0; flex: none; }
 
 .home {
   width: 150px; border: 0; border-left: 1px solid var(--ln); background: transparent;
@@ -502,6 +504,13 @@ html, body {
 .simt.hot { border-color: var(--am); box-shadow: inset 0 0 0 1px var(--am); }
 
 /* Comms drawer: overlays the right edge of SIM, page stays underneath. */
+.atc-cue { margin-left: auto; padding: 8px 12px; border: 1px solid var(--am);
+           background: #241d0c; color: var(--am); font-family: inherit;
+           font-size: 13px; letter-spacing: .12em; cursor: pointer; }
+.cockpit-cue { padding: 8px 12px; border: 1px solid var(--rd);
+               background: #2b1115; color: var(--rd); font-size: 13px;
+               letter-spacing: .12em; animation: cockpit-pulse 1s steps(2, end) infinite; }
+@keyframes cockpit-pulse { 50% { background: #48161d; color: #fff; } }
 .cx-open { flex: none; margin-left: 18px; }
 .comms { position: absolute; top: 0; right: 0; bottom: 0; width: 560px;
          z-index: 4; background: var(--pan2); border-left: 1px solid var(--ln);
@@ -509,6 +518,13 @@ html, body {
 .cx-head { display: flex; align-items: center; font-size: 16px;
            letter-spacing: .22em; color: var(--mut); margin-bottom: 6px; }
 .cx-head .nsx-close { margin-left: auto; }
+.atc-next { display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px; border: 1px solid var(--am); background: #241d0c; }
+.atc-next span { display: flex; align-items: baseline; gap: 14px; }
+.atc-next b { color: var(--am); font-size: 12px; letter-spacing: .14em; }
+.atc-next strong { color: var(--fg); font-size: 25px; font-weight: 400; }
+.atc-next button { padding: 10px 12px; border: 1px solid var(--am); color: var(--am);
+                   background: transparent; font-family: inherit; cursor: pointer; }
 .cx-row { display: grid; grid-template-columns: 70px 1fr 1fr 64px;
           gap: 10px; align-items: center; }
 .cx-l { font-size: 13px; letter-spacing: .14em; color: var(--mut); }
@@ -595,7 +611,7 @@ html, body {
 /* Replaces the MEDIA surface: album art never needed 2560 px of panel. */
 .np { display: flex; align-items: center; gap: 12px; min-height: 64px; flex: none;
       background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
-.np.idle { opacity: .45; }
+.np.idle { opacity: .45; flex-direction: row; }
 .np-art { width: 48px; height: 48px; object-fit: cover; flex: none; }
 .np-noart { width: 48px; height: 48px; flex: none; display: grid; place-items: center;
             font-size: 22px; color: var(--mut); background: #0b1016;
@@ -754,6 +770,12 @@ html, body {
 .navrail .simt { flex: none; justify-content: flex-start;
                  padding-top: 36px; min-height: 0; }
 .navrail .simt-v.sm2 { font-size: 28px; }
+.navrail .navnp { margin-top: auto; padding: 9px; gap: 9px; }
+.navrail .navnp .np-art, .navrail .navnp .np-noart { width: 42px; height: 42px; }
+.navrail .navnp .np-title { font-size: 14px; }
+.navrail .navnp .np-artist, .navrail .navnp .np-time { font-size: 11px; }
+.navrail .navnp .np-btns { gap: 4px; }
+.navrail .navnp .np-b { width: 44px; height: 44px; font-size: 15px; }
 
 /* The airframe as a caption: two short lines, no absolute label to collide. */
 .navac { flex: none; line-height: 1.35; }
@@ -767,14 +789,31 @@ html, body {
    goes on the container as well as the canvas: touch-action is read from the
    element the contact STARTS on, and the gesture is bound to the container. */
 #navp-live { touch-action: none; }
-/* ...but these two scroll with a finger, and they sit inside that container.
+/* ...but these lists scroll with a finger, and they sit inside that container.
    touch-action is inherited by hit-testing, not by the cascade, so they have
    to claim vertical panning back or the plan list and the search results
    become unscrollable on a panel with no wheel. */
 .navplan, .nsx-results { touch-action: pan-y; }
 #navp-canvas { flex: 1; min-width: 0; background: #070a0f; touch-action: none; }
 
-/* NAV zoom — big enough for fingers, riding the map's right edge */
+/* Primary flight numbers stay visible over the map. They live outside the
+   already-full rail, and the dark instrument backing keeps terrain from
+   changing their contrast. */
+.navflight { position: absolute; z-index: 2; top: 16px; left: 448px;
+             display: grid; grid-template-columns: repeat(2, 150px); gap: 8px;
+             pointer-events: none; }
+.navflight-readout { height: 78px; display: grid;
+                     grid-template-columns: 1fr auto; grid-template-rows: 18px 1fr;
+                     padding: 9px 12px; border-left: 3px solid var(--cy);
+                     background: rgba(7, 10, 15, .9); }
+.navflight-readout span { grid-column: 1 / -1; color: var(--mut);
+                          font-size: 11px; letter-spacing: .18em; }
+.navflight-readout strong { align-self: end; color: var(--fg); font-size: 34px;
+                            line-height: 1; font-weight: 400; letter-spacing: 0; }
+.navflight-readout small { align-self: end; padding-bottom: 3px; color: var(--mut);
+                           font-size: 11px; letter-spacing: .1em; }
+
+/* NAV zoom — big enough for fingers, clear of the waypoint drawer */
 .navmap { position: relative; }
 .navzoom { position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
            display: flex; flex-direction: column; gap: 10px; }
@@ -783,21 +822,94 @@ html, body {
                   font-family: inherit; font-size: 26px; cursor: pointer; }
 .navzoom #navp-fit { font-size: 14px; letter-spacing: .14em; color: var(--mut); }
 .navzoom #navp-fit.on { color: var(--fg); box-shadow: inset 0 -3px 0 var(--acc); }
+.navdrawer.open ~ .navzoom { right: 536px; }
 
-/* NAV flight plan — the rail's waypoint list */
-/* flex: 1 1 auto beats the `.navrail > *` reset above — this is the child that
-   absorbs the squeeze, because it is the only one that can scroll what it
-   loses. min-height:0 so it is actually allowed to shrink below its content. */
-.navplan { display: flex; flex-direction: column; gap: 6px; max-height: 208px;
+/* Pure advisory overlay: it can suggest a descent, never command one. */
+.todcard { position: absolute; z-index: 2; top: 112px; left: 448px; width: 390px;
+           padding: 14px 16px; border: 1px solid var(--ln);
+           background: rgba(11, 15, 21, .94); box-shadow: 0 10px 28px rgba(0,0,0,.28); }
+.tod-head { display: flex; justify-content: space-between; align-items: center;
+            color: var(--mut); font-size: 12px; letter-spacing: .16em; }
+.tod-head b { color: var(--fg); font-weight: 400; }
+.tod-head-right { display: flex; align-items: center; gap: 10px; }
+.tod-head button { width: 38px; height: 38px; padding: 0; border: 1px solid var(--ln);
+                   background: var(--pan2); color: var(--mut); font: 15px/1 inherit;
+                   letter-spacing: 0; cursor: pointer; }
+.tod-call { margin-top: 8px; color: var(--fg); font-size: 34px; line-height: 1; }
+.tod-sub { min-height: 17px; margin-top: 5px; color: var(--mut);
+           font-size: 12px; letter-spacing: .1em; }
+.tod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 14px;
+            margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--ln); }
+.tod-grid span { display: flex; justify-content: space-between; gap: 8px; }
+.tod-grid .wide { grid-column: 1 / -1; }
+.tod-grid b, .tod-source { color: var(--mut); font-size: 10px;
+                           font-weight: 400; letter-spacing: .12em; }
+.tod-grid strong { color: var(--fg); font-size: 13px; font-weight: 400; }
+.tod-source { margin-top: 8px; white-space: nowrap; overflow: hidden;
+              text-overflow: ellipsis; }
+.tod-controls { display: grid; grid-template-columns: 72px 72px 72px 1fr;
+                gap: 6px; margin-top: 11px; }
+.tod-controls button { height: 38px; border: 1px solid var(--ln); background: var(--pan2);
+                       color: var(--mut); font: 12px inherit; cursor: pointer; }
+.tod-controls button.on { color: var(--cy); border-color: var(--cy); }
+.tod-profile-set { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tod-profile-set button { min-width: 0; }
+.todcard.approaching { border-color: #6e5b32; }
+.todcard.imminent, .todcard.tod_now { border-color: var(--am); }
+.todcard.imminent .tod-call, .todcard.tod_now .tod-call { color: var(--am); }
+.todcard.missed { border-color: var(--rd); }
+.todcard.missed .tod-call { color: var(--rd); }
+.todcard.descending { border-color: var(--cy); }
+.todcard.complete { border-color: var(--gr); }
+.todcard.path-warn #tod-path { color: var(--am); }
+.todcard.path-bad #tod-path { color: var(--rd); }
+.navzoom #tod-open { font-size: 14px; letter-spacing: .12em; color: var(--cy); }
+.navzoom #tod-open.on { border-color: var(--cy); background: #14212b; }
+
+/* NAV flight plan — a full-height drawer over the map's right edge. */
+.navdrawer { position: absolute; z-index: 4; top: 0; right: 0; bottom: 0;
+             width: min(520px, calc(100% - 90px)); padding: 18px;
+             display: flex; flex-direction: column; gap: 14px;
+             background: rgba(11, 15, 21, .97); border-left: 1px solid var(--ln);
+             box-shadow: -18px 0 40px rgba(0, 0, 0, .3);
+             transform: translateX(100%); transition: transform 180ms ease; }
+.navdrawer.open { transform: translateX(0); }
+.navdrawer-head { flex: none; display: flex; align-items: center;
+                  justify-content: space-between; gap: 14px;
+                  padding-bottom: 12px; border-bottom: 1px solid var(--ln); }
+.navdrawer-title { font-size: 20px; letter-spacing: .12em; color: var(--fg); }
+.navdrawer-count { margin-top: 4px; font-size: 12px; letter-spacing: .1em;
+                   color: var(--mut); }
+.navdrawer-close { width: 52px; height: 52px; flex: none; border: 1px solid var(--ln);
+                   background: var(--pan); color: var(--fg); font: 20px inherit;
+                   cursor: pointer; }
+.navdrawer-tab { position: absolute; z-index: 3; right: 14px; top: 18px;
+                 min-width: 92px; height: 52px; border: 1px solid var(--cy);
+                 background: rgba(11, 15, 21, .92); color: var(--cy);
+                 font-family: inherit; font-size: 13px; letter-spacing: .1em;
+                 cursor: pointer; }
+.navdrawer-tab span { display: inline-block; min-width: 22px; color: var(--fg); }
+.navdrawer.open + .navdrawer-tab { visibility: hidden; }
+.navplan { display: flex; flex-direction: column; gap: 8px;
            overflow-y: auto; flex: 1 1 auto; min-height: 0; }
-.navrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+.navrow { display: flex; align-items: center; gap: 10px; padding: 10px;
           border: 1px solid var(--ln); background: var(--pan); cursor: pointer; }
 .navrow.on { box-shadow: inset 3px 0 0 var(--acc); background: #141d29; }
-.navrow .n { width: 22px; font-size: 14px; color: var(--mut); flex: none; }
+.navrow .n { width: 26px; font-size: 14px; color: var(--mut); flex: none;
+             text-align: center; }
 .navrow.on .n { color: var(--acc); }
 .navrow .t { flex: 1; min-width: 0; font-size: 16px; white-space: nowrap;
              overflow: hidden; text-overflow: ellipsis; }
-.navrow .d { font-size: 13px; color: var(--mut); flex: none; }
+.navrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.navrow-main .t { color: var(--fg); }
+.navrow .meta { font-size: 11px; color: var(--mut); letter-spacing: .04em;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navrow .d { width: 112px; font-size: 12px; color: var(--mut); flex: none;
+             text-align: right; line-height: 1.45; }
+.navrow .focus, .navrow .x { flex: none; width: 42px; height: 42px; border: 0;
+                              background: transparent; color: var(--mut);
+                              font-size: 20px; font-family: inherit; cursor: pointer; }
+.navrow .focus:active { color: var(--cy); background: #1d2836; }
 .navrow .x { flex: none; width: 34px; height: 34px; border: 0; background: transparent;
              color: var(--mut); font-size: 16px; font-family: inherit; cursor: pointer; }
 .navrow .x:active { color: var(--rd); }
@@ -810,6 +922,7 @@ html, body {
 .navadd:disabled { color: var(--mut); opacity: .45; cursor: default; }
 /* SYNC engaged: the sim's GPS owns the plan and the border says so. */
 .navadd.on { border-style: solid; border-color: var(--cy); color: var(--cy); }
+.navadd.bad { border-style: solid; border-color: var(--rd); color: var(--rd); }
 
 /* Search overlay + on-screen keyboard */
 .navsearch { position: absolute; inset: 0; background: rgba(11, 15, 21, .96);
@@ -837,8 +950,8 @@ html, body {
 .nsx-kbd button.space { flex: 1; max-width: 420px; }
 .nsx-kbd button.go { color: var(--cy); border-color: var(--cy); }
 
-.navbtns { display: flex; gap: 8px; }
-.navbtns .navadd { flex: 1; }
+.navbtns { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.navbtns .navadd { min-width: 0; }
 
 /* Finger-sized scrollbars for the deck's own scrolling lists (plan, search
    results). The Grafana iframe is cross-origin — its bars are handled by the

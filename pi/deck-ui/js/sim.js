@@ -9,9 +9,10 @@
 
 import { $, wireTap, wireHold, post } from './ui.js';
 import { fmtAgo } from './format.js';
-import { nextDetent, stepBug } from './simmath.js';
+import { nextDetent, stepBug, atcHandoff } from './simmath.js';
 import { simBuildGauges, simPaintGauges } from './gauges.js';
 import { missionUpdate, paintMissionStrip } from './nav.js';
+import { paintAtcCue } from './atc.js';
 
 /* ── SIM ───────────────────────────────────────────────────────────────
    Polled directly rather than carried on the SSE state. Gear travel takes
@@ -196,10 +197,18 @@ function simPaintModes(c) {
     var on = ctl.mode === 'on';
     btn.textContent = AP_MODE_LABEL[key] + (on ? ' · ON' : ' · OFF');
     btn.className = 'simmode' + (on ? ' on' : '');
-    // Two different kinds of inert, and they want different words: the mode
-    // is off, or the mode is on but the master is not holding the aeroplane.
-    note.textContent = !on ? 'BUG ONLY · MODE OFF'
-      : !master ? 'MODE ARMED · AP MASTER OFF' : 'FLYING THIS BUG';
+    // ALT HOLD captures the present altitude; the selected altitude is reached
+    // under V/S or FLC. FLC controls pitch for speed, never the throttle.
+    if (key === 'apalt') {
+      note.textContent = on ? (master ? 'HOLDING ALTITUDE' : 'ALT HOLD · AP MASTER OFF')
+        : 'SELECTED ALT · USE V/S OR FLC';
+    } else if (key === 'apspd') {
+      note.textContent = !on ? 'SPEED BUG · FLC OFF'
+        : !master ? 'FLC ARMED · AP MASTER OFF' : 'FLC ACTIVE · PITCH FOR SPEED';
+    } else {
+      note.textContent = !on ? 'BUG ONLY · MODE OFF'
+        : !master ? 'MODE ARMED · AP MASTER OFF' : 'FLYING THIS BUG';
+    }
     note.className = 'simnote' + (on && master ? ' live' : '');
   });
 }
@@ -216,6 +225,8 @@ export function paintSim(d) {
   d = d || {};
   var st = d.session ? d.state : null;
   var live = !!(st && st.controls);
+
+  paintAtcCue(st);
 
   $('sim-ph').hidden = live;
   $('sim-live').hidden = !live;
@@ -299,7 +310,7 @@ export function paintSim(d) {
   var r = st.readouts || {};
   missionUpdate(d);
   paintMissionStrip();
-  cxPaint(c);
+  cxPaint(c, r);
   $('simv-ias').textContent = r.ias_kt;
   $('simv-alt').textContent = r.alt_ft;
   $('simv-hdg').textContent = ('00' + r.hdg_mag).slice(-3);
@@ -367,7 +378,14 @@ export function paintSim(d) {
 
 /* The comms drawer. Rows exist only for radios the airframe declares —
    a Cub never shows a NAV2, and never shows a greyed one either. */
-function cxPaint(c) {
+function cxPaint(c, r) {
+  var handoff = paintAtcCue({ controls: c, readouts: r });
+  var box = $('atc-next');
+  box.hidden = !handoff;
+  if (handoff) {
+    $('atc-next-freq').textContent = handoff.frequency.toFixed(3);
+    $('atc-stage').textContent = handoff.action === 'swap' ? 'SWAP COM1' : 'SET STANDBY';
+  }
   ['com1', 'com2', 'nav1', 'nav2'].forEach(function (k) {
     var row = $('cx-' + k), has = !!c[k];
     row.hidden = !has;
@@ -545,7 +563,19 @@ export function wireSim() {
   // tap — it mirrors the real avionics flow and is reversible by tapping
   // again, so hold-to-confirm would only slow the radio call down.
   $('comms-btn').addEventListener('click', function () { $('comms').hidden = false; });
+  $('atc-cue').addEventListener('click', function () {
+    document.querySelector('.navb[data-surface="sim"]').click();
+    $('comms').hidden = false;
+  });
   $('comms-close').addEventListener('click', function () { $('comms').hidden = true; });
+  $('atc-stage').addEventListener('click', function () {
+    var r = (simLast && simLast.readouts) || {};
+    var c = (simLast && simLast.controls) || {};
+    var handoff = atcHandoff(r.atc_next_mhz, c.com1);
+    if (!handoff) return;
+    if (handoff.action === 'swap') simSend('com1', 'swap', null);
+    else simSend('com1', 'set_sby', handoff.frequency.toFixed(3));
+  });
 
   [['com1', 'COM1', 118, 136.99], ['com2', 'COM2', 118, 136.99],
    ['nav1', 'NAV1', 108, 117.95], ['nav2', 'NAV2', 108, 117.95]]

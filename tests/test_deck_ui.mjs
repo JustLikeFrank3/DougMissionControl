@@ -8,16 +8,18 @@
    outage, and an ETE invented from a ground speed too small to divide by. */
 
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI = path.join(here, '..', 'pi', 'deck-ui', 'js');
 
-const fmt = await import(path.join(UI, 'format.js'));
-const geo = await import(path.join(UI, 'geo.js'));
-const { createSeries } = await import(path.join(UI, 'series.js'));
-const sim = await import(path.join(UI, 'simmath.js'));
+const fmt = await import(pathToFileURL(path.join(UI, 'format.js')));
+const geo = await import(pathToFileURL(path.join(UI, 'geo.js')));
+const { createSeries } = await import(pathToFileURL(path.join(UI, 'series.js')));
+const sim = await import(pathToFileURL(path.join(UI, 'simmath.js')));
+const descent = await import(pathToFileURL(path.join(UI, 'descent.js')));
+const nav = await import(pathToFileURL(path.join(UI, 'nav.js')));
 
 let passed = 0;
 const failures = [];
@@ -106,6 +108,17 @@ test('a pinch of double the span is exactly one zoom level', () => {
   assert.equal(step(1000), geo.ZMAX, 'and it stops at the limit rather than running away');
 });
 
+test('ATC handoff distinguishes staging, swapping, and already-active', () => {
+  assert.deepEqual(sim.atcHandoff(124.85, { act: 126.725, sby: 121.9 }),
+    { frequency: 124.85, action: 'stage' });
+  assert.deepEqual(sim.atcHandoff(124.85, { act: 126.725, sby: 124.85 }),
+    { frequency: 124.85, action: 'swap' });
+  assert.equal(sim.atcHandoff(126.725, { act: 126.725, sby: 124.85 }), null,
+    'no prompt when COM1 is already tuned');
+  assert.equal(sim.atcHandoff(null, { act: 126.725, sby: 124.85 }), null,
+    'no prompt without a valid simulator handoff');
+});
+
 test('isTeleport separates a relocate from a slow poll, not a big number', () => {
   const orlando = { lat: 28.43, lon: -81.31 };
   const seattle = { lat: 47.45, lon: -122.31 };
@@ -120,12 +133,181 @@ test('isTeleport separates a relocate from a slow poll, not a big number', () =>
   assert.equal(geo.isTeleport(null, orlando, 2000), false, 'no previous fix, nothing to compare');
 });
 
+test('isStaleGpsLeg rejects a departure fix left hundreds of miles behind', () => {
+  const jfk = { lat: 40.64232, lon: -73.76972 };
+  const collapsed = { prev: jfk, next: jfk };
+  assert.equal(geo.isStaleGpsLeg(collapsed, { lat: 42.04728, lon: -88.39906 }), true,
+    'the live CJ4 failure: both fixes at JFK while the aircraft is near Chicago');
+  assert.equal(geo.isStaleGpsLeg(collapsed, { lat: 40.7, lon: -73.8 }), false,
+    'a collapsed first leg is legitimate while still near departure');
+  assert.equal(geo.isStaleGpsLeg({ prev: jfk, next: { lat: 41.0, lon: -75.0 } },
+    { lat: 42.0, lon: -88.0 }), false, 'a real leg is not rejected merely for being distant');
+});
+
+test('isStaleGpsLeg rejects the live short KJFK departure leg left behind', () => {
+  const gps = {
+    index: 1,
+    prev: { lat: 40.63993, lon: -73.77869 },
+    next: { lat: 40.6258, lon: -73.78269 },
+  };
+  assert.equal(geo.isStaleGpsLeg(gps, { lat: 40.54714, lon: -74.80705 }), true,
+    'a sub-mile departure leg 50 nm behind must not pull NAV back to JFK');
+  assert.equal(geo.isStaleGpsLeg(gps, { lat: 40.64, lon: -73.8 }), false,
+    'the same leg remains valid while the aircraft is still near departure');
+});
+
 test('a cruising aircraft never trips the teleport threshold', () => {
   // 500 kt for two seconds, sampled at the worst case of a whole poll late.
   const nm = 500 * (2 / 3600);
   const from = { lat: 28, lon: -81 };
   const to = { lat: 28 + nm / 60, lon: -81 };
   assert.equal(geo.isTeleport(from, to, 2000), false);
+});
+
+/* ── descent advisory ──────────────────────────────────────────────────── */
+
+const todRoute = [{ name: 'DEST', lat: 0, lon: 2 }]; // 120 nm due east
+const todAircraft = { altitudeFt: 30000, lat: 0, lon: 0,
+  groundspeedKt: 380, verticalSpeedFpm: 0, selectedAltitudeFt: 3000 };
+
+test('TOD uses geometric profile plus buffer against the existing route', () => {
+  const d = descent.calculateDescent({ aircraft: todAircraft, route: todRoute,
+    config: { targetFt: 3000, angleDeg: 3, bufferNm: 10 } });
+  assert.equal(d.state, 'cruise');
+  assert.ok(Math.abs(d.descentDistanceNm - 84.8) < 0.2);
+  assert.ok(Math.abs(d.requiredDistanceNm - 94.8) < 0.2);
+  assert.ok(Math.abs(d.distanceToTodNm - 25.2) < 0.3);
+  assert.ok(Math.abs(d.timeToTodMin - 4.0) < 0.1);
+  assert.ok(Math.abs(d.requiredVsFpm + 2016) < 2);
+  assert.equal(d.targetSource, 'terminal_default');
+});
+
+test('TOD profile angle changes distance and required vertical speed', () => {
+  const shallow = descent.calculateDescent({ aircraft: todAircraft, route: todRoute,
+    config: { angleDeg: 2.5 } });
+  const steep = descent.calculateDescent({ aircraft: todAircraft, route: todRoute,
+    config: { angleDeg: 3.5 } });
+  assert.ok(shallow.requiredDistanceNm > steep.requiredDistanceNm);
+  assert.ok(Math.abs(shallow.requiredVsFpm) < Math.abs(steep.requiredVsFpm));
+});
+
+test('TOD selects the first real remaining altitude constraint', () => {
+  const route = [
+    { name: 'BASE', lat: 0, lon: 1.5, altitude_ft: 5000 },
+    { name: 'FINAL', lat: 0, lon: 1.8, altitude_ft: 3000 },
+    { name: '10L', lat: 0, lon: 2 },
+  ];
+  const d = descent.calculateDescent({ aircraft: todAircraft, route });
+  assert.equal(d.targetName, 'BASE');
+  assert.equal(d.targetAltitudeFt, 5000);
+  assert.equal(d.targetSource, 'constraint');
+  const afterBase = descent.calculateDescent({ aircraft: todAircraft, route, activeIndex: 1 });
+  assert.equal(afterBase.targetName, 'FINAL');
+});
+
+test('TOD never invents a waypoint constraint', () => {
+  const d = descent.calculateDescent({ aircraft: todAircraft,
+    route: [{ name: 'BASE', lat: 0, lon: 1 }, { name: 'FINAL', lat: 0, lon: 2 }] });
+  assert.equal(d.targetName, 'FINAL');
+  assert.equal(d.targetAltitudeFt, 3000);
+  assert.equal(d.targetSource, 'terminal_default');
+});
+
+test('manual TOD target overrides route constraints without changing the route', () => {
+  const route = [{ name: 'BASE', lat: 0, lon: 1.5, altitude_ft: 5000 }];
+  const d = descent.calculateDescent({ aircraft: todAircraft, route,
+    config: { targetMode: 'manual', targetFt: 7000 } });
+  assert.equal(d.targetAltitudeFt, 7000);
+  assert.equal(d.targetSource, 'manual');
+  assert.equal(route[0].altitude_ft, 5000);
+});
+
+test('TOD state thresholds cover cruise through missed', () => {
+  function at(lon) {
+    return descent.calculateDescent({ aircraft: { ...todAircraft, lon: lon }, route: todRoute });
+  }
+  assert.equal(at(-1).state, 'cruise');
+  assert.equal(at(0.2).state, 'approaching');
+  assert.equal(at(0.42).state, 'imminent');
+  assert.equal(at(0.5).state, 'tod_now');
+  assert.equal(at(0.7).state, 'missed');
+});
+
+test('TOD reports complete when no descent is required', () => {
+  const d = descent.calculateDescent({
+    aircraft: { ...todAircraft, altitudeFt: 3050 }, route: todRoute });
+  assert.equal(d.state, 'complete');
+  assert.equal(d.altitudeToLoseFt, 50);
+});
+
+test('TOD stays unavailable during takeoff and climb', () => {
+  for (const flightPhase of ['TAKEOFF', 'CLIMB']) {
+    const d = descent.calculateDescent({
+      aircraft: { ...todAircraft, altitudeFt: 5000, verticalSpeedFpm: 1200 },
+      route: todRoute,
+      flightPhase,
+    });
+    assert.equal(d.state, 'unavailable');
+    assert.equal(d.reason, `during ${flightPhase.toLowerCase()}`);
+    assert.equal(d.pathStatus, undefined);
+  }
+});
+
+test('mission phase distinguishes takeoff from en-route climb', () => {
+  assert.equal(nav.missionPhase({ on_ground: false, agl_ft: 800, vs_fpm: 1200 }, 40),
+    'TAKEOFF');
+  assert.equal(nav.missionPhase({ on_ground: false, agl_ft: 1800, vs_fpm: 1200 }, 40),
+    'CLIMB');
+  assert.equal(nav.missionPhase({ on_ground: false, agl_ft: 800, vs_fpm: -500 }, 5),
+    'APPROACH');
+});
+
+test('descending path deviation uses quiet 300 and 750 foot bands', () => {
+  function deviation(feet) {
+    const gradient = Math.tan(3 * Math.PI / 180) * 6076.12;
+    const remainingNm = 50;
+    const pathAltitude = 3000 + (remainingNm - 10) * gradient;
+    return descent.calculateDescent({
+      aircraft: { altitudeFt: pathAltitude + feet, lat: 0, lon: 0,
+        groundspeedKt: 300, verticalSpeedFpm: -1500 },
+      route: [{ name: 'DEST', lat: 0, lon: remainingNm / 60 }],
+    });
+  }
+  assert.equal(deviation(200).pathStatus, 'on_path');
+  assert.equal(deviation(500).pathStatus, 'slightly_high');
+  assert.equal(deviation(-500).pathStatus, 'slightly_low');
+  assert.equal(deviation(900).pathStatus, 'high');
+  assert.equal(deviation(-900).pathStatus, 'low');
+});
+
+test('TOD degrades without route or usable aircraft state', () => {
+  assert.equal(descent.calculateDescent({ aircraft: todAircraft, route: [] }).state,
+    'unavailable');
+  assert.equal(descent.calculateDescent({ aircraft: {}, route: todRoute }).state,
+    'unavailable');
+});
+
+test('cockpit warning prioritizes stall and reports observed overspeed IAS', () => {
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { overspeed: true }, readouts: { ias_kt: 332 },
+  }), { kind: 'overspeed', label: 'OVERSPEED', detail: '332 KT' });
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { overspeed: true, stall: true }, readouts: { ias_kt: 90 },
+  }), { kind: 'stall', label: 'STALL' });
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { engine_fire: [2], stall: true },
+  }), { kind: 'engine_fire', label: 'ENGINE FIRE', detail: 'ENG 2' });
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { gear_damage: true, gear_speed_exceeded: true },
+  }), { kind: 'gear_damage', label: 'GEAR DAMAGE' });
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { gear_warning: 'gear_up', overspeed: true },
+  }), { kind: 'gear_warning', label: 'GEAR UP' });
+  assert.deepEqual(sim.cockpitWarning({
+    warnings: { gear_speed_exceeded: true },
+  }), { kind: 'gear_overspeed', label: 'GEAR OVERSPEED' });
+  assert.equal(sim.cockpitWarning({ warnings: {} }), null);
+  assert.equal(sim.cockpitWarning({}), null);
 });
 
 /* ── series ─────────────────────────────────────────────────────────────── */

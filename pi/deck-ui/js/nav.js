@@ -11,8 +11,10 @@
 
 import { $, wireHold, post, getJSON } from './ui.js';
 import { fmtEte, fmtAgo, fmtDur, fmtClock } from './format.js';
+import { paintAtcCue } from './atc.js';
+import { calculateDescent } from './descent.js';
 import { xy as navXY, distBrg as navDistBrg, world as navWorld, clampZoom as navClampZ,
-         isTeleport, zoomForSpan, TILE, NM_PER_DEG,
+         isTeleport, isStaleGpsLeg, zoomForSpan, TILE, NM_PER_DEG,
          ZMIN as NAV_ZMIN, ZMAX as NAV_ZMAX } from './geo.js';
 
 /* ── NAV ───────────────────────────────────────────────────────────────
@@ -47,10 +49,25 @@ var navSync = false;
 try { navSync = localStorage.getItem('navSync') === '1'; } catch (e) { }
 var navSyncWps = {};             // gps waypoint index -> {name, lat, lon}
 var navSyncCount = 0;            // plan shape; a change means a new plan
+var navSyncGpsIndex = null;       // changes select a leg; steady polls do not undo a manual target
+var navSyncInvalid = false;      // collapsed departure leg far behind aircraft
 var navTrail = [];               // {t, lat, lon} — browser memory only
 var navTimer = null;
 var navZoom = null;              // null = auto-fit; integer = manual slippy z
 var navLastZ = 12;               // whatever the auto-fit last chose
+var navMapFocus = null;          // explicit map center; independent of steer target
+var TOD_DEFAULT_TARGET_FT = 3000;
+var todTargetFt = 3000;
+var todAngleDeg = 3;
+var todTargetMode = 'auto';
+var todOpen = false;
+try {
+  todTargetFt = Math.max(0, Math.min(50000,
+    Number(localStorage.getItem('todTargetFt')) || 3000));
+  var storedAngle = Number(localStorage.getItem('todAngleDeg'));
+  if ([2.5, 3, 3.5].indexOf(storedAngle) !== -1) todAngleDeg = storedAngle;
+  todTargetMode = localStorage.getItem('todTargetMode') === 'manual' ? 'manual' : 'auto';
+} catch (e) { }
 
 export function navPoll(on) {
   if (on && !navTimer) { navTick(); navTimer = setInterval(navTick, 500); }
@@ -70,8 +87,47 @@ export function navTick() {
 
 /* Grow the plan from the GPS's observed legs. deck-api still owns the plan
    — sync just becomes its author — so PLANS/SAVE/reloads all keep working. */
-function navSyncFeed(g) {
+function navSyncFeed(g, r) {
   if (!navSync || !g || !g.count) return;
+  if (Array.isArray(g.plan) && g.plan.length) {
+    navSyncInvalid = false;
+    $('navp-sync').textContent = 'SYNC';
+    $('navp-sync').classList.remove('bad');
+    var full = g.plan.filter(function (w) {
+      return w && typeof w.lat === 'number' && typeof w.lon === 'number';
+    }).map(function (w, i) {
+      var waypoint = { name: String(w.id || 'WP' + (i + 1)).slice(0, 12),
+                       lat: w.lat, lon: w.lon };
+      if (typeof w.altitude_ft === 'number') waypoint.altitude_ft = w.altitude_ft;
+      return waypoint;
+    });
+    if (g.plan_source !== 'visual_pattern' && g.index !== navSyncGpsIndex) {
+      navSyncGpsIndex = g.index;
+      navSelIdx = Math.max(0, Math.min(full.length - 1, Number(g.index) || 0));
+    }
+    var fullSig = full.map(waypointSignature).join('|');
+    var planSig = navPlan.map(waypointSignature).join('|');
+    if (fullSig !== planSig) {
+      if (g.plan_source === 'visual_pattern') navSelIdx = 0;
+      post('/api/nav/plan', { waypoints: full });
+    }
+    return;
+  }
+  if (isStaleGpsLeg(g, r)) {
+    navSyncInvalid = true;
+    navSync = false;
+    navSyncWps = {}; navSyncCount = 0; navSyncGpsIndex = null;
+    try { localStorage.setItem('navSync', '0'); } catch (e) { }
+    $('navp-sync').classList.remove('on');
+    $('navp-sync').textContent = 'GPS STALE';
+    $('navp-sync').classList.add('bad');
+    return;
+  }
+  if (navSyncInvalid) {
+    navSyncInvalid = false;
+    $('navp-sync').textContent = 'SYNC';
+    $('navp-sync').classList.remove('bad');
+  }
   if (g.count !== navSyncCount) { navSyncWps = {}; navSyncCount = g.count; }
   var dirty = false;
   [g.prev, g.next].forEach(function (w) {
@@ -92,11 +148,14 @@ function navSyncFeed(g) {
   // the assembled order rather than raw GPS index — early legs may be
   // missing if sync was engaged mid-flight.
   var order = Object.keys(navSyncWps).map(Number).sort(function (a, b) { return a - b; });
-  if (g.next && navSyncWps[g.next.i]) navSelIdx = order.indexOf(g.next.i);
+  if (g.index !== navSyncGpsIndex && g.next && navSyncWps[g.next.i]) {
+    navSyncGpsIndex = g.index;
+    navSelIdx = order.indexOf(g.next.i);
+  }
   if (!dirty) return;
   var wps = order.map(function (k) { return navSyncWps[k]; });
-  var sig = wps.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
-  var cur = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
+  var sig = wps.map(waypointSignature).join('|');
+  var cur = navPlan.map(waypointSignature).join('|');
   if (sig !== cur) post('/api/nav/plan', { waypoints: wps });
 }
 
@@ -109,14 +168,16 @@ function navSyncFeed(g) {
 var mission = { kind: null, vehicle: null, phase: null, dest: null,
                 brg: null, dist: null, ete_s: null, eta: null, xte: null };
 
-function missionPhase(r) {
+export function missionPhase(r, distanceNm = mission.dist) {
   if (r.on_ground === undefined) return null;   // agent predates phase data
   if (r.on_ground) {
     if ((r.gs_kt || 0) > 40) return 'ROLL';
     if ((r.gs_kt || 0) > 2) return 'TAXI';
     return (r.rpm_1 || 0) < 50 ? 'COLD & DARK' : 'RAMP';
   }
-  if (mission.dist !== null && mission.dist < 15 && (r.vs_fpm || 0) < 100) return 'APPROACH';
+  if (distanceNm !== null && distanceNm < 15 && (r.vs_fpm || 0) < 100) return 'APPROACH';
+  if (typeof r.agl_ft === 'number' && r.agl_ft < 1500 && (r.vs_fpm || 0) >= 100)
+    return 'TAKEOFF';
   if ((r.vs_fpm || 0) > 300) return 'CLIMB';
   if ((r.vs_fpm || 0) < -300) return 'DESCENT';
   return 'CRUISE';
@@ -177,6 +238,8 @@ export function paintNav(d) {
   var r = st && st.readouts;
   var live = !!(r && typeof r.lat === 'number');
 
+  paintAtcCue(st);
+
   $('navp-ph').hidden = live;
   $('navp-live').hidden = !live;
   $('navp-pill').textContent = !d.link ? 'NO LINK'
@@ -206,7 +269,7 @@ export function paintNav(d) {
   var cut = Date.now() - 45 * 60000;
   while (navTrail.length && navTrail[0].t < cut) navTrail.shift();
 
-  navSyncFeed(st.gps);
+  navSyncFeed(st.gps, r);
   missionUpdate(d);
 
   // The aircraft on the NAV rail — same mission, different view.
@@ -243,18 +306,114 @@ export function paintNav(d) {
   }
   $('navp-trk').textContent = ('00' + (r.trk_true || 0)).slice(-3) + '°T · ' + r.gs_kt + ' kt';
   $('navp-alt').textContent = r.alt_ft + ' ft · ' + r.ias_kt + ' kt ias';
+  $('navp-ias').textContent = Number(r.ias_kt).toLocaleString();
+  $('navp-flight-alt').textContent = Number(r.alt_ft).toLocaleString();
+
+  paintDescent(r, st.controls || {});
 
   drawNavMap(r, wpt);
   renderNavPlan(r);
+}
+
+function rounded(value, increment) {
+  return Math.round(value / increment) * increment;
+}
+
+function renderTodOpen() {
+  $('tod-card').hidden = !todOpen;
+  $('tod-open').classList.toggle('on', todOpen);
+  $('tod-open').setAttribute('aria-expanded', todOpen ? 'true' : 'false');
+}
+
+function paintDescent(r, controls) {
+  var selected = controls.ap_alt && typeof controls.ap_alt.ft === 'number'
+    ? controls.ap_alt.ft : null;
+  var advisory = calculateDescent({
+    aircraft: {
+      altitudeFt: r.alt_ft, lat: r.lat, lon: r.lon,
+      groundspeedKt: r.gs_kt, verticalSpeedFpm: r.vs_fpm,
+      selectedAltitudeFt: selected,
+    },
+    route: navPlan,
+    activeIndex: navSelIdx,
+    flightPhase: mission.phase,
+    config: { targetFt: todTargetMode === 'manual' ? todTargetFt : TOD_DEFAULT_TARGET_FT,
+          targetMode: todTargetMode,
+              angleDeg: todAngleDeg, bufferNm: 10 },
+  });
+  var card = $('tod-card');
+  card.className = 'todcard ' + advisory.state;
+  $('tod-state').textContent = advisory.state.replace('_', ' ').toUpperCase();
+  $('tod-profile').textContent = todAngleDeg.toFixed(1) + '°';
+  $('tod-auto').classList.toggle('on', todTargetMode === 'auto');
+
+  [].forEach.call(document.querySelectorAll('.tod-profile-set button'), function (button) {
+    button.classList.toggle('on', Number(button.dataset.angle) === todAngleDeg);
+  });
+  if (advisory.state === 'unavailable') {
+    var departure = advisory.reason.indexOf('during ') === 0;
+    $('tod-call').textContent = departure ? 'STANDBY' : '—';
+    $('tod-sub').textContent = departure
+      ? advisory.reason.slice(7).toUpperCase() + ' IN PROGRESS'
+      : 'NO USABLE ' + advisory.reason.toUpperCase();
+    ['tod-target', 'tod-lose', 'tod-vs', 'tod-path'].forEach(function (id) {
+      $(id).textContent = '—';
+    });
+    $('tod-source').textContent = departure ? 'DESCENT ADVISORY PAUSED' : 'ADVISORY ONLY';
+    return;
+  }
+
+  var distance = advisory.distanceToTodNm;
+  if (advisory.state === 'complete') {
+    $('tod-call').textContent = 'NOT REQUIRED';
+    $('tod-sub').textContent = 'TARGET ALTITUDE REACHED';
+  } else if (advisory.state === 'descending') {
+    $('tod-call').textContent = 'DESCENT ACTIVE';
+    $('tod-sub').textContent = Math.round(advisory.remainingNm) + ' NM TO ' + advisory.targetName;
+  } else if (advisory.state === 'tod_now') {
+    $('tod-call').textContent = 'TOD NOW';
+    $('tod-sub').textContent = 'BEGIN DESCENT WHEN CLEARED';
+  } else if (advisory.state === 'missed') {
+    $('tod-call').textContent = 'TOD MISSED';
+    $('tod-sub').textContent = Math.round(advisory.requiredDistanceNm) + ' NM REQUIRED · ' +
+      Math.round(advisory.remainingNm) + ' NM REMAIN';
+  } else {
+    $('tod-call').textContent = 'TOD ' + Math.max(0, Math.round(distance)) + ' NM';
+    $('tod-sub').textContent = advisory.timeToTodMin === null ? 'TIME —'
+      : '~' + Math.max(1, Math.round(advisory.timeToTodMin)) + ' MIN' +
+        (advisory.state === 'imminent' ? ' · PREPARE DESCENT' : '');
+  }
+  $('tod-target').textContent = advisory.targetAltitudeFt.toLocaleString() + ' FT';
+  $('tod-lose').textContent = rounded(advisory.altitudeToLoseFt, 100).toLocaleString() + ' FT';
+  $('tod-vs').textContent = advisory.requiredVsFpm === null ? '—'
+    : rounded(advisory.requiredVsFpm, 50).toLocaleString() + ' FPM';
+  $('tod-source').textContent = advisory.targetSource.replace('_', ' ').toUpperCase() +
+    ' · ' + advisory.targetName +
+    (advisory.selectedAltitudeFt === null ? '' : ' · SEL ' + advisory.selectedAltitudeFt + ' FT');
+
+  card.classList.remove('path-warn', 'path-bad');
+  if (advisory.pathStatus === null) {
+    $('tod-path').textContent = '—';
+  } else if (advisory.pathStatus === 'on_path') {
+    $('tod-path').textContent = 'ON PATH';
+  } else {
+    var deviation = rounded(advisory.pathDeviationFt, 50);
+    $('tod-path').textContent = (deviation > 0 ? '+' : '') + deviation.toLocaleString() +
+      ' FT ' + (deviation > 0 ? 'HIGH' : 'LOW');
+    card.classList.add(Math.abs(deviation) > 750 ? 'path-bad' : 'path-warn');
+  }
 }
 
 /* The plan list. Rebuilt when the plan itself changes; the per-row live
    distances update every paint without rebuilding the DOM. */
 export function renderNavPlan(r) {
   var box = $('navp-plan');
-  var sig = navPlan.map(function (w) { return w.name + w.lat + w.lon; }).join('|');
+  var sig = navPlan.map(waypointSignature).join('|');
   if (sig !== navPlanSig) {
     navPlanSig = sig;
+    if (navMapFocus && !navPlan.some(function (w) {
+      return w.lat === navMapFocus.lat && w.lon === navMapFocus.lon;
+    })) navMapFocus = null;
     box.innerHTML = '';
     if (!navPlan.length) {
       var e = document.createElement('div');
@@ -264,12 +423,25 @@ export function renderNavPlan(r) {
     }
     navPlan.forEach(function (w, i) {
       var row = document.createElement('div');
-      row.className = 'navrow';
-      row.innerHTML = '<span class="n"></span><span class="t"></span>' +
-                      '<span class="d"></span><button class="x">✕</button>';
-      row.querySelector('.n').textContent = (i + 1);
+      row.className = 'navrow waypoint';
+      row.innerHTML = '<span class="n"></span><span class="navrow-main">' +
+                      '<span class="t"></span><span class="meta"></span></span>' +
+                      '<span class="d"></span><button class="focus">⌖</button>' +
+                      '<button class="x">✕</button>';
+      row.querySelector('.n').textContent = ('0' + (i + 1)).slice(-2);
       row.querySelector('.t').textContent = w.name;
+      row.querySelector('.meta').textContent = formatCoordinate(w.lat, 'N', 'S') +
+        '  ·  ' + formatCoordinate(w.lon, 'E', 'W') +
+        (typeof w.altitude_ft === 'number' ? '  ·  ' + Math.round(w.altitude_ft) + ' FT' : '');
       row.addEventListener('click', function () { navSelIdx = i; navTick(); });
+      var focus = row.querySelector('.focus');
+      focus.title = 'Center map on ' + w.name;
+      focus.setAttribute('aria-label', 'Center map on ' + w.name);
+      focus.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        navMapFocus = { lat: w.lat, lon: w.lon };
+        navSetZoom(navZoom === null ? navLastZ : navZoom);
+      });
       row.querySelector('.x').addEventListener('click', function (ev) {
         ev.stopPropagation();
         var next = navPlan.slice(0, i).concat(navPlan.slice(i + 1));
@@ -278,14 +450,25 @@ export function renderNavPlan(r) {
       box.appendChild(row);
     });
   }
+  $('navp-count').textContent = navPlan.length + ' IN PLAN';
+  $('navp-tab-count').textContent = navPlan.length;
   [].forEach.call(box.querySelectorAll('.navrow'), function (row, i) {
     row.classList.toggle('on', i === navSelIdx);
     if (r && navPlan[i]) {
-      var d = navDistBrg(r.lat, r.lon, navPlan[i].lat, navPlan[i].lon).dist;
-      row.querySelector('.d').textContent =
-        (d >= 10 ? Math.round(d) : d.toFixed(1)) + ' nm';
+      var nav = navDistBrg(r.lat, r.lon, navPlan[i].lat, navPlan[i].lon);
+      row.querySelector('.d').textContent = ('00' + Math.round(nav.brg)).slice(-3) +
+        '°T · ' + (nav.dist >= 10 ? Math.round(nav.dist) : nav.dist.toFixed(1)) + ' nm';
     }
   });
+}
+
+function waypointSignature(waypoint) {
+  return waypoint.name + waypoint.lat + waypoint.lon +
+    (typeof waypoint.altitude_ft === 'number' ? '@' + waypoint.altitude_ft : '');
+}
+
+function formatCoordinate(value, positive, negative) {
+  return Math.abs(value).toFixed(5) + '°' + (value >= 0 ? positive : negative);
 }
 
 /* Search overlay + on-screen keyboard. Geocoding runs through deck-api's
@@ -459,9 +642,11 @@ function drawNavMap(r, wpt) {
   g.clearRect(0, 0, W, H);
 
   var latC, lonC, z;
-  if (navZoom !== null) {
-    // Manual zoom follows the aircraft; the waypoint is allowed offscreen —
-    // that is what the operator asked for by taking the wheel.
+  if (navMapFocus) {
+    latC = navMapFocus.lat; lonC = navMapFocus.lon;
+    z = navZoom === null ? navLastZ : navZoom;
+  } else if (navZoom !== null) {
+    // Manual zoom follows the aircraft; the waypoint is allowed offscreen.
     latC = r.lat; lonC = r.lon; z = navZoom;
   } else {
     // Auto: fit aircraft + the whole route + trail, north up, min 6 nm.
@@ -597,23 +782,19 @@ function drawNavMap(r, wpt) {
 
 /* ── wiring ─────────────────────────────────────────────────────────────── */
 
+function navSetZoom(zOrNull) {
+  navZoom = zOrNull === null ? null : navClampZ(zOrNull);
+  if (zOrNull === null) navMapFocus = null;
+  var fit = $('navp-fit');
+  fit.classList.toggle('on', navZoom === null);
+  fit.textContent = navZoom === null ? 'FIT' : 'Z' + navZoom;
+  navTick();
+}
+
 export function wireNav() {
   navKbdBuild();   // the on-screen keyboard: this panel has no physical keys
   // NAV zoom. Steps start from wherever the auto-fit currently sits, so the
   // first tap nudges rather than jumps; FIT hands framing back to auto.
-  function navSetZoom(zOrNull) {
-    navZoom = zOrNull === null ? null : navClampZ(zOrNull);
-    var fit = $('navp-fit');
-    fit.classList.toggle('on', navZoom === null);
-    // Show the level while it is being flown manually. On a panel with no
-    // console this is the only way to tell a gesture that was not detected
-    // from one that was detected and then failed to redraw.
-    fit.textContent = navZoom === null ? 'FIT' : 'Z' + navZoom;
-    // Repaint unconditionally. Gating on navTimer meant a zoom change made
-    // between polls sat invisible until the next tick, which reads exactly
-    // like the control being dead.
-    navTick();
-  }
   $('navp-zin').addEventListener('click', function () {
     navSetZoom((navZoom === null ? navLastZ : navZoom) + 1);
   });
@@ -621,6 +802,50 @@ export function wireNav() {
     navSetZoom((navZoom === null ? navLastZ : navZoom) - 1);
   });
   $('navp-fit').addEventListener('click', function () { navSetZoom(null); });
+
+  $('tod-open').addEventListener('click', function () {
+    todOpen = true;
+    renderTodOpen();
+  });
+  $('tod-close').addEventListener('click', function () {
+    todOpen = false;
+    renderTodOpen();
+  });
+  renderTodOpen();
+
+  function saveTodSettings() {
+    try {
+      localStorage.setItem('todTargetFt', String(todTargetFt));
+      localStorage.setItem('todAngleDeg', String(todAngleDeg));
+      localStorage.setItem('todTargetMode', todTargetMode);
+    } catch (e) { }
+    navTick();
+  }
+  $('tod-target-down').addEventListener('click', function () {
+    todTargetFt = Math.max(0, todTargetFt - 1000); todTargetMode = 'manual'; saveTodSettings();
+  });
+  $('tod-target-up').addEventListener('click', function () {
+    todTargetFt = Math.min(50000, todTargetFt + 1000); todTargetMode = 'manual'; saveTodSettings();
+  });
+  $('tod-auto').addEventListener('click', function () {
+    todTargetMode = 'auto'; saveTodSettings();
+  });
+  [].forEach.call(document.querySelectorAll('.tod-profile-set button'), function (button) {
+    button.addEventListener('click', function () {
+      todAngleDeg = Number(button.dataset.angle); saveTodSettings();
+    });
+  });
+
+  function navDrawerOpen(on) {
+    $('navp-drawer').classList.toggle('open', on);
+    $('navp-drawer-open').setAttribute('aria-expanded', on ? 'true' : 'false');
+    try { localStorage.setItem('navDrawer', on ? '1' : '0'); } catch (e) { }
+  }
+  var drawerOpen = true;
+  try { drawerOpen = localStorage.getItem('navDrawer') !== '0'; } catch (e) { }
+  navDrawerOpen(drawerOpen);
+  $('navp-drawer-close').addEventListener('click', function () { navDrawerOpen(false); });
+  $('navp-drawer-open').addEventListener('click', function () { navDrawerOpen(true); });
 
   // Pinch to zoom. The map only ever draws integer slippy zooms, so the
   // gesture is measured continuously and committed each time it crosses a
@@ -711,9 +936,11 @@ export function wireNav() {
   $('navp-sync').classList.toggle('on', navSync);
   $('navp-sync').addEventListener('click', function () {
     navSync = !navSync;
-    navSyncWps = {}; navSyncCount = 0;   // re-observe from scratch each engage
+    navSyncWps = {}; navSyncCount = 0; navSyncGpsIndex = null; navSyncInvalid = false;
     try { localStorage.setItem('navSync', navSync ? '1' : '0'); } catch (e) { }
     $('navp-sync').classList.toggle('on', navSync);
+    $('navp-sync').classList.remove('bad');
+    $('navp-sync').textContent = 'SYNC';
   });
   $('navp-plans-close').addEventListener('click', function () { navPlansOpen(false); });
   $('navp-saveas').addEventListener('click', function () {

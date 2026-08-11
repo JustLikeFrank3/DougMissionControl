@@ -203,6 +203,7 @@ internal static class Normalize
         // and mixing references on one instrument is how people get lost.
         ["trk_true"] = (int)Math.Round(Heading(s.GpsTrueTrackDeg)) % 360,
         ["vs_fpm"] = (int)Math.Round(s.VerticalSpeedFpm),
+        ["agl_ft"] = Math.Max(0, (int)Math.Round(s.PlaneAltitudeAboveGroundFt)),
         ["rpm_1"] = (int)Math.Round(s.EngRpm1),
         ["rpm_2"] = (int)Math.Round(s.EngRpm2),
         // One entry per engine the airframe has, in order. An array rather
@@ -221,13 +222,45 @@ internal static class Normalize
         ["bank_deg"] = Math.Round(-s.PlaneBankDeg, 1),
         // Phase detection needs ground truth, not a guess from altitude.
         ["on_ground"] = Flag(s.OnGround),
+        // Built-in ATC's actual handoff, not a frequency inferred from
+        // geography. Invalid/idle values become null and never reach the cue.
+        ["atc_next_mhz"] = s.AtcFutureAgentMHz is >= 118.0 and <= 136.99
+            ? Math.Round(s.AtcFutureAgentMHz, 3) : null,
     };
+
+    public static JsonObject Warnings(SimStateRaw s)
+    {
+        var fires = new[] { s.EngOnFire1, s.EngOnFire2, s.EngOnFire3, s.EngOnFire4 };
+        var engineCount = Math.Clamp((int)Math.Round(s.EngineCount), 0, fires.Length);
+        var fireEngines = Enumerable.Range(0, engineCount)
+            .Where(i => Flag(fires[i]))
+            .Select(i => (JsonNode)(i + 1))
+            .ToArray();
+        var gearWarning = (int)Math.Round(s.GearWarning) switch
+        {
+            1 => "gear_up",
+            2 => "amphibious_gear_up",
+            3 => "amphibious_gear_down",
+            4 => "on_ground_handle_up",
+            _ => null,
+        };
+        return new JsonObject
+        {
+            ["overspeed"] = Flag(s.OverspeedWarning),
+            ["stall"] = Flag(s.StallWarning),
+            ["engine_fire"] = new JsonArray(fireEngines),
+            ["gear_warning"] = gearWarning,
+            ["gear_damage"] = Flag(s.GearDamageBySpeed),
+            ["gear_speed_exceeded"] = Flag(s.GearSpeedExceeded),
+        };
+    }
 
     /// <summary>
     /// The GPS's active leg. Null when no flight plan is running — absence,
     /// not zeros, so the panel never plots a waypoint at 0,0 off Ghana.
     /// </summary>
-    public static JsonObject? Gps(SimGpsRaw g)
+    public static JsonObject? Gps(SimGpsRaw g, IReadOnlyList<FlightPlanWaypoint>? flightPlan = null,
+        string flightPlanSource = "")
     {
         if (!Flag(g.FlightPlanActive) || g.WpCount < 1) return null;
         JsonObject Wp(string id, double lat, double lon, int idx) => new()
@@ -238,16 +271,24 @@ internal static class Normalize
             ["i"] = idx,
         };
         var i = (int)g.WpIndex;
-        return new JsonObject
+        var gps = new JsonObject
         {
             ["count"] = (int)g.WpCount,
             ["index"] = i,
             ["prev"] = i >= 1 ? Wp(g.PrevId, g.PrevLatDeg, g.PrevLonDeg, i - 1) : null,
             ["next"] = Wp(g.NextId, g.NextLatDeg, g.NextLonDeg, i),
         };
+        if (flightPlan is { Count: > 0 })
+        {
+            gps["plan"] = FlightPlan.Json(flightPlan);
+            gps["plan_source"] = flightPlanSource;
+        }
+        return gps;
     }
 
-    public static JsonObject State(long seq, double ts, string aircraft, SimStateRaw s, SimCapsRaw c, SimGpsRaw g) => new()
+    public static JsonObject State(long seq, double ts, string aircraft, SimStateRaw s, SimCapsRaw c,
+        SimGpsRaw g, IReadOnlyList<FlightPlanWaypoint>? flightPlan = null,
+        string flightPlanSource = "") => new()
     {
         ["ts"] = Math.Round(ts, 1),
         ["seq"] = seq,
@@ -255,7 +296,8 @@ internal static class Normalize
         ["capabilities"] = Capabilities(c),
         ["controls"] = Controls(s, c),
         ["readouts"] = Readouts(s),
-        ["gps"] = Gps(g),
+        ["warnings"] = Warnings(s),
+        ["gps"] = Gps(g, flightPlan, flightPlanSource),
     };
 
     /// <summary>
@@ -272,6 +314,15 @@ internal static class Normalize
         || Flag(a.BrakeParkingPosition) != Flag(b.BrakeParkingPosition)
         || Flag(a.LightLanding) != Flag(b.LightLanding)
         || Flag(a.AutopilotMaster) != Flag(b.AutopilotMaster)
+        || Flag(a.OverspeedWarning) != Flag(b.OverspeedWarning)
+        || Flag(a.StallWarning) != Flag(b.StallWarning)
+        || Flag(a.EngOnFire1) != Flag(b.EngOnFire1)
+        || Flag(a.EngOnFire2) != Flag(b.EngOnFire2)
+        || Flag(a.EngOnFire3) != Flag(b.EngOnFire3)
+        || Flag(a.EngOnFire4) != Flag(b.EngOnFire4)
+        || (int)Math.Round(a.GearWarning) != (int)Math.Round(b.GearWarning)
+        || Flag(a.GearDamageBySpeed) != Flag(b.GearDamageBySpeed)
+        || Flag(a.GearSpeedExceeded) != Flag(b.GearSpeedExceeded)
         // Bug turns are control moves: publish them at once or the panel's
         // steppers feel a half-second behind the finger.
         || (int)Math.Round(a.ApHdgDeg) != (int)Math.Round(b.ApHdgDeg)

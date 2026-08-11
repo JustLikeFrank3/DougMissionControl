@@ -42,6 +42,8 @@ public enum SIMCONNECT_EXCEPTION
     TOO_MANY_MAPS, TOO_MANY_OBJECTS, TOO_MANY_REQUESTS, DATA_ERROR, INVALID_ARRAY,
 }
 
+public enum SIMCONNECT_FACILITY_DATA_TYPE { AIRPORT, RUNWAY }
+
 public class SIMCONNECT_RECV { public uint dwID; }
 
 public class SIMCONNECT_RECV_OPEN : SIMCONNECT_RECV { public string szApplicationName = ""; }
@@ -49,6 +51,23 @@ public class SIMCONNECT_RECV_OPEN : SIMCONNECT_RECV { public string szApplicatio
 public class SIMCONNECT_RECV_EXCEPTION : SIMCONNECT_RECV { public uint dwException; public uint dwSendID; public uint dwIndex; }
 
 public class SIMCONNECT_RECV_SIMOBJECT_DATA : SIMCONNECT_RECV { public uint dwRequestID; public object[] dwData = Array.Empty<object>(); }
+
+public class SIMCONNECT_RECV_SYSTEM_STATE : SIMCONNECT_RECV
+{
+    public uint dwRequestID;
+    public uint dwInteger;
+    public float fFloat;
+    public string szString = "";
+}
+
+public class SIMCONNECT_RECV_FACILITY_DATA : SIMCONNECT_RECV
+{
+    public uint UserRequestId;
+    public uint Type;
+    public object[] Data = Array.Empty<object>();
+}
+
+public class SIMCONNECT_RECV_FACILITY_DATA_END : SIMCONNECT_RECV { public uint RequestId; }
 
 public class SimConnect : IDisposable
 {
@@ -60,11 +79,17 @@ public class SimConnect : IDisposable
     public delegate void RecvQuitEventHandler(SimConnect sender, SIMCONNECT_RECV data);
     public delegate void RecvExceptionEventHandler(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data);
     public delegate void RecvSimobjectDataEventHandler(SimConnect sender, SIMCONNECT_RECV_SIMOBJECT_DATA data);
+    public delegate void RecvSystemStateEventHandler(SimConnect sender, SIMCONNECT_RECV_SYSTEM_STATE data);
+    public delegate void RecvFacilityDataEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA data);
+    public delegate void RecvFacilityDataEndEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA_END data);
 
     public event RecvOpenEventHandler? OnRecvOpen;
     public event RecvQuitEventHandler? OnRecvQuit;
     public event RecvExceptionEventHandler? OnRecvException;
     public event RecvSimobjectDataEventHandler? OnRecvSimobjectData;
+    public event RecvSystemStateEventHandler? OnRecvSystemState;
+    public event RecvFacilityDataEventHandler? OnRecvFacilityData;
+    public event RecvFacilityDataEndEventHandler? OnRecvFacilityDataEnd;
 
     public SimConnect(string szName, IntPtr hWnd, uint UserEventWin32, WaitHandle? hEventHandle, uint ConfigIndex)
         => throw new COMException("SimConnect stub: no simulator, and never will be.");
@@ -75,6 +100,10 @@ public class SimConnect : IDisposable
     public void AddClientEventToNotificationGroup(Enum GroupID, Enum EventID, bool bMaskable) { }
     public void SetNotificationGroupPriority(Enum GroupID, uint uPriority) { }
     public void RequestDataOnSimObject(Enum RequestID, Enum DefineID, uint ObjectID, SIMCONNECT_PERIOD Period, SIMCONNECT_DATA_REQUEST_FLAG Flags, uint origin, uint interval, uint limit) { }
+    public void RequestSystemState(Enum RequestID, string State) { }
+    public void AddToFacilityDefinition(Enum DefineID, string FieldName) { }
+    public void RegisterFacilityDataDefineStruct<T>(SIMCONNECT_FACILITY_DATA_TYPE type) { }
+    public void RequestFacilityData(Enum DefineID, Enum RequestID, string Icao, string Region) { }
     public void TransmitClientEvent(uint ObjectID, Enum EventID, uint dwData, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags) { }
     public void TransmitClientEvent_EX1(uint ObjectID, Enum EventID, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags,
         uint dwData0, uint dwData1, uint dwData2, uint dwData3, uint dwData4) { }
@@ -89,5 +118,8 @@ public class SimConnect : IDisposable
         OnRecvQuit?.Invoke(this, new SIMCONNECT_RECV());
         OnRecvException?.Invoke(this, new SIMCONNECT_RECV_EXCEPTION());
         OnRecvSimobjectData?.Invoke(this, new SIMCONNECT_RECV_SIMOBJECT_DATA());
+        OnRecvSystemState?.Invoke(this, new SIMCONNECT_RECV_SYSTEM_STATE());
+        OnRecvFacilityData?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA());
+        OnRecvFacilityDataEnd?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA_END());
     }
 }

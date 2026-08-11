@@ -154,7 +154,8 @@ internal static class Program
     /// has actually moved, and otherwise at the readout cadence, so "on change"
     /// keeps meaning something while IAS still updates smoothly.
     /// </summary>
-    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, SimGpsRaw gps, string aircraft)
+    private static void OnStateReceived(SimStateRaw state, SimCapsRaw caps, SimGpsRaw gps, string aircraft,
+        IReadOnlyList<FlightPlanWaypoint> flightPlan, string flightPlanSource)
     {
         lock (PublishLock)
         {
@@ -163,7 +164,8 @@ internal static class Program
             if (!due && !moved) return;
 
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps, gps);
+            var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps, gps,
+                flightPlan, flightPlanSource);
 
             _lastPublished = state;
             _lastPublishedAt = DateTime.UtcNow;
@@ -218,7 +220,7 @@ internal static class Program
             };
         }
 
-        var sent = _sim.TransmitAsync(resolved.Event.Value, resolved.Data0, resolved.Data1);
+        var sent = TransmitResolvedAsync(resolved);
         var done = await Task.WhenAny(sent, Task.Delay(TimeSpan.FromMilliseconds(500)));
         if (done != sent) return Reject("agent busy");
         if (!await sent) return Reject("sim not connected");
@@ -231,10 +233,23 @@ internal static class Program
         };
     }
 
-    private readonly record struct Resolved(Event? Event, uint Data0, uint Data1, string? Reason);
+    private static async Task<bool> TransmitResolvedAsync(Resolved resolved)
+    {
+        if (resolved.PreEvent is not null
+            && !await _sim.TransmitAsync(resolved.PreEvent.Value)) return false;
+        if (!await _sim.TransmitAsync(resolved.Event!.Value, resolved.Data0, resolved.Data1)) return false;
+        return resolved.FollowupEvent is null
+            || await _sim.TransmitAsync(resolved.FollowupEvent.Value, resolved.FollowupData);
+    }
+
+    private readonly record struct Resolved(
+        Event? Event, uint Data0, uint Data1, string? Reason,
+        Event? FollowupEvent = null, uint FollowupData = 0, Event? PreEvent = null);
 
     private static Resolved Invalid(string reason) => new(null, 0, 0, reason);
-    private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0) => new(e, data0, data1, null);
+    private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0,
+        Event? followupEvent = null, uint followupData = 0, Event? preEvent = null) =>
+        new(e, data0, data1, null, followupEvent, followupData, preEvent);
     private static readonly Resolved Noop = new(null, 0, 0, null);
 
     /// <summary>
@@ -336,7 +351,7 @@ internal static class Program
                 return Send(Event.HeadingBugSet, (uint)(((hdg % 360) + 360) % 360));
 
             case "ap_alt":
-                if (action == "mode") return Mode(value, s.ApAltLock, Event.ApAltHoldOn, Event.ApAltHoldOff);
+                if (action == "mode") return Mode(value, s.ApAltLock, Event.ApAltHoldToggle, Event.ApAltHoldToggle);
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var alt) || alt < 0 || alt > 60000) return Invalid("invalid value");
                 // The event's second argument selects the altitude slot.  A
@@ -349,7 +364,15 @@ internal static class Program
                 return Send(Event.ApAltVarSet, (uint)alt, (uint)slot);
 
             case "ap_vs":
-                if (action == "mode") return Mode(value, s.ApVsHold, Event.ApVsHoldOn, Event.ApVsHoldOff);
+                if (action == "mode")
+                {
+                    if (value == "on" && !On(s.ApVsHold))
+                        return Send(Event.ApVsHoldToggle, followupEvent: Event.ApVsVarSet,
+                            followupData: unchecked((uint)Math.Round(s.ApVsFpm)),
+                            preEvent: On(s.ApFlcActive) || On(s.ApIasHold) ? Event.ApFlcToggle
+                                : On(s.ApAltLock) ? Event.ApAltHoldToggle : null);
+                    return Mode(value, s.ApVsHold, Event.ApVsHoldToggle, Event.ApVsHoldToggle);
+                }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var vs) || Math.Abs(vs) > 8000) return Invalid("invalid value");
                 // Negative climbs ride as two's complement — the sim reads the
@@ -360,8 +383,15 @@ internal static class Program
                 // Either flag counts as engaged, so switching FLC off when the
                 // aircraft was actually in IAS hold still reads as a change.
                 if (action == "mode")
-                    return Mode(value, On(s.ApFlcActive) || On(s.ApIasHold) ? 1 : 0,
-                                Event.ApFlcOn, Event.ApFlcOff);
+                {
+                    var active = On(s.ApFlcActive) || On(s.ApIasHold);
+                    if (value == "on" && !active)
+                        return Send(Event.ApFlcToggle, followupEvent: Event.ApSpdVarSet,
+                            followupData: (uint)Math.Max(0, Math.Round(s.ApSpdKt)),
+                            preEvent: On(s.ApVsHold) ? Event.ApVsHoldToggle
+                                : On(s.ApAltLock) ? Event.ApAltHoldToggle : null);
+                    return Mode(value, active ? 1 : 0, Event.ApFlcToggle, Event.ApFlcToggle);
+                }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
                 return Send(Event.ApSpdVarSet, (uint)spd);

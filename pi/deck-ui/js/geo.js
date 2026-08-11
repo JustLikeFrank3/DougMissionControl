@@ -65,6 +65,23 @@ export function isTeleport(prev, next, elapsedMs) {
 }
 
 /**
+ * Has MSFS left the active GPS leg collapsed at the departure airport?
+ *
+ * Some avionics leave a short departure-area leg active after the aircraft
+ * has flown away. Near departure that shape is legitimate; more than 25 nm
+ * away, a leg under 5 nm cannot still be useful guidance and must not steer
+ * the deck map back to the airport.
+ */
+export function isStaleGpsLeg(gps, aircraft) {
+  if (!gps || !gps.prev || !gps.next || !aircraft) return false;
+  var departureIndex = gps.index === undefined || Number(gps.index) <= 1;
+  var shortDepartureLeg = departureIndex &&
+    distBrg(gps.prev.lat, gps.prev.lon, gps.next.lat, gps.next.lon).dist < 5;
+  return shortDepartureLeg &&
+    distBrg(aircraft.lat, aircraft.lon, gps.next.lat, gps.next.lon).dist > 25;
+}
+
+/**
  * The integer slippy zoom whose scale best fits `spanNm` across `px` pixels.
  * The map steps between whole levels as a flight closes in, the way any slippy
  * map does, rather than scaling smoothly to a blurry in-between.
