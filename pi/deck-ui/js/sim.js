@@ -212,8 +212,10 @@ function simPaintModes(c) {
       note.textContent = on ? (master ? 'HOLDING ALTITUDE' : 'ALT HOLD · AP MASTER OFF')
         : 'SELECTED ALT · USE V/S OR FLC';
     } else if (key === 'apspd') {
-      note.textContent = !on ? 'SPEED BUG · FLC OFF'
-        : !master ? 'FLC ARMED · AP MASTER OFF' : 'FLC ACTIVE · PITCH FOR SPEED';
+      note.textContent = !on ? 'SPEED BUG · NO MODE FLYING IT'
+        : ctl.src === 'athr' ? 'A/T · THROTTLE FOR SPEED'
+        : !master ? 'ARMED · AP MASTER OFF'
+        : 'FLC ACTIVE · PITCH FOR SPEED';
     } else {
       note.textContent = !on ? 'BUG ONLY · MODE OFF'
         : !master ? 'MODE ARMED · AP MASTER OFF' : 'FLYING THIS BUG';

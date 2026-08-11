@@ -151,13 +151,20 @@ internal static class Normalize
                 { ["ft"] = (int)Math.Round(s.ApAltFt), ["mode"] = Mode(s.ApAltLock) };
             controls["ap_vs"] = new JsonObject
                 { ["fpm"] = (int)Math.Round(s.ApVsFpm), ["mode"] = Mode(s.ApVsHold) };
+            var spdSrc = Flag(s.ApFlcActive) ? "flc"
+                : Flag(s.ApIasHold) || Flag(s.ApMachHold) ? "ias"
+                : Flag(s.ApThrottleArm) || Flag(s.ApManagedSpeed) ? "athr"
+                : null;
             controls["ap_spd"] = new JsonObject
                 { ["kt"] = (int)Math.Round(s.ApSpdKt),
                   ["mach"] = Math.Round(s.ApMachVar, 3),
                   // Which reference the speed window is flying — the MCP
                   // changeover, observed, so the panel never guesses units.
                   ["ref"] = Flag(s.ApSpeedIsMach) ? "mach" : "kt",
-                  ["mode"] = Flag(s.ApFlcActive) || Flag(s.ApIasHold) ? "on" : "off" };
+                  ["mode"] = spdSrc is null ? "off" : "on",
+                  // What is chasing the bug: FLC/IAS pitch for it, an
+                  // autothrottle throttles for it. The note reads differently.
+                  ["src"] = spdSrc };
         }
 
         // Comms. COM1 and the altimeter are assumed universal; everything else

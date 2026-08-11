@@ -399,7 +399,7 @@ internal static class Program
                 // aircraft was actually in IAS hold still reads as a change.
                 if (action == "mode")
                 {
-                    var active = On(s.ApFlcActive) || On(s.ApIasHold);
+                    var active = On(s.ApFlcActive) || On(s.ApIasHold) || On(s.ApMachHold);
                     if (value == "on" && !active)
                         return Send(Event.ApFlcToggle, followupEvent: Event.ApSpdVarSet,
                             followupData: (uint)Math.Max(0, Math.Round(s.ApSpdKt)),

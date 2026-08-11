@@ -173,7 +173,18 @@ Expect("ap_alt publishes its mode", Mode(apOn, "ap_alt"), "on");
 Expect("ap_vs publishes its mode", Mode(apOn, "ap_vs"), "on");
 Expect("ap_spd reads FLC", Mode(apOn, "ap_spd"), "on");
 Expect("ap_spd also reads IAS hold", Mode(iasOnly, "ap_spd"), "on");
+Expect("ap_spd also reads mach hold", Mode(MakeState(("ApMachHold", 1)), "ap_spd"), "on");
 Expect("ap_spd off when neither is set", Mode(apOff, "ap_spd"), "off");
+
+// A 747's A/T flies the speed bug with thrust — no pitch-mode flag rises.
+var atSpd = MakeState(("ApThrottleArm", 1));
+var atCtl = (JsonObject)controls.Invoke(null, new object[] { atSpd, baron });
+Expect("ap_spd reads a Boeing autothrottle",
+    atCtl["ap_spd"]["mode"] + " " + atCtl["ap_spd"]["src"], "on athr");
+var machHold = (JsonObject)controls.Invoke(null,
+    new object[] { MakeState(("ApMachHold", 1)), baron });
+Expect("ap_spd reads mach hold as engaged",
+    machHold["ap_spd"]["mode"] + " " + machHold["ap_spd"]["src"], "on ias");
 
 var machCtl = (JsonObject)controls.Invoke(null,
     new object[] { MakeState(("ApSpeedIsMach", 1), ("ApMachVar", 0.8449)), baron });

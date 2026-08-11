@@ -195,6 +195,13 @@ internal struct SimStateRaw
     // the mach bug itself — a separate bug from the knots one in the sim.
     public double ApMachVar;
     public double ApSpeedIsMach;
+    // Mach hold is a third engaged flag — past the changeover the sim raises
+    // this instead of AIRSPEED HOLD, and the panel read the mode as off.
+    public double ApMachHold;
+    // Boeing autothrottle. A 747 in SPD holds the bug with thrust and raises
+    // NONE of the pitch-mode flags above — these are what say it is flying.
+    public double ApThrottleArm;
+    public double ApManagedSpeed;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -348,6 +355,9 @@ internal static class SimVars
         ("MAGVAR",                         "Degrees"),
         ("AUTOPILOT MACH HOLD VAR",        "Number"),
         ("AUTOPILOT MANAGED SPEED IN MACH", "Bool"),
+        ("AUTOPILOT MACH HOLD",            "Bool"),
+        ("AUTOPILOT THROTTLE ARM",         "Bool"),
+        ("AUTOPILOT MANAGED SPEED",        "Bool"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
