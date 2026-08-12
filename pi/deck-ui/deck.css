@@ -458,6 +458,11 @@ html, body {
 .rose-brg { fill: var(--cy); }
 .simt-s { margin-top: 8px; min-height: 1.1em; font-size: 14px;
           letter-spacing: .06em; color: var(--mut); }
+/* HDG gained a waypoint-target line — same label collision the throttle tile
+   had: centred content plus an extra row climbs into the absolute header.
+   Same fix: anchor low and reserve the label's height. */
+#simt-hdg-tile { justify-content: flex-end; padding-top: 40px; padding-bottom: 12px; }
+#simt-hdg-tile .simt-s { margin-top: 2px; }
 
 /* Not fitted on this airframe — greyed and named, never a dead control. */
 .simt.na { opacity: .35; }
