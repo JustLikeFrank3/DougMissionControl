@@ -62,6 +62,13 @@ internal static class Probe
         ("AUTOTHROTTLE ACTIVE",              "Bool"),
         ("AUTOPILOT THROTTLE ARM",           "Bool"),
         ("AUTOPILOT MANAGED THROTTLE ACTIVE", "Bool"),
+        // [Q5] the 748's A/T drove four levers while every flag above read 0.
+        // Flip A/T ARM on the MCP with this running; whichever row flips is
+        // the detection var. UNRECOGNIZED rows have also answered.
+        ("AUTOPILOT TAKEOFF POWER ACTIVE",   "Bool"),
+        ("AUTOPILOT SPEED SLOT INDEX",       "Number"),
+        ("AUTOPILOT THROTTLE MAX THRUST",    "Percent"),
+        ("AUTOPILOT AUTO THROTTLE ARM",      "Bool"),
     };
 
     private static readonly (string Name, string Unit)[] Rows =

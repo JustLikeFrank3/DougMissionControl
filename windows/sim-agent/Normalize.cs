@@ -153,7 +153,7 @@ internal static class Normalize
                 { ["fpm"] = (int)Math.Round(s.ApVsFpm), ["mode"] = Mode(s.ApVsHold) };
             var spdSrc = Flag(s.ApFlcActive) ? "flc"
                 : Flag(s.ApIasHold) || Flag(s.ApMachHold) ? "ias"
-                : Flag(s.ApThrottleArm) || Flag(s.ApManagedSpeed) ? "athr"
+                : Flag(s.ApThrottleArm) || Flag(s.AutothrottleActive) ? "athr"
                 : null;
             controls["ap_spd"] = new JsonObject
                 { ["kt"] = (int)Math.Round(s.ApSpdKt),

@@ -181,6 +181,10 @@ var atSpd = MakeState(("ApThrottleArm", 1));
 var atCtl = (JsonObject)controls.Invoke(null, new object[] { atSpd, baron });
 Expect("ap_spd reads a Boeing autothrottle",
     atCtl["ap_spd"]["mode"] + " " + atCtl["ap_spd"]["src"], "on athr");
+var atActive = (JsonObject)controls.Invoke(null,
+    new object[] { MakeState(("AutothrottleActive", 1)), baron });
+Expect("ap_spd reads AUTOTHROTTLE ACTIVE",
+    atActive["ap_spd"]["mode"] + " " + atActive["ap_spd"]["src"], "on athr");
 var machHold = (JsonObject)controls.Invoke(null,
     new object[] { MakeState(("ApMachHold", 1)), baron });
 Expect("ap_spd reads mach hold as engaged",

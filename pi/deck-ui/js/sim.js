@@ -212,7 +212,10 @@ function simPaintModes(c) {
       note.textContent = on ? (master ? 'HOLDING ALTITUDE' : 'ALT HOLD · AP MASTER OFF')
         : 'SELECTED ALT · USE V/S OR FLC';
     } else if (key === 'apspd') {
-      note.textContent = !on ? 'SPEED BUG · NO MODE FLYING IT'
+      // Probed on the 747-8i: its A/T flies the levers while every SimConnect
+      // flag reads false — undetectable, so "off" would be a lie. Say what is
+      // actually known: no mode is REPORTED.
+      note.textContent = !on ? 'NO SPEED MODE REPORTED · A/T MAY BE FLYING'
         : ctl.src === 'athr' ? 'A/T · THROTTLE FOR SPEED'
         : !master ? 'ARMED · AP MASTER OFF'
         : 'FLC ACTIVE · PITCH FOR SPEED';

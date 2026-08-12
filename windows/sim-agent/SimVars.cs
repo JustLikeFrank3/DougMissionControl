@@ -200,8 +200,11 @@ internal struct SimStateRaw
     public double ApMachHold;
     // Boeing autothrottle. A 747 in SPD holds the bug with thrust and raises
     // NONE of the pitch-mode flags above — these are what say it is flying.
+    // Probed 2026-08-11 on the Asobo 747-8i: its A/T raises NEITHER of these
+    // either — it is model-side code invisible to SimConnect. They stay for
+    // airframes that do report, and the panel words that honestly.
     public double ApThrottleArm;
-    public double ApManagedSpeed;
+    public double AutothrottleActive;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -357,7 +360,8 @@ internal static class SimVars
         ("AUTOPILOT MANAGED SPEED IN MACH", "Bool"),
         ("AUTOPILOT MACH HOLD",            "Bool"),
         ("AUTOPILOT THROTTLE ARM",         "Bool"),
-        ("AUTOPILOT MANAGED SPEED",        "Bool"),
+        // NOT "AUTOPILOT MANAGED SPEED" — probed NAME_UNRECOGNIZED in MSFS 2024.
+        ("AUTOTHROTTLE ACTIVE",            "Bool"),
     };
 
     public static readonly (string Name, string Unit)[] CapsVars =
