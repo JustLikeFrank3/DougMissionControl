@@ -799,28 +799,42 @@ def _ws_json(url: str, payload: dict | None = None, timeout: float = 3) -> dict 
         return None
 
 
+def _media_url(path: str, os_now: str) -> str | None:
+    """One media endpoint on whichever agent the booted OS is running.
+
+    Exists because only ONE of the three media paths branched. /media did, so
+    the widget showed the track under Linux; /media/command and /media/art did
+    not, so the transport buttons posted at a Windows service that was not
+    running and the album art never arrived. Both failed silently, next to a
+    working track name, which reads as broken buttons rather than a missing
+    half. Same drift the spectrum had: teach the read path about both boots and
+    leave the rest dialling Windows.
+    """
+    if os_now == "windows" and SIM_TOKEN:
+        return _sim_url(path)
+    if os_now == "linux" and LINUX_MEDIA_TOKEN:
+        return (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}{path}"
+                f"?token={quote(LINUX_MEDIA_TOKEN)}")
+    return None
+
+
 def media_state(os_now: str) -> dict:
     """Now-playing from whichever OS is up. Same normalized shape either way;
     the widget renders the source's absence as "no source", never an error."""
-    if os_now == "windows" and SIM_TOKEN:
-        got = _ws_json(_sim_url("/media"))
+    url = _media_url("/media", os_now)
+    if url:
+        got = _ws_json(url)
         if got is not None:
-            return {"source": "windows", **got}
-    elif os_now == "linux" and LINUX_MEDIA_TOKEN:
-        # linux/media-agent.py — same shape, so the widget lights up unchanged.
-        # Untested until the workstation next boots Linux.
-        got = _ws_json(f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/media"
-                       f"?token={quote(LINUX_MEDIA_TOKEN)}")
-        if got is not None:
-            return {"source": "linux", **got}
+            return {"source": os_now, **got}
     return {"source": None, "active": False}
 
 
 def media_art(os_now: str) -> bytes | None:
-    if os_now != "windows" or not SIM_TOKEN:
+    url = _media_url("/media/art", os_now)
+    if not url:
         return None
     try:
-        with urllib.request.urlopen(_sim_url("/media/art"), timeout=3) as r:
+        with urllib.request.urlopen(url, timeout=3) as r:
             return r.read(2_000_000)
     except (urllib.error.URLError, OSError):
         return None
@@ -1597,9 +1611,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(code, out)
 
         if path == "/api/media/command":
-            got = _ws_json(_sim_url("/media/command"),
-                           {"action": str(body.get("action") or "")}) \
-                if SIM_TOKEN else None
+            url = _media_url("/media/command", DECK.state["workstation"]["os"])
+            got = _ws_json(url, {"action": str(body.get("action") or "")}) \
+                if url else None
             return self._json(200 if got else 502, got or {"sent": False})
 
 
