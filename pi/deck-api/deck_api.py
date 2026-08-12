@@ -129,6 +129,13 @@ AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 # normal operation, so neither is reported as a fault.
 # The Linux boot agent, so the panel can stop that OS as well as start it.
 # deck-api knew only the Windows one until there was a reason to.
+# The point-to-point link, which only exists under the workstation's Linux
+# boot and which no DHCP lease can move. The orchestrator has always used it as
+# a self-contained "Linux is up" signal; deck-api knew only WS_LAN, so the night
+# the workstation's LAN address changed under it the panel called a running
+# Linux box "off" while this link sat there answering. Derived from LINUX_SSH
+# exactly as flightsim-boot.sh derives it, so boot.env stays the one place.
+LINUX_PROBE_IP = cfg("LINUX_PROBE_IP", "") or cfg("LINUX_SSH", "").rpartition("@")[2]
 LINUX_AGENT_PORT = int(cfg("LINUX_AGENT_PORT", "9108"))
 LINUX_AGENT_TOKEN = cfg("LINUX_AGENT_TOKEN", "")
 SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
@@ -1180,11 +1187,29 @@ def poller() -> None:
         time.sleep(POLL_BUSY if DECK.state["boot"]["in_flight"] else POLL_IDLE)
 
 
+def linux_seen() -> bool:
+    """Linux, by any route this Pi has.
+
+    Three, because the first two both depend on the workstation's LAN address
+    being what boot.env says it is - and a machine that is powered off cannot
+    defend its DHCP lease, so that assumption has already failed once. The
+    point-to-point link is immune: it exists only under the Linux boot and no
+    router hands out its addresses.
+    """
+    if http_ok(f"http://{WS_LAN}:{LINUX_PORT}/"):
+        return True
+    if tcp_ok(WS_LAN, LINUX_AGENT_PORT):
+        return True
+    if not LINUX_PROBE_IP:
+        return False
+    return tcp_ok(LINUX_PROBE_IP, 22) or pingable(LINUX_PROBE_IP)
+
+
 def poll_once(prev_os):
     """One probe cycle. Returns the OS it saw, for the next cycle to diff."""
     agent = tcp_ok(WS_LAN, AGENT_PORT)
     win = agent or http_ok(f"http://{WS_LAN}:{WIN_PORT}/")
-    lin = http_ok(f"http://{WS_LAN}:{LINUX_PORT}/") if not win else False
+    lin = linux_seen() if not win else False
     alive = win or lin or pingable(WS_LAN)
 
     if win:
