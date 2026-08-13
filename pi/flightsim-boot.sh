@@ -14,13 +14,20 @@
 # Without that stack, point WIN_PORT/LINUX_PORT at anything that answers
 # HTTP under one OS only — e.g. the boot agent's own :9107/status.
 #
-# target windows: Linux up -> ssh forced-command key (grub-reboot + reboot);
-#   off -> WOL, chaining through the ssh path if GRUB lands in Linux.
-# target linux: Windows up -> token-guarded boot-agent on :9107 reboots it
-#   (GRUB saved default IS Linux, so a plain reboot lands there); off ->
-#   WOL boots straight to the Linux default. NOTE: this leg assumes the
-#   saved default is Linux — if you flip the default to Windows for faster
-#   cold sim starts, the linux target's Windows-up leg cannot work.
+# Cold boots are decided by the workstation's UEFI boot order, which
+# linux/set-boot-order.sh points at Windows — the sim is what this desk is
+# for, and a powered-off machine has nobody left to ask. Each OS one-shots
+# the firmware when handing over to the other, so both directions work from
+# a running machine.
+#
+# target windows: Linux up -> ssh forced-command key (boot-to-windows:
+#   firmware BootNext + reboot); off -> WOL lands in Windows directly.
+# target linux: Windows up -> token-guarded boot-agent on :9107 arms the
+#   firmware for one boot of GRUB and reboots (GRUB's saved default is
+#   Linux, so GRUB takes it from there); off -> WOL lands in Windows, then
+#   chains through that same path. Two boots, but this is the rare
+#   direction — before the firmware order was set it was the WINDOWS side
+#   that took the slow route, on every cold sim start.
 #
 # "bg" arg: re-exec detached so fauxmo's on() returns immediately.
 set -u
@@ -148,8 +155,10 @@ boot_to_windows() {
 }
 
 boot_to_linux() {
-    # Windows boot-agent (windows/boot-agent.ps1): plain reboot,
-    # which lands in the GRUB saved default = Linux.
+    # Windows boot-agent (windows/boot-agent.ps1): arms the firmware for
+    # one boot of GRUB, then reboots. GRUB's saved default is Linux, so it
+    # needs no further steering — which is just as well, because Windows
+    # cannot write ext4 and so cannot pick a GRUB entry.
     [ -n "$WIN_AGENT_TOKEN" ] || { log "WARN: WIN_AGENT_TOKEN unset in $CONF"; return 1; }
     curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/reboot?token=${WIN_AGENT_TOKEN}" >/dev/null
 }

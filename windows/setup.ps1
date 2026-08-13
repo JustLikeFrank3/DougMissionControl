@@ -100,6 +100,8 @@ Copy-Item "$PSScriptRoot\jarvis-greeting.ps1" $dest -Force
 Copy-Item "$PSScriptRoot\boot-agent.ps1" $dest -Force
 # Dot-sourced by the greeting from $PSScriptRoot, so it has to land beside it.
 Copy-Item "$PSScriptRoot\set-primary-display.ps1" $dest -Force
+# Same: dot-sourced by boot-agent.ps1 out of $dest, not out of the repo.
+Copy-Item "$PSScriptRoot\efi-entry.ps1" $dest -Force
 if ($PiHost) {
     (Get-Content "$dest\jarvis-greeting.ps1") `
         -replace "^\`$PiHost\s*=\s*'[^']*'", "`$PiHost = '$PiHost'" |
@@ -119,10 +121,25 @@ Register-ScheduledTask -TaskName 'JarvisGreeting' -Action $action -Trigger $trig
     -Settings $settings -Force | Out-Null
 Write-Host 'JarvisGreeting logon task registered'
 
+# --- Firmware boot entry for Linux ----------------------------------------
+# Worked out once here so the agent's /reboot is a single bcdedit call, and
+# so a wrong answer shows up during setup rather than as a boot that comes
+# back to Windows. See efi-entry.ps1 for why the firmware and not GRUB.
+. "$PSScriptRoot\efi-entry.ps1"
+$linuxFw = Get-LinuxFirmwareEntryId -Refresh
+if ($linuxFw) {
+    Write-Host "Linux firmware boot entry: $linuxFw"
+} else {
+    Write-Host 'WARNING: no GRUB/ubuntu entry found in the firmware boot list.'
+    Write-Host '         Booting BACK to Linux will fall back to a plain reboot,'
+    Write-Host '         which only works while the GRUB saved default is Linux.'
+    Write-Host '         Check with:  bcdedit /enum firmware'
+}
+
 # --- Boot agent (Pi-triggered reboot into Linux) --------------------------
-# Runs as SYSTEM at startup so the Pi can reboot Windows into the GRUB
-# default (Linux) even before anyone logs on. Token-guarded; the same
-# token goes into /etc/flightsim/boot.env on the Pi.
+# Runs as SYSTEM at startup so the Pi can send Windows back to Linux even
+# before anyone logs on. Token-guarded; the same token goes into
+# /etc/flightsim/boot.env on the Pi.
 $tokenFile = "$dest\boot-agent.token"
 if (-not (Test-Path $tokenFile)) {
     $legacyToken = "$legacyDest\boot-agent.token"

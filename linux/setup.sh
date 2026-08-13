@@ -8,7 +8,10 @@
 # Installs:
 #   * GRUB_DEFAULT=saved (grub-reboot needs it; saved default is pinned to
 #     the CURRENT default entry, so day-to-day boot behavior is unchanged)
-#   * /usr/local/bin/boot-to-windows — grub-reboot <Windows entry> + reboot
+#   * a firmware boot order with Windows first (set-boot-order.sh), so a
+#     COLD power-on lands in Windows instead of booting Linux and doubling
+#     back — the one boot-time switch Windows can also throw
+#   * /usr/local/bin/boot-to-windows — firmware BootNext + reboot
 #   * sudoers rule: invoking user may run exactly that script, nothing else
 #   * authorized_keys entry for the Pi key, command=-forced to that script
 #   * WOL persistence: ethtool wol g on the wired NIC at boot (the Linux
@@ -68,12 +71,30 @@ if [ "$CUR_DEFAULT" != "saved" ]; then
     echo "GRUB_DEFAULT=saved (saved default pinned to previous default: $CUR_DEFAULT)"
 fi
 
+# Cold boots are decided by the firmware, not by GRUB — see the long note
+# in set-boot-order.sh. Non-fatal: on a legacy-BIOS install, or a firmware
+# whose boot list has no recognisable Windows entry, everything below still
+# works the old way (slowly) rather than not at all.
+"$SCRIPT_DIR/set-boot-order.sh" || echo "WARN: cold-boot order unchanged (see above)"
+
 cat > /usr/local/bin/boot-to-windows <<EOF
 #!/bin/bash
 # Installed by this project's linux/setup.sh — one-shot reboot into
 # Windows, invoked by the Pi's forced-command ssh key.
 set -e
-grub-reboot "$WIN_ENTRY"
+ENTRIES=/etc/flightsim/boot-entries.env
+if [ -f "\$ENTRIES" ]; then . "\$ENTRIES"; fi
+
+if [ -n "\${WIN_EFI_NUM:-}" ] && command -v efibootmgr >/dev/null 2>&1; then
+    # A stale GRUB next_entry is not harmless once the firmware boots
+    # Windows directly: GRUB never runs to consume it, so it sits there
+    # and fires on the NEXT trip through GRUB — which is only ever a
+    # requested LINUX boot, sending it straight back to Windows.
+    grub-editenv - unset next_entry 2>/dev/null || true
+    efibootmgr -n "\$WIN_EFI_NUM" >/dev/null
+else
+    grub-reboot "$WIN_ENTRY"
+fi
 # -i: desktop sessions hold shutdown inhibitors that block plain shutdown.
 systemctl reboot -i
 EOF

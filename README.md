@@ -21,9 +21,10 @@ routines "turn them on."
         flightsim-boot.sh on the Pi probes the workstation:
                 │
                 ├─ Windows up   → fire greeting + launch via boot-agent /launch
-                ├─ Linux up     → ssh forced-command key → grub-reboot + reboot
-                └─ no answer    → WOL magic packet; if GRUB lands in Linux,
-                                  chains through the ssh path
+                ├─ Linux up     → ssh forced-command key → firmware BootNext
+                │                 → reboot
+                └─ no answer    → WOL magic packet; the firmware boot order
+                                  is pointed at Windows, so it lands there
                 ▼
         Windows logs on → JarvisGreeting task reads the recorded intent,
         speaks the welcome, launches the matching game.
@@ -53,11 +54,16 @@ pi/flightsim-boot.sh     the orchestrator itself (→ /usr/local/bin on the Pi)
 windows/setup.ps1        WOL, Fast Startup, logon task, boot agent, firewall, token
 windows/jarvis-greeting.ps1   the spoken greeting + launch profiles (logon task)
 windows/boot-agent.ps1        token-guarded :9107 endpoint (SYSTEM startup task)
+windows/efi-entry.ps1         finds the GRUB firmware entry, so /reboot can
+                         hand back to Linux without writing to ext4
 windows/set-primary-display.ps1  makes one monitor primary, so a profile can
                          say which screen its game opens on (`-List` to look)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting, media-agent
+linux/set-boot-order.sh  points the UEFI boot order at Windows, so a COLD
+                         power-on lands in the sim in one boot, not two
 linux/boot-agent.py      token-guarded :9108 endpoint (the mirror of the Windows one)
 linux/grub_utils.sh      finds the Windows menuentry (single- or double-quoted)
+linux/efi_utils.sh       finds the Windows and GRUB entries in `efibootmgr`
 linux/ssh_utils.sh       installs the Pi's forced-command authorized_keys line
 linux/scarlett-reset.py  USB-replug for the Focusrite after a warm dual-boot
 linux/seamless-displays.sh  pins EDID + forces connectors on, so a SCREENS input
@@ -120,7 +126,9 @@ to the workstation's Linux boot. Substitute your own throughout.
    one place to correct an address later; re-runs keep your edits.
 3. **Linux boot** (sudo, with the key from step 2):
    `sudo ./linux/setup.sh 'ssh-ed25519 AAAA… flightsim-boot@pi'`
-   — GRUB_DEFAULT=saved, the `boot-to-windows` helper, the forced-command
+   — GRUB_DEFAULT=saved, a UEFI boot order with Windows first (see
+   [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in)), the
+   `boot-to-windows` helper, the forced-command
    authorized_keys entry, persistent `ethtool wol g`, the `:9108` boot
    agent, and the Linux logon greeting + VS Code autostart. It prints a
    `LINUX_AGENT_TOKEN=` line; add that to `boot.env` on the Pi too. The
@@ -362,6 +370,47 @@ Neither can stop a launch. A monitor that will not move is a worse evening than
 a game on the wrong screen, and both failures are warnings that the greeting
 carries on past.
 
+## Which OS a cold boot lands in
+
+A powered-off machine has nobody left to ask. Whatever the last running OS
+wrote down is what a Wake-on-LAN packet boots into, so the only real
+question is where that setting lives.
+
+It cannot live in GRUB, because only one of the two boots can write it.
+Linux runs `grub-reboot`; Windows has no ext4 writer, so it can neither do
+that nor edit `grubenv`. That asymmetry used to show up as a two-boot cold
+start: GRUB's saved default is Linux, so "boot Windows" from cold **booted
+Linux**, waited for it to answer, and only then rebooted into Windows —
+a GRUB countdown showing the wrong OS, several minutes, and a real chance
+of exhausting `POLL_SECS`.
+
+The UEFI boot variables are the one switch both sides can throw, so the
+cold default lives there instead, pointed at Windows:
+
+| From | To | How |
+| --- | --- | --- |
+| off | Windows | firmware `BootOrder[0]` = Windows Boot Manager |
+| Linux | Windows | `efibootmgr -n <windows>` (`boot-to-windows`) |
+| Windows | Linux | `bcdedit /set {fwbootmgr} bootsequence <ubuntu>` → GRUB |
+| off | Linux | WOL into Windows, then the row above |
+
+`linux/setup.sh` applies this via `linux/set-boot-order.sh`; run that alone
+(`sudo ./linux/set-boot-order.sh`, or `--print` to look first) after
+reinstalling either bootloader, because the entry numbers change.
+GRUB's own configuration is untouched — its saved default stays Linux,
+which is exactly what the Windows → Linux leg needs once the firmware has
+handed over.
+
+Two things follow from this. Powering the machine on **by hand** now goes
+straight to Windows without showing the GRUB menu; use the firmware's
+one-time boot menu (F8/F11/F12, board-dependent) to reach Linux that way.
+And a cold boot to *Linux* is now the two-boot direction — deliberately,
+since Linux is the rare target here.
+
+Neither step is required. On a legacy-BIOS install, or a firmware whose
+boot list has no Windows entry, `set-boot-order.sh` refuses and says why,
+and both agents fall back to the old GRUB-default behaviour.
+
 ## How "is it up?" is decided
 
 The orchestrator probes two Prometheus exporters that belong to a
@@ -430,6 +479,7 @@ python3 pi/deck-api/test_phases.py
 |---|---|
 | `tests/test_boot_agent.sh` | the Linux boot agent's auth matrix, against a real listener on a throwaway port with a stubbed reboot |
 | `tests/test_grub_entry.sh` | finding the Windows menuentry in single- and double-quoted `grub.cfg` |
+| `tests/test_efi_utils.sh` | finding the Windows and GRUB entries in `efibootmgr` output — by description, by loader path, and via the generic `UEFI OS` label — and that reordering the boot list keeps every other entry |
 | `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
@@ -459,12 +509,12 @@ missing reading rendered as a zero.
 |---|---|
 | Target OS already up | greeting + launch fire immediately, no reboot |
 | Other OS up | reboot into the target in ~30 s, greeting on logon |
-| Powered off | WOL powers on; straight to the GRUB default, else one chained reboot (~2 min) |
+| Powered off, target Windows | WOL powers on straight into Windows (~1 min) |
+| Powered off, target Linux | WOL powers on into Windows, then one chained reboot (~2 min) |
 
-WOL cannot pick a GRUB menu entry, so from full-off the machine always
-lands in the saved default first. Keep Linux as the default (needed for
-the Windows→Linux leg to work at all) or flip it to Windows for faster
-cold sim starts — not both.
+WOL cannot pick a boot target, so from full-off the machine lands wherever
+the firmware boot order points — Windows, once `set-boot-order.sh` has run.
+See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
 
 ## Troubleshooting
 
@@ -498,6 +548,15 @@ cold sim starts — not both.
   `powercfg -devicequery wake_armed` must list the NIC; if it does not,
   the `powercfg /deviceenablewake` grant did not stick. Under Linux,
   `ethtool <iface>` should report `Wake-on: g`.
+- **A cold "boot Windows" shows GRUB counting down to Ubuntu.** The
+  firmware boot order still puts GRUB first. `sudo ./linux/set-boot-order.sh`
+  from the Linux boot; `--print` first if you want to see the entry numbers
+  before anything changes.
+- **A cold "boot Windows" now works, but "boot Linux" ends up in
+  Windows.** The Windows leg could not find the GRUB firmware entry, so it
+  fell back to a plain reboot. `C:\ProgramData\dualboot\boot-agent.log`
+  records exactly that; `bcdedit /enum firmware` shows what the firmware
+  actually offers. Re-running `windows\setup.ps1` re-derives and caches it.
 - **Alexa acknowledges, the Pi logs the trigger, and nothing boots.** Read
   past the generic `WARN: reboot request failed` — it covers ssh auth
   failure, an unreachable host, and a token rejection alike. Run the

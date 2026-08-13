@@ -1,6 +1,6 @@
 # boot-agent.ps1 - tiny LAN control endpoint on :9107 (Windows), the
-# reverse leg of flightsim-boot.sh: lets the Pi reboot Windows so GRUB's
-# saved default lands the workstation in Linux.
+# reverse leg of flightsim-boot.sh: lets the Pi send the workstation back
+# to Linux.
 #
 #   GET /status  (and GET /)     -> 200 "windows"
 #   GET /reboot?token=<token>    -> 200 "rebooting", reboot in 5 s
@@ -19,6 +19,17 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $token = (Get-Content 'C:\ProgramData\dualboot\boot-agent.token' -TotalCount 1)
 if ($token) { $token = $token.Trim() }
+
+# Arming the firmware for one boot of GRUB is how /reboot reaches Linux now
+# that a cold power-on is pointed at Windows. Copied beside this script by
+# setup.ps1; if it is missing, /reboot falls back to a plain reboot, which
+# is what this agent always used to do.
+. "$PSScriptRoot\efi-entry.ps1"
+
+$logFile = "$PSScriptRoot\boot-agent.log"
+function Write-AgentLog($msg) {
+    try { "$(Get-Date -Format s) $msg" | Add-Content $logFile } catch { }
+}
 
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 9107)
 $listener.Start()
@@ -48,7 +59,21 @@ while ($true) {
                 # machine and send it to the other OS but never stop it, so the
                 # desk had a touchscreen that could only ever turn things ON.
                 switch ($Matches[1]) {
-                    'reboot'   { $body = 'rebooting';    $reboot = $true }
+                    'reboot'   {
+                        # Point the firmware at GRUB for exactly one boot.
+                        # Reboot regardless of the outcome: where the
+                        # firmware order was never changed, GRUB's saved
+                        # default is still Linux and a plain reboot lands
+                        # there - the behaviour this agent shipped with.
+                        $armed = $false
+                        if (Get-Command Set-NextBootLinux -ErrorAction SilentlyContinue) {
+                            $armed = Set-NextBootLinux
+                        }
+                        if (-not $armed) {
+                            Write-AgentLog 'reboot: no Linux firmware entry - relying on the GRUB saved default'
+                        }
+                        $body = 'rebooting'; $reboot = $true
+                    }
                     'launch'   { $body = 'launching';    $launch = $true }
                     'shutdown' { $body = 'powering off'; $off    = $true }
                 }
