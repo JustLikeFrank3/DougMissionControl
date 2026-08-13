@@ -94,7 +94,16 @@ fi
 
 if [ "$NEW_ORDER" != "$ORDER" ]; then
     efibootmgr -o "$NEW_ORDER" >/dev/null
-    echo "BootOrder set - a cold power-on now boots Windows directly."
+    echo "BootOrder set - a cold power-on should now boot Windows directly."
+    echo
+    echo "CHECK THIS AFTER THE NEXT POWER CYCLE:  efibootmgr | head -3"
+    echo "Many consumer boards keep their own boot priority list in NVRAM and"
+    echo "re-sync BootOrder from it at POST, silently undoing the line above."
+    echo "This one did. The symptom is a cold 'boot Windows' going through GRUB"
+    echo "and Linux again, exactly as before. The fix is not here: set Boot"
+    echo "Option #1 to Windows Boot Manager in the BIOS, which is the copy such"
+    echo "a board actually honours. BootNext is unaffected either way, so both"
+    echo "OS-to-OS legs keep working while the cold default is wrong."
 else
     echo "BootOrder already Windows-first - nothing to change."
 fi

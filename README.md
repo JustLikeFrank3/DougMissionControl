@@ -552,6 +552,14 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   firmware boot order still puts GRUB first. `sudo ./linux/set-boot-order.sh`
   from the Linux boot; `--print` first if you want to see the entry numbers
   before anything changes.
+- **…and it comes back after a power cycle**, `efibootmgr` having reported
+  success. Many consumer boards keep their own boot priority list in NVRAM
+  and re-sync `BootOrder` from it at POST; this one does. Nothing in
+  software can win that argument — set **Boot Option #1 = Windows Boot
+  Manager** in the BIOS itself. `BootNext` is honoured regardless, so the
+  Linux→Windows and Windows→Linux legs keep working while the cold default
+  is wrong, which is what makes this look like a partial fix rather than a
+  reverted one.
 - **A cold "boot Windows" now works, but "boot Linux" ends up in
   Windows.** The Windows leg could not find the GRUB firmware entry, so it
   fell back to a plain reboot. `C:\ProgramData\dualboot\boot-agent.log`
