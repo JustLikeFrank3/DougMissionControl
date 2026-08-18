@@ -180,6 +180,15 @@ PLAYLIST_PREFIX = cfg("PLAYLIST_PREFIX", "jcmcp-wallboard-")
 # Only boards meant for a kiosk get a nav button. Set to "" to list them all.
 EVALS_DASH_PREFIX = cfg("EVALS_DASH_PREFIX", "kiosk-")
 DASH_CACHE_SECS = float(cfg("EVALS_DASH_CACHE", "60"))
+# Nav-label aliases ("uid=LABEL;uid=LABEL") for boards whose uid no longer
+# says what they show. kiosk-ollama's uid is load-bearing on the jobContext
+# side (playlists reference it) but the board now shows whatever local model
+# the workstation serves. An alias only relabels a board Grafana actually
+# listed — a vanished uid still vanishes from the nav.
+_DASH_ALIASES = {k.strip(): v.strip() for k, _, v in
+                 (p.partition("=") for p in
+                  cfg("EVALS_DASH_LABELS", "kiosk-ollama=LOCAL MODEL").split(";"))
+                 if k.strip() and v.strip()}
 
 def _stamp(path) -> str:
     try:
@@ -1121,7 +1130,9 @@ def list_dashboards() -> list:
             continue
         # "kiosk-provenance" -> "PROVENANCE". The real titles are far too long
         # for a nav button ("Provenance — Generation Truth Gate").
-        label = uid[len(EVALS_DASH_PREFIX):].replace("-", " ").strip().upper() or uid.upper()
+        label = (_DASH_ALIASES.get(uid)
+                 or uid[len(EVALS_DASH_PREFIX):].replace("-", " ").strip().upper()
+                 or uid.upper())
         out.append({"uid": uid, "title": title, "label": label})
     out.sort(key=lambda d: d["label"])
     _dash_cache = (time.time(), out)
