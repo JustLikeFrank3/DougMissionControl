@@ -58,6 +58,8 @@ windows/efi-entry.ps1         finds the GRUB firmware entry, so /reboot can
                          hand back to Linux without writing to ext4
 windows/set-primary-display.ps1  makes one monitor primary, so a profile can
                          say which screen its game opens on (`-List` to look)
+windows/llama-logon.ps1       starts the llama.cpp server at logon, so :8081
+                         answers under Windows too (config: llama.env)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting, media-agent
 linux/set-boot-order.sh  points the UEFI boot order at Windows, so a COLD
                          power-on lands in the sim in one boot, not two
@@ -410,6 +412,59 @@ since Linux is the rare target here.
 Neither step is required. On a legacy-BIOS install, or a firmware whose
 boot list has no Windows entry, `set-boot-order.sh` refuses and says why,
 and both agents fall back to the old GRUB-default behaviour.
+
+### llama.cpp at boot
+
+`:8081` is meant to answer under either OS, but the two halves live in
+different places, which is worth knowing before you go looking.
+
+**Linux** is not configured by this repo. A templated
+`llama-server@<profile>.service` already exists on the workstation, with its
+profiles in `/etc/llama-server/`. Enable exactly **one** instance — every
+profile binds the same port and the model takes nearly all the VRAM, so two
+enabled instances race at boot and whichever loses crash-loops into `failed`:
+
+    systemctl list-unit-files 'llama-server@*'
+    ls /etc/systemd/system/multi-user.target.wants/llama-server@*
+    sudo systemctl disable llama-server@<the-one-you-do-not-want>
+
+**Windows** is `llama-logon.ps1`, registered as the `LlamaServer` logon task
+by `setup.ps1` and configured through `C:\ProgramData\dualboot\llama.env`.
+Until `LLAMA_BIN` and `MODEL` name files that exist it does nothing, so the
+task is safe to register before llama.cpp is installed. It also no-ops if the
+port is already served, for the same one-instance reason as the Linux side.
+
+The models are the actual obstacle, not the service. They live on the Linux
+root filesystem, which Windows cannot read — so the Windows side needs either
+its own copy on an NTFS volume or a shared NTFS data partition that Linux
+mounts instead (Linux reads NTFS fine, so one copy can serve both). Paths in
+`llama.env` are Windows-native: a Linux `PROFILE_ARGS` string cannot be
+pasted across unchanged, because it names the draft model by its Linux path.
+
+### Docker at boot
+
+Also two halves, and the Linux one is already done — it just doesn't look
+like it.
+
+**Linux** runs two independent Docker daemons and it matters which one you
+are talking to. The system `docker.service` is enabled and comes up at boot,
+and containers with a `unless-stopped` restart policy come back with it (the
+k3d cluster does). Docker Desktop is a *separate* daemon behind a *separate*
+socket, shipped as a **user** service that is disabled by default:
+
+    systemctl --user enable docker-desktop     # start it at logon
+
+The trap is that `docker context ls` decides which daemon the CLI talks to.
+With the `desktop-linux` context selected while Desktop is not running, a
+plain `docker ps` fails with a socket error that reads like "Docker is not
+installed" — while the system daemon is up the whole time, quietly running
+your containers. `docker context use default` points the CLI at the system
+daemon; containers started under one daemon are invisible to the other.
+
+**Windows** is Docker Desktop's own setting — Settings → General → *Start
+Docker Desktop when you sign in*. Deliberately not scripted here: Docker
+Desktop manages its own autostart, and a second mechanism fighting it is
+worse than the toggle.
 
 ## How "is it up?" is decided
 

@@ -121,6 +121,48 @@ Register-ScheduledTask -TaskName 'JarvisGreeting' -Action $action -Trigger $trig
     -Settings $settings -Force | Out-Null
 Write-Host 'JarvisGreeting logon task registered'
 
+# --- llama.cpp server logon task ------------------------------------------
+# The Windows half of "llama answers on :8081 under either OS", mirroring the
+# llama-server@<profile> unit on the Linux boot. A logon task rather than a
+# SYSTEM startup task: it wants the desktop session's GPU context, and this
+# machine auto-signs-in anyway. Unconfigured, it is a no-op.
+Copy-Item "$PSScriptRoot\llama-logon.ps1" $dest -Force
+$llamaEnv = "$dest\llama.env"
+if (-not (Test-Path $llamaEnv)) {
+    @'
+# Windows llama.cpp server settings, read by llama-logon.ps1 - the mirror of
+# /etc/llama-server/{common,<profile>}.env on the Linux boot.
+#
+# Until LLAMA_BIN and MODEL name files that exist, the logon task does
+# nothing. Every path here must be Windows-native: the Linux PROFILE_ARGS
+# string cannot be pasted across unchanged, because it names the draft model
+# by its Linux path.
+#
+#LLAMA_BIN=C:\llama\llama-server.exe
+#MODEL=C:\models\Qwen3.8-27B-UD-Q3_K_XL.gguf
+HOST=0.0.0.0
+PORT=8081
+ALIAS=qwen3.8-27b
+REASONING=medium
+# The balanced profile, with the draft model repointed at a Windows path:
+#PROFILE_ARGS=-c 12288 -fa on -ctk q4_0 -ctv q4_0 --spec-type draft-mtp --spec-draft-model C:\models\mtp-Qwen3.8-27B-Q4_0.gguf --spec-draft-n-max 4 --spec-draft-p-min 0.00 --parallel 1
+'@ | Set-Content $llamaEnv -Encoding ascii
+    Write-Host "llama.env template written to $llamaEnv (unconfigured - edit it to enable)"
+}
+if (-not (Get-NetFirewallRule -DisplayName 'llama.cpp server 8081' -ErrorAction SilentlyContinue)) {
+    # Same Profile Any reasoning as the boot agent: this LAN reads as Public.
+    New-NetFirewallRule -DisplayName 'llama.cpp server 8081' -Direction Inbound `
+        -Protocol TCP -LocalPort 8081 -Action Allow -Profile Any | Out-Null
+}
+$llamaAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest\llama-logon.ps1`""
+$llamaTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$llamaSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'LlamaServer' -Action $llamaAction -Trigger $llamaTrigger `
+    -Settings $llamaSettings -Force | Out-Null
+Write-Host 'LlamaServer logon task registered'
+
 # --- Firmware boot entry for Linux ----------------------------------------
 # Worked out once here so the agent's /reboot is a single bcdedit call, and
 # so a wrong answer shows up during setup rather than as a boot that comes
