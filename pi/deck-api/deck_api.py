@@ -1436,6 +1436,51 @@ def fire_launch() -> tuple[bool, str]:
     return False, "boot-agent did not answer"
 
 
+def llama_state() -> dict:
+    """The local model, as observed right now — never remembered.
+
+    Windows answers through the boot agent's /llama/status, which can tell
+    "loading" (process up, /health not yet 200) from "stopped". Linux has no
+    agent route for this yet, so the Pi probes :8081/health itself — running
+    or stopped, no loading distinction, and no toggle. `toggle` says whether
+    POST /api/llama can act, so the panel never renders a control that can
+    only 502. When nothing that could host the model is up, the state is
+    absent — not "stopped", per the absent-is-not-false rule.
+    """
+    os_now = DECK.state["workstation"]["os"]
+    if os_now == "windows":
+        try:
+            with urllib.request.urlopen(
+                    f"http://{WS_LAN}:{AGENT_PORT}/llama/status", timeout=4) as r:
+                word = r.read(32).decode("ascii", "replace").strip()
+            if word in ("running", "loading", "stopped"):
+                return {"os": os_now, "state": word, "toggle": True}
+        except OSError:
+            pass
+        return {"os": os_now, "state": "unknown", "toggle": False}
+    if os_now == "linux":
+        up = http_ok(f"http://{WS_LAN}:8081/health", timeout=3)
+        return {"os": os_now, "state": "running" if up else "stopped",
+                "toggle": False}
+    return {"os": os_now, "state": "absent", "toggle": False}
+
+
+def fire_llama(action: str) -> tuple[bool, str]:
+    if action not in ("start", "stop"):
+        return False, "action must be start or stop"
+    # Windows only for now: the Linux boot's llama is a systemd unit and its
+    # agent has no llama route yet. Mirrored by `toggle` in llama_state().
+    if DECK.state["workstation"]["os"] != "windows":
+        return False, "the llama toggle needs Windows up"
+    if not AGENT_TOKEN:
+        return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
+    url = f"http://{WS_LAN}:{AGENT_PORT}/llama/{action}?token={AGENT_TOKEN}"
+    if http_ok(url, timeout=5):
+        DECK.event("deck", f"local model {action} via boot-agent")
+        return True, f"{action} requested"
+    return False, "the boot agent did not answer"
+
+
 def fire_abort() -> tuple[bool, str]:
     killed = subprocess.run(
         ["pkill", "-f", ORCHESTRATOR],
@@ -1548,6 +1593,13 @@ class Handler(BaseHTTPRequestHandler):
                 {"name": n, "count": len(w)} for n, w in sorted(plans.items())
             ]})
 
+        # Same fast-poll family as /api/sim: polled only while the DECK
+        # surface shows the LOCAL MODEL control, off the SSE state.
+        if path == "/api/llama":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, llama_state())
+
         # Media and squadrons ride the same fast-poll pattern as /api/sim and
         # stay off the SSE state for the same reasons.
         if path == "/api/media":
@@ -1599,6 +1651,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/launch":
             ok, msg = fire_launch()
+            return self._json(200 if ok else 502, {"ok": ok, "message": msg})
+
+        if path == "/api/llama":
+            ok, msg = fire_llama(str(body.get("action") or ""))
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/sim/command":

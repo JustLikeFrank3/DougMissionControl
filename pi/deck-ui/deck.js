@@ -11,6 +11,7 @@ import { buildTrack, renderTrack,
 import { drawAllSparks } from './js/spark.js';
 import { dspPoll } from './js/screens.js';
 import { npPoll } from './js/media.js';
+import { llamaPoll, wireLlama } from './js/llama.js';
 import { vizPoll } from './js/viz.js';
 import { wireIdle, idlePoll, paintIdle } from './js/idle.js';
 import { navPoll, setNavPlan, setNavPlanDisabled } from './js/nav.js';
@@ -96,6 +97,7 @@ import { warningPoll } from './js/warnings.js';
     // runs for either. The spectrum is the expensive one at 10 Hz, and it
     // stops the moment neither surface is showing it.
     npPoll(active === 'deck' || active === 'nav' || active === 'audio');
+    llamaPoll(active === 'deck');
     vizPoll(active === 'deck' || active === 'audio');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
@@ -367,6 +369,9 @@ import { warningPoll } from './js/warnings.js';
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
+  // LOCAL MODEL refusals surface like SHUT DOWN's: a hold answered "needs
+  // Windows up" must say so, or it reads as a broken button.
+  wireLlama(footNotice);
   // A refused shutdown SAYS SO. The first field deployment had the panel
   // updated and both boot agents not, so every hold was answered "the boot
   // agent did not answer" - and the panel swallowed it, which reads as a

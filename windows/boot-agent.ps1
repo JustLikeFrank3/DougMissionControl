@@ -8,6 +8,13 @@
 #                                   JarvisGreeting task in the logged-on
 #                                   user's session (greeting + sim when
 #                                   the recorded intent is "sim")
+#   GET /llama/status            -> 200 "running" | "loading" | "stopped"
+#                                   (observed: /health answer, then process)
+#   GET /llama/start?token=<t>   -> 200 "starting llama", runs the
+#                                   LlamaServer task in the user's session;
+#                                   touches llama-start.requested first so
+#                                   llama-logon.ps1 skips its intent check
+#   GET /llama/stop?token=<t>    -> 200 "stopping llama"
 #
 # Token: first line of C:\ProgramData\dualboot\boot-agent.token
 # (created by windows/setup.ps1, mirrored into /etc/flightsim/boot.env on
@@ -39,6 +46,8 @@ while ($true) {
     $reboot = $false
     $launch = $false
     $off = $false
+    $llamaStart = $false
+    $llamaStop = $false
     try {
         $stream = $client.GetStream()
         $stream.ReadTimeout = 3000
@@ -52,7 +61,22 @@ while ($true) {
         # Mirrors linux/boot-agent.py. Both are reads, so both stay open.
         if ($request -match '^GET /(status)?(\s|\?)') {
             $status = '200 OK'; $body = 'windows'
-        } elseif ($request -match '^GET /(reboot|launch|shutdown)\?token=([^ ]+)') {
+        } elseif ($request -match '^GET /llama/status(\s|\?)') {
+            # A read, so open like /status. Observed fact only: "running" is
+            # the server itself answering /health, "loading" is the process
+            # alive but not (yet) healthy - the 13 GB load takes a while -
+            # and "stopped" is no process at all.
+            $status = '200 OK'
+            $healthy = $false
+            try {
+                $r = Invoke-WebRequest 'http://127.0.0.1:8081/health' `
+                    -UseBasicParsing -TimeoutSec 2
+                $healthy = ($r -and $r.StatusCode -eq 200)
+            } catch { }
+            $body = if ($healthy) { 'running' }
+                    elseif (Get-Process llama-server -ErrorAction SilentlyContinue) { 'loading' }
+                    else { 'stopped' }
+        } elseif ($request -match '^GET /(reboot|launch|shutdown|llama/start|llama/stop)\?token=([^ ]+)') {
             if ($token -and ($Matches[2] -ceq $token)) {
                 $status = '200 OK'
                 # /shutdown, not just /reboot. The panel could start this
@@ -76,6 +100,8 @@ while ($true) {
                     }
                     'launch'   { $body = 'launching';    $launch = $true }
                     'shutdown' { $body = 'powering off'; $off    = $true }
+                    'llama/start' { $body = 'starting llama'; $llamaStart = $true }
+                    'llama/stop'  { $body = 'stopping llama'; $llamaStop  = $true }
                 }
             } else {
                 $status = '403 Forbidden'; $body = 'forbidden'
@@ -95,4 +121,18 @@ while ($true) {
     # enough that nobody wonders whether the tap registered.
     if ($off) { & shutdown /s /t 5 /f }
     if ($launch) { Start-ScheduledTask -TaskName 'JarvisGreeting' }
+    if ($llamaStart) {
+        # The touch tells llama-logon.ps1 this start is deliberate, so its
+        # game-intent check must not veto it (fresh-mtime handshake; see the
+        # comment there for why not a consumed flag). The task, not a direct
+        # spawn: llama wants the logged-on session's GPU context, and this
+        # agent is SYSTEM.
+        Get-Date -Format s | Set-Content "$PSScriptRoot\llama-start.requested"
+        Start-ScheduledTask -TaskName 'LlamaServer'
+        Write-AgentLog 'llama start requested'
+    }
+    if ($llamaStop) {
+        Stop-Process -Name llama-server -Force
+        Write-AgentLog 'llama stop requested'
+    }
 }

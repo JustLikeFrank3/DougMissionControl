@@ -146,8 +146,21 @@ ALIAS=qwen3.8-27b
 REASONING=medium
 # The balanced profile, with the draft model repointed at a Windows path:
 #PROFILE_ARGS=-c 12288 -fa on -ctk q4_0 -ctv q4_0 --spec-type draft-mtp --spec-draft-model C:\models\mtp-Qwen3.8-27B-Q4_0.gguf --spec-draft-n-max 4 --spec-draft-p-min 0.00 --parallel 1
+# Boot intents that must NOT start llama: a boot asked for by a game trigger
+# keeps its VRAM for the game. Comma-separated, matching the greeting's
+# launch-profile keys. PI_HOST (maintained by setup.ps1 from -PiHost) is
+# where the intent is read from; without it the check is skipped.
+SKIP_ON_INTENTS=sim,squadrons
 '@ | Set-Content $llamaEnv -Encoding ascii
     Write-Host "llama.env template written to $llamaEnv (unconfigured - edit it to enable)"
+}
+# PI_HOST rides every setup run the way the greeting's $PiHost does, so the
+# intent check follows a -PiHost change instead of silently reading a dead
+# address. Other keys in the file are the user's and are left alone.
+if ($PiHost) {
+    $llamaLines = @(Get-Content $llamaEnv | Where-Object { $_ -notmatch '^#?PI_HOST=' })
+    $llamaLines += "PI_HOST=$PiHost"
+    Set-Content $llamaEnv $llamaLines -Encoding ascii
 }
 if (-not (Get-NetFirewallRule -DisplayName 'llama.cpp server 8081' -ErrorAction SilentlyContinue)) {
     # Same Profile Any reasoning as the boot agent: this LAN reads as Public.

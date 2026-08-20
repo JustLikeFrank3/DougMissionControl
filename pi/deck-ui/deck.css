@@ -244,6 +244,25 @@ html, body {
 
 .tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
 
+/* LOCAL MODEL: slim, under the tiles, mut-bordered so it reads as their
+   sub-control rather than a fifth boot option. The state word wears the
+   state palette (green running / amber loading), never decoratively; the
+   hold sweep colours by what the hold would DO — amber ends the model the
+   way SHUT DOWN ends a session, magenta starts one like the boot tiles. */
+.llamabar { position: relative; overflow: hidden; flex: none; height: 44px;
+  display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: var(--pan); border: 1px solid var(--ln); color: var(--fg);
+  font-family: inherit; cursor: pointer; }
+.llamabar .t-name { font-size: 15px; letter-spacing: .16em; }
+.llamabar .t-sub  { font-size: 13px; letter-spacing: .1em; margin-left: auto; }
+.llamabar[data-state="running"] .t-sub { color: var(--gr); }
+.llamabar[data-state="loading"] .t-sub { color: var(--am); }
+.llamabar[data-state="stopped"] .t-sub { color: var(--mut); }
+.llamabar[data-act="stop"]  .hold { background: var(--am); }
+.llamabar[data-act="start"] .hold { background: var(--acc); }
+.llamabar[data-act="stop"].arming  { border-color: var(--am); }
+.llamabar[data-act="start"].arming { border-color: var(--acc); }
+
 .foot { flex: none; font-size: 15px; color: var(--mut); margin-top: auto; }
 
 /* ── centre ────────────────────────────────────────────────────────────── */

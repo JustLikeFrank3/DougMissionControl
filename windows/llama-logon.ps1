@@ -12,6 +12,10 @@
 # An unconfigured or half-installed llama must never hold up logon, and must
 # never be the reason a boot looks broken.
 #
+# SKIP_ON_INTENTS (comma-separated, e.g. "sim,squadrons") plus PI_HOST make
+# the start intent-aware: a boot triggered for a game keeps its VRAM and
+# llama stays down until the deck's LOCAL MODEL control asks for it.
+#
 # Registered as the LlamaServer logon task by windows/setup.ps1.
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -31,6 +35,35 @@ $bin   = $cfg['LLAMA_BIN']
 $model = $cfg['MODEL']
 if (-not $bin   -or -not (Test-Path $bin))   { exit 0 }
 if (-not $model -or -not (Test-Path $model)) { exit 0 }
+
+# The GPU belongs to whichever intent booted this machine. A boot asked for
+# by a game trigger must not spend its VRAM on the model, so this reads the
+# same /tmp/flightsim-intent the greeting reads, with the same freshness
+# rule - the two scripts can never disagree about what kind of boot this is.
+# Absent, stale, or unreadable intent is a plain boot, and plain boots get
+# llama; that is also the case where the greeting launches nothing, so the
+# model and a game never contend for the card. SKIP_ON_INTENTS or PI_HOST
+# unset keeps the old always-start behaviour.
+#
+# The deck's LOCAL MODEL control overrides the intent: quitting a game and
+# asking for llama back IS the override, and the boot agent marks it by
+# touching llama-start.requested just before starting this task. Freshness
+# instead of deletion because the agent runs as SYSTEM and this script as
+# the logon user - consuming a SYSTEM-owned file would need ACL surgery,
+# letting it age out needs nothing.
+$flag = Join-Path $env:ProgramData 'dualboot\llama-start.requested'
+$forced = (Test-Path $flag) -and
+    (((Get-Date) - (Get-Item $flag).LastWriteTime).TotalSeconds -lt 120)
+$skipIntents = @(($cfg['SKIP_ON_INTENTS'] -split ',') |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if (-not $forced -and $skipIntents -and $cfg['PI_HOST']) {
+    $intentRaw = & ssh -o BatchMode=yes -o ConnectTimeout=4 $cfg['PI_HOST'] `
+        'cat /tmp/flightsim-intent 2>/dev/null'
+    if ($intentRaw -match '^(\w+) (\d+)$') {
+        $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$Matches[2]
+        if ($age -lt 1800 -and $skipIntents -contains $Matches[1]) { exit 0 }
+    }
+}
 
 # Not $host: that is a PowerShell automatic variable.
 $listenAddr = if ($cfg['HOST'])      { $cfg['HOST'] }      else { '0.0.0.0' }

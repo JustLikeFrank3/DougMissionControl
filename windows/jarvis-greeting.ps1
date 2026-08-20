@@ -105,8 +105,23 @@ $gpuLine = ''
 $temp = (& nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | Select-Object -First 1)
 if ($temp) { $gpuLine = " G P U thermals at $($temp.Trim()) degrees and nominal." }
 
+# The local model, told truthfully: "online" only when /health says so - at
+# greeting time llama is usually still loading 13 GB, which gets its own
+# line. Silence when it is not running at all, and silence on a game boot:
+# announcing a model this same script is about to evict would be noise.
+$llamaLine = ''
+if (-not $launch -and (Get-Process llama-server -ErrorAction SilentlyContinue)) {
+    $healthy = $false
+    try {
+        $r = Invoke-WebRequest 'http://127.0.0.1:8081/health' -UseBasicParsing -TimeoutSec 2
+        $healthy = ($r -and $r.StatusCode -eq 200)
+    } catch { }
+    $llamaLine = if ($healthy) { ' Local intelligence is online.' }
+                 else { ' Local intelligence is spinning up.' }
+}
+
 $closing = if ($launch) { $launch.closing } else { 'Ready when you are.' }
-$greeting = "$timeOfDay, sir. Boot sequence complete. All systems are online.$gpuLine $closing"
+$greeting = "$timeOfDay, sir. Boot sequence complete. All systems are online.$gpuLine$llamaLine $closing"
 
 New-Item -ItemType Directory -Force $CacheDir | Out-Null
 $cached = Join-Path $CacheDir 'greeting.mp3'
@@ -145,6 +160,18 @@ if ((Test-Path $fresh) -and (Get-Item $fresh).Length -gt 1kb) {
 }
 
 if ($launch) {
+    # A game asked for this GPU, and llama-server holds nearly all of its
+    # VRAM - evict it before the launch, whichever path got us here (cold
+    # boot where the intent check misfired, or a warm /launch while the
+    # model was up). It comes back only by the deck's LOCAL MODEL control
+    # or the next plain-Windows boot - deliberately not on game exit.
+    $llamaProc = Get-Process llama-server -ErrorAction SilentlyContinue
+    if ($llamaProc) {
+        $llamaProc | Stop-Process -Force
+        # CUDA frees on process exit; give the driver a beat to reclaim.
+        Start-Sleep -Seconds 3
+    }
+
     # The desk, before the game. Both of these are best-effort and neither may
     # stop a launch: a monitor that will not move is a worse evening than a
     # game on the wrong screen, and a greeting that ends in a red error and no
