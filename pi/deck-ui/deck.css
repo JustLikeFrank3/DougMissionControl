@@ -244,17 +244,21 @@ html, body {
 
 .tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
 
-/* LOCAL MODEL: slim, under the tiles, mut-bordered so it reads as their
-   sub-control rather than a fifth boot option. The state word wears the
-   state palette (green running / amber loading), never decoratively; the
-   hold sweep colours by what the hold would DO — amber ends the model the
-   way SHUT DOWN ends a session, magenta starts one like the boot tiles. */
-.llamabar { position: relative; overflow: hidden; flex: none; height: 44px;
-  display: flex; align-items: center; gap: 14px; padding: 0 18px;
-  background: var(--pan); border: 1px solid var(--ln); color: var(--fg);
-  font-family: inherit; cursor: pointer; }
-.llamabar .t-name { font-size: 15px; letter-spacing: .16em; }
-.llamabar .t-sub  { font-size: 13px; letter-spacing: .1em; margin-left: auto; }
+/* LOCAL MODEL: a half-height sub-tile inside the boot grid, left column
+   only — the grid's own gutters attach it to the Windows column instead of
+   leaving it to float between the tiles and now-playing. Auto row, so the
+   1fr boot rows above keep their split and its disappearance costs one gap.
+   The state word wears the state palette (green running / amber loading),
+   never decoratively; the hold sweep colours by what the hold would DO —
+   amber ends the model the way SHUT DOWN ends a session, magenta starts
+   one like the boot tiles. */
+.tiles { grid-template-rows: 1fr 1fr auto; }
+.llamabar { grid-column: 1; position: relative; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  padding: 9px 16px; background: var(--pan); border: 1px solid var(--ln);
+  color: var(--fg); font-family: inherit; text-align: left; cursor: pointer; }
+.llamabar .t-name { font-size: 14px; letter-spacing: .16em; }
+.llamabar .t-sub  { font-size: 12px; letter-spacing: .08em; }
 .llamabar[data-state="running"] .t-sub { color: var(--gr); }
 .llamabar[data-state="loading"] .t-sub { color: var(--am); }
 .llamabar[data-state="stopped"] .t-sub { color: var(--mut); }

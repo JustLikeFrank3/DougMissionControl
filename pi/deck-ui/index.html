@@ -101,18 +101,21 @@
               <span class="t-name">LINUX</span><span class="t-sub">VS Code</span>
               <span class="hold"></span>
             </button>
-          </div>
 
-          <!-- LOCAL MODEL rides under the tiles as a sub-control of the
-               WINDOWS boot, not a fifth boot option: it starts or stops
-               llama on a Windows that is already up. Hidden whenever no
-               agent can act on it — absent, not disabled. State text is
-               the observed /api/llama answer; llama.js paints it. -->
-          <button class="llamabar" id="llama" hidden>
-            <span class="t-name">LOCAL MODEL</span>
-            <span class="t-sub" id="llama-sub">—</span>
-            <span class="hold"></span>
-          </button>
+            <!-- LOCAL MODEL: a half-height sub-tile in the grid's own gutters,
+                 left column only, so it reads as the Windows column's child
+                 rather than a fifth boot option (no .tile class - the boot
+                 wiring selects '#tiles .tile', same escape .sqd-launch uses).
+                 The right half of this row is where a Linux-side toggle would
+                 land if the :9108 agent ever grows one. Hidden whenever no
+                 agent can act on it - absent, not disabled. State text is the
+                 observed /api/llama answer; llama.js paints it. -->
+            <button class="llamabar" id="llama" hidden>
+              <span class="t-name">LOCAL MODEL</span>
+              <span class="t-sub" id="llama-sub">—</span>
+              <span class="hold"></span>
+            </button>
+          </div>
 
           <button class="abort" id="abort" hidden>
             <span class="t-name">ABORT</span><span class="hold"></span>
