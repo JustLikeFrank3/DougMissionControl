@@ -337,6 +337,18 @@ import { warningPoll } from './js/warnings.js';
       ['last seen', mini.up ? 'now' : fmtAgo(mini.last_alive)]
     ]);
 
+    // The laptop, on the mini's contract. "off" here is a closed lid or a
+    // couch out of range — the normal life of a laptop, never alarmed on.
+    var mobile = s.mobile || {};
+    $('mobile-pill').textContent = mobile.up ? 'ONLINE' : 'AWAY';
+    $('mobile-pill').className = 'h-pill ' + (mobile.up ? 'ok' : 'off');
+    var mdoors = [mobile.ssh ? 'ssh' : null, mobile.screen ? 'screen share' : null]
+      .filter(Boolean).join(' · ');
+    rows($('mobile-rows'), [
+      ['services', mobile.up ? (mdoors || 'none visible') : '—'],
+      ['last seen', mobile.up ? 'now' : fmtAgo(mobile.last_alive)]
+    ]);
+
     var log = $('log');
     log.innerHTML = '';
     (s.events || []).slice(0, 9).forEach(function (e) {
