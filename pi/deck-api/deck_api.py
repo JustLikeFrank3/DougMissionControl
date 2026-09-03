@@ -143,6 +143,12 @@ SIM_TOKEN = cfg("SIM_AGENT_TOKEN", "")
 # The Mac mini. Liveness only — it runs no exporter, so the card claims
 # nothing beyond what a ping and two TCP handshakes can observe.
 MAC_LAN = cfg("MAC_LAN", "192.168.68.68")
+# The MacBook. Same liveness-only contract as the mini, but addressed by
+# mDNS name, not IP: a laptop's DHCP lease moves with every couch and café,
+# and a pinned address would call it "off" from the far side of the room.
+# "off" is also what a closed lid reports — that is the truth of a laptop,
+# not a fault, so nothing alarms on it.
+MOBILE_HOST = cfg("MOBILE_HOST", "DougMobile.local")
 # Which inputs to offer on a monitor that will NOT declare its own. Empty -
 # the default - means offer everything.
 #
@@ -282,6 +288,10 @@ class Deck:
             # The Mac mini: ping + service-port observations, nothing deeper.
             "mini": {"up": False, "ssh": False, "screen": False,
                      "ip": MAC_LAN, "last_alive": None},
+            # The MacBook: same observations, addressed by name — a laptop
+            # has no address worth pinning.
+            "mobile": {"up": False, "ssh": False, "screen": False,
+                       "host": MOBILE_HOST, "last_alive": None},
             # Which copy of this file is actually running. `git pull` updates
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
@@ -539,6 +549,22 @@ def fetch_mini() -> dict:
             "ip": MAC_LAN,
             "last_alive": time.time() if up else
                 DECK.state.get("mini", {}).get("last_alive")}
+
+
+def fetch_mobile() -> dict:
+    """The MacBook's card, on the mini's contract: liveness and open doors.
+
+    Probed by mDNS name (see MOBILE_HOST) because the address moves. A sleeping
+    laptop's Bonjour records may outlive it on the LAN's sleep proxy, but the
+    proxy answers mDNS, not ICMP — so ping stays an honest liveness signal.
+    """
+    up = pingable(MOBILE_HOST)
+    return {"up": up,
+            "ssh": up and tcp_open(MOBILE_HOST, 22),
+            "screen": up and tcp_open(MOBILE_HOST, 5900),
+            "host": MOBILE_HOST,
+            "last_alive": time.time() if up else
+                DECK.state.get("mobile", {}).get("last_alive")}
 
 
 def pingable(host: str) -> bool:
@@ -1250,6 +1276,7 @@ def poll_once(prev_os):
     ws_telemetry, source = fetch_telemetry(os_now)
     sim_link = fetch_sim_link(os_now)
     mini = fetch_mini()
+    mobile = fetch_mobile()
 
     def apply(s):
         w = s["workstation"]
@@ -1261,6 +1288,7 @@ def poll_once(prev_os):
         w["agent"] = agent
         s["sim"] = sim_link
         s["mini"] = mini
+        s["mobile"] = mobile
         s["pi"] = read_pi_metrics()
         # Latest reading only. The browser holds the rolling window.
         s["telemetry"] = {"ts": time.time(), "source": source,

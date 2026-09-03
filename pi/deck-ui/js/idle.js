@@ -38,6 +38,7 @@ function idleTickClock() {
 export function paintIdle(s) {
   var ws = (s && s.workstation) || {};
   var mini = (s && s.mini) || {};
+  var mobile = (s && s.mobile) || {};
   var boot = (s && s.boot) || {};
 
   // The tiles lock during a boot exactly as DECK's do - one action at a time
@@ -46,13 +47,16 @@ export function paintIdle(s) {
     t.disabled = !!boot.in_flight;
   });
 
-  // Three dots, three words. Green only when up, muted when off - "off" is
+  // Four cards, two by two. Green only when up, muted when off - "off" is
   // this screen's normal, not a warning.
   var rows = [
     ['workstation', ws.os === 'off' ? 'off' : (ws.os || 'unknown'),
      ws.os !== 'off' && !!ws.os],
     ['doug prime', 'up', true],                       // the Pi is drawing this
     ['minidoug', mini.up ? 'up' : 'off', !!mini.up],
+    // A laptop that is out of the house reads the same as one that is
+    // asleep on the desk: off, and that is all this panel can honestly say.
+    ['dougmobile', mobile.up ? 'up' : 'off', !!mobile.up],
   ];
   var el = $('idle-fleet');
   el.innerHTML = '';
