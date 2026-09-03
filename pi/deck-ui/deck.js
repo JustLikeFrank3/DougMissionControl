@@ -455,11 +455,13 @@ import { warningPoll } from './js/warnings.js';
   }
 
   /* ── live state ───────────────────────────────────────────────────────── */
-  var es = null, retry = 1000;
+  var es = null, retry = 1000, reconnectT = null, lastFrame = 0;
 
   function connect() {
+    reconnectT = null;
     if (es) es.close();
     es = new EventSource('/api/events');
+    lastFrame = Date.now();   // the watchdog clock starts at the attempt
 
     es.onopen = function () {
       retry = 1000;
@@ -470,6 +472,7 @@ import { warningPoll } from './js/warnings.js';
     };
 
     es.onmessage = function (ev) {
+      lastFrame = Date.now();
       try { render(JSON.parse(ev.data)); } catch (err) { /* keep last good */ }
     };
 
@@ -479,10 +482,42 @@ import { warningPoll } from './js/warnings.js';
       $('st-conn').textContent = 'reconnecting…';
       $('st-conn').className = 'dead';
       es.close();
-      setTimeout(connect, retry);
+      // One pending attempt at a time — stacked timers from a burst of error
+      // events each spawn a connection that closes the previous one, and the
+      // churn can outlive the outage it reacts to.
+      if (reconnectT === null) reconnectT = setTimeout(connect, retry);
       retry = Math.min(retry * 2, 15000);   // deck-api restarting, not a crisis
     };
   }
+
+  // deck-api resends the full state at least every 15 s even when nothing
+  // changed, so a silent stream is a dead one, not a quiet one. onerror is
+  // the normal notice — but on 2026-09-02 a kiosk two weeks into its run
+  // stopped hearing frames without ever getting an error event, and since
+  // the ui-stamp reload above rides those frames, the page could no longer
+  // notice a deploy: two of them shipped and the panel kept rendering the
+  // old bundle until chromium was killed by hand. The self-heal path must
+  // not depend on the machinery it is meant to heal, so two wall-clock
+  // recoveries run independently of the stream:
+  //   * watchdog — 45 s without a frame tears the EventSource down and
+  //     reconnects, whether or not it ever reported an error;
+  //   * stamp probe — a plain fetch of /api/state each minute, reloading on
+  //     a changed ui stamp even if EventSource itself is wedged.
+  setInterval(function () {
+    if (Date.now() - lastFrame > 45000 && reconnectT === null) connect();
+  }, 15000);
+
+  setInterval(function () {
+    fetch('/api/state', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        var v = s.version && s.version.ui;
+        if (!v || v === 'unknown') return;
+        if (uiStamp === null) uiStamp = v;
+        else if (v !== uiStamp) location.reload();
+      })
+      .catch(function () { /* the watchdog owns dead-server handling */ });
+  }, 60000);
 
   // The elapsed timer has to advance between pushes, so tick locally.
   setInterval(function () {

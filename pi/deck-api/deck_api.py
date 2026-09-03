@@ -37,6 +37,7 @@ import os
 import re
 import shlex
 import signal
+import sys
 import socket
 import subprocess
 import threading
@@ -1766,15 +1767,24 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.end_headers()
 
+        # One line per stream, not per frame: enough to answer "did the kiosk
+        # come back after a restart, and did it get frames" from the journal.
+        print(f"sse: open {self.client_address[0]}:{self.client_address[1]}",
+              file=sys.stderr, flush=True)
         seen = -1
+        sent = 0
         try:
             while True:
                 seen, snap = DECK.wait(seen, timeout=15)
                 payload = json.dumps(snap)
                 self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()
+                sent += 1
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # kiosk reloaded or navigated away
+        finally:
+            print(f"sse: closed {self.client_address[0]}:{self.client_address[1]}"
+                  f" after {sent} frame(s)", file=sys.stderr, flush=True)
 
     # -- static -------------------------------------------------------------
 
@@ -1787,6 +1797,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(403, {"error": "forbidden"})
         if not target.is_file():
             return self._json(404, {"error": "not found"})
+        # A served index.html IS the self-reload mechanism observably working —
+        # the one journal line that says the kiosk actually fetched a new page.
+        if rel == "index.html":
+            print(f"ui: served index.html to {self.client_address[0]}",
+                  file=sys.stderr, flush=True)
         ctype = CONTENT_TYPES.get(target.suffix, "application/octet-stream")
         self._send(200, target.read_bytes(), ctype)
 
@@ -1815,7 +1830,8 @@ def main() -> None:
     signal.signal(signal.SIGINT, bye)
 
     DECK.event("deck-api",
-               f"listening on :{LISTEN_PORT} — {BUILD['file']} ({BUILD['mtime']})")
+               f"listening on :{LISTEN_PORT} — {BUILD['file']} ({BUILD['mtime']})"
+               f" ui {BUILD['ui']}")
     server.serve_forever()
 
 
