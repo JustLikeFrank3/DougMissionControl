@@ -716,12 +716,15 @@ html, body {
 /* Four hosts, two by two. A single row was fine at three names; at four it
    read as a queue, and this panel has width to spare but no height for a
    vertical list under the tiles. */
-.idle-fleet { display: grid; grid-template-columns: repeat(2, 240px);
+.idle-fleet { display: grid; grid-template-columns: repeat(2, 270px);
               gap: 14px; margin-top: 14px; }
 .idle-host { display: flex; align-items: center; gap: 10px; font-size: 14px;
              letter-spacing: .14em; color: var(--mut);
              border: 1px solid var(--ln); padding: 12px 16px; }
-.idle-host i { width: 9px; height: 9px; border-radius: 50%; background: var(--ln); }
+/* flex: none, or the longest row ("workstation windows") squeezes the dot
+   to nothing inside the fixed-width card — a lit host with no light. */
+.idle-host i { flex: none; width: 9px; height: 9px; border-radius: 50%;
+               background: var(--ln); }
 .idle-host.up i { background: var(--gr); }
 .idle-host b { font-weight: 400; text-transform: uppercase; }
 
