@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Surface episodes and playlist-mode selection. No Pi, no Grafana needed."""
-import sys, pathlib
+import os, sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+# Pin the default surface before import: cfg() reads the process environment
+# ahead of /etc/flightsim/boot.env, so the episode/restore checks below see the
+# same default on a bare dev machine and on a deployed Pi that pins idle.
+os.environ["DEFAULT_SURFACE"] = "evals"
 import deck_api as d
 
 fails = []
@@ -11,7 +15,7 @@ def check(label, got, want):
     if not ok: fails.append(label)
 def sf(): return d.DECK.state["surface"]
 
-print("\n-- idle default --")
+print("\n-- default surface (pinned to evals above) --")
 check("starts on evals", sf()["active"], "evals")
 
 print("\n-- a boot episode shows DECK, then restores --")
