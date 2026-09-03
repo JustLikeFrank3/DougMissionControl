@@ -108,9 +108,15 @@ html, body {
          min-height: 0; overflow: hidden; }
 .mid   { padding: 16px 22px; border-left: 1px solid var(--ln);
          display: flex; flex-direction: column; gap: 11px; }
+/* Four hosts, two by two — the same formation as the idle screen's fleet.
+   A grid rather than a flex stack: stacked, the fourth card pushed the
+   live/window bar off the bottom of the 720px panel. The label and the bar
+   span both columns; the cards fill the two equal rows between them. */
 .right { padding: 16px 20px; border-left: 1px solid var(--ln);
-         display: flex; flex-direction: column; gap: 10px;
+         display: grid; grid-template-columns: 1fr 1fr;
+         grid-template-rows: auto 1fr 1fr auto; gap: 10px;
          min-height: 0; overflow: hidden; }
+.right .lbl, .right .bar { grid-column: 1 / -1; }
 
 /* ── EVALS ─────────────────────────────────────────────────────────────── */
 
