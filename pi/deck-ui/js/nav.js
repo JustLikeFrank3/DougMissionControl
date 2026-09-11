@@ -524,6 +524,14 @@ var navQ = '';
 var navKbdMode = 'wpt';          // 'wpt' = geocode search, 'save' = plan name
 var navKbdGoBtn = null;
 
+// The overlay must always have a finger-sized escape route. The tiny × in
+// its header can be missed on the kiosk (especially after a failed save), so
+// the keyboard also carries an explicit CANCEL button.
+function navSearchCancel() {
+  navSearchOpen(false);
+  navQ = '';
+}
+
 export function navSearchOpen(on, mode) {
   navKbdMode = mode || 'wpt';
   $('navp-search').hidden = !on;
@@ -548,7 +556,7 @@ function navSearchGo() {
       if (rsp && rsp.ok) { navSearchOpen(false); navPlansOpen(true); }
       else {
         $('navp-results').innerHTML = '<div class="nsx-msg">SAVE FAILED · ' +
-          ((rsp && rsp.reason) || 'no reply') + '</div>';
+          ((rsp && rsp.reason) || 'no reply') + ' · ROUTE NOT SAVED · TAP CANCEL</div>';
       }
     });
     return;
@@ -608,6 +616,7 @@ export function navKbdBuild() {
   [['SPACE', 'space', function () { navQ += ' '; }],
    ['⌫', 'wide', function () { navQ = navQ.slice(0, -1); }],
    ['CLEAR', 'wide', function () { navQ = ''; }],
+   ['CANCEL', 'wide cancel', navSearchCancel],
    ['SEARCH', 'wide go', navSearchGo]].forEach(function (def) {
     var k = document.createElement('button');
     k.textContent = def[0];
@@ -972,7 +981,7 @@ export function wireNav() {
   // Flight-plan search overlay. The keyboard it uses is built once at the top
   // of wireNav, not here as well.
   $('navp-add').addEventListener('click', function () { navSearchOpen(true, 'wpt'); });
-  $('navp-close').addEventListener('click', function () { navSearchOpen(false); });
+  $('navp-close').addEventListener('click', navSearchCancel);
   // SAVE sits next to ADD, not behind PLANS. Saving was reachable only by
   // opening a list of saved plans and finding a button at the bottom of it,
   // which reads as "load a plan" — so the feature existed and looked absent.

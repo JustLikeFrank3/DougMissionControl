@@ -1003,6 +1003,7 @@ html, body {
 .nsx-kbd button.wide { min-width: 120px; font-size: 15px; letter-spacing: .12em; }
 .nsx-kbd button.space { flex: 1; max-width: 420px; }
 .nsx-kbd button.go { color: var(--cy); border-color: var(--cy); }
+.nsx-kbd button.cancel { color: var(--rd); border-color: var(--rd); }
 
 .navbtns { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .navbtns .navadd { min-width: 0; }
