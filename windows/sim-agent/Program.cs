@@ -98,9 +98,6 @@ internal static class Program
         // SCREENS do, because neither has anything to do with the simulator.
         var gpu = new GpuBridge();
         var audio = new AudioBridge();
-        gpu.Start();
-        audio.Start();
-
         _api = new HttpApi(Port, token)
         {
             Health = BuildHealth,
@@ -132,8 +129,14 @@ internal static class Program
             },
         };
 
+        // The control link is the safety-critical surface. Start it before
+        // optional telemetry pumps: a slow audio device, media framework, or
+        // GPU driver must never make the panel look as if the flight agent is
+        // absent.
         _api.Start();
         _sim.Start();
+        gpu.Start();
+        audio.Start();
         Console.WriteLine($"flightdeck-sim-agent {Version} listening on :{Port}");
 
         using var stop = new ManualResetEventSlim(false);
