@@ -210,7 +210,7 @@ internal static class Program
 
         // Already where it was asked to be. Nothing is transmitted, and `noop`
         // tells the panel not to wait for movement that will never come.
-        if (resolved.Event is null)
+        if (resolved.Event is null && resolved.InputEvent is null)
         {
             return new JsonObject
             {
