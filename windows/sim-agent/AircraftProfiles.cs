@@ -52,7 +52,7 @@ internal static class AircraftProfiles
     // rather than a legacy external SimConnect event.
     private static readonly AircraftProfile A330 = new(
         "a330", "Airbus A330 FCU", "aircraft-input-events", true, 1000,
-        "ALT SEL is live. AP1 and managed modes need the cockpit bridge.");
+        "FCU knobs and mode buttons use aircraft inputs. AP1 needs the cockpit bridge.");
 
     public static AircraftProfile For(string? title)
     {
@@ -77,8 +77,18 @@ internal static class AircraftProfiles
     /// accepted at the HTTP layer but is the exact "no response" failure the
     /// panel is meant to expose.
     /// </summary>
-    public static bool IsDirectlySupported(AircraftProfile profile, string control, string action) =>
-        profile.Id != "a330" || (control == "ap_alt" && action == "set");
+    public static bool IsDirectlySupported(AircraftProfile profile, string control, string action)
+    {
+        if (profile.Id != "a330") return true;
+
+        // The A330 publishes direct FCU input events for these knobs and
+        // their pull/push modes. Leave them available to the deck instead of
+        // rejecting an entire autopilot panel merely because AP1 itself needs
+        // the in-cockpit bridge. AP master and the generic Mach changeover do
+        // not have a verified external FCU path, so those remain explicit.
+        return control is "ap_hdg" or "ap_alt" or "ap_vs"
+            || (control == "ap_spd" && action is "set" or "mode");
+    }
 
     public static JsonObject Describe(string? title)
     {
