@@ -315,6 +315,9 @@ internal static class Normalize
         ["ts"] = Math.Round(ts, 1),
         ["seq"] = seq,
         ["aircraft"] = aircraft,
+        // The UI needs to know whether it is driving ordinary SimConnect
+        // events or an aircraft's own avionics—not infer it from a title.
+        ["avionics"] = AircraftProfiles.Describe(aircraft),
         ["capabilities"] = Capabilities(c),
         ["controls"] = Controls(s, c),
         ["readouts"] = Readouts(s),
