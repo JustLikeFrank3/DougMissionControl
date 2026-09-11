@@ -147,6 +147,38 @@ internal static class Probe
         return events.Count == 0 ? 2 : 0;
     }
 
+    /// <summary>Read-only until the final SetInputEvent call. Used only for a
+    /// controlled airframe-integration experiment after the aircraft's input
+    /// event and its semantics have been discovered.</summary>
+    public static int TryInputEvent(string name, double value)
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        SimConnect sim;
+        try { sim = new SimConnect("FlightDeckInputEventTry", IntPtr.Zero, 0, wait, 0); }
+        catch (COMException ex) { Console.Error.WriteLine($"cannot reach a simulator: {ex.Message}"); return 1; }
+
+        ulong? hash = null;
+        sim.OnRecvEnumerateInputEvents += (_, d) =>
+        {
+            foreach (var item in d.rgData)
+                if (item is SIMCONNECT_INPUT_EVENT_DESCRIPTOR e
+                    && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)) hash = e.Hash;
+        };
+        sim.EnumerateInputEvents(ProbeId.Base);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && hash is null)
+            if (wait.WaitOne(100)) sim.ReceiveMessage();
+        if (hash is null) { Console.Error.WriteLine($"input event not found: {name}"); sim.Dispose(); return 2; }
+
+        sim.SetInputEvent(hash.Value, value);
+        Console.WriteLine($"sent {name}({value.ToString(System.Globalization.CultureInfo.InvariantCulture)})");
+        var sentUntil = DateTime.UtcNow.AddMilliseconds(300);
+        while (DateTime.UtcNow < sentUntil)
+            if (wait.WaitOne(50)) sim.ReceiveMessage();
+        sim.Dispose();
+        return 0;
+    }
+
     public static int Run()
     {
         using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);

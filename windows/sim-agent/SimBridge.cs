@@ -67,7 +67,7 @@ internal sealed class SimBridge : IDisposable
     public string SimName => _simName;
 
     private sealed record Command(Event? Id, uint Data0, uint Data1, string? InputEvent,
-        double InputValue, TaskCompletionSource<bool> Result);
+        double InputValue, int InputRepeat, TaskCompletionSource<bool> Result);
 
     public SimBridge()
     {
@@ -85,7 +85,7 @@ internal sealed class SimBridge : IDisposable
     {
         if (!Connected) return Task.FromResult(false);
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _commands.Enqueue(new Command(id, data0, data1, null, 0, tcs));
+        _commands.Enqueue(new Command(id, data0, data1, null, 0, 1, tcs));
         _simEvent.Set();   // wake the pump so the command does not wait on a frame
         return tcs.Task;
     }
@@ -95,11 +95,12 @@ internal sealed class SimBridge : IDisposable
     /// <summary>Queue a named aircraft-avionics input.  Like TransmitAsync,
     /// true means the input reached SimConnect, never that the aircraft obeyed
     /// it; the state stream remains the only confirmation.</summary>
-    public Task<bool> TransmitInputAsync(string name, double value = 0)
+    public Task<bool> TransmitInputAsync(string name, double value = 0, int repeat = 1)
     {
-        if (!Connected || !_inputEvents.ContainsKey(name)) return Task.FromResult(false);
+        if (!Connected || !_inputEvents.ContainsKey(name) || repeat < 1 || repeat > 60)
+            return Task.FromResult(false);
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _commands.Enqueue(new Command(null, 0, 0, name, value, tcs));
+        _commands.Enqueue(new Command(null, 0, 0, name, value, repeat, tcs));
         _simEvent.Set();
         return tcs.Task;
     }
@@ -351,7 +352,8 @@ internal sealed class SimBridge : IDisposable
                         cmd.Result.TrySetResult(false);
                         continue;
                     }
-                    _sim.SetInputEvent(hash, cmd.InputValue);
+                    for (var i = 0; i < cmd.InputRepeat; i++)
+                        _sim.SetInputEvent(hash, cmd.InputValue);
                     cmd.Result.TrySetResult(true);
                     continue;
                 }

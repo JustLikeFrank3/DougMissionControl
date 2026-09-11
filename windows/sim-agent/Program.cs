@@ -46,6 +46,17 @@ internal static class Program
         if (args.Contains("--probe")) return Probe.Run();
         if (args.Contains("--probe-events")) return Probe.RunEvents();
         if (args.Contains("--probe-input-events")) return Probe.InputEvents();
+        if (args.Contains("--try-input-event"))
+        {
+            var i = Array.IndexOf(args, "--try-input-event");
+            var name = i + 1 < args.Length ? args[i + 1] : "";
+            var d = Array.IndexOf(args, "--data");
+            var value = d >= 0 && d + 1 < args.Length
+                && double.TryParse(args[d + 1], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+            if (name.Length == 0) { Console.Error.WriteLine("usage: --try-input-event NAME [--data NUMBER]"); return 1; }
+            return Probe.TryInputEvent(name, value);
+        }
         if (args.Contains("--try-event"))
         {
             var i = Array.IndexOf(args, "--try-event");
@@ -239,7 +250,7 @@ internal static class Program
         if (resolved.PreEvent is not null
             && !await _sim.TransmitAsync(resolved.PreEvent.Value)) return false;
         var sent = resolved.InputEvent is not null
-            ? await _sim.TransmitInputAsync(resolved.InputEvent, resolved.InputValue)
+            ? await _sim.TransmitInputAsync(resolved.InputEvent, resolved.InputValue, resolved.InputRepeat)
             : await _sim.TransmitAsync(resolved.Event!.Value, resolved.Data0, resolved.Data1);
         if (!sent) return false;
         return resolved.FollowupEvent is null
@@ -249,14 +260,14 @@ internal static class Program
     private readonly record struct Resolved(
         Event? Event, uint Data0, uint Data1, string? Reason,
         Event? FollowupEvent = null, uint FollowupData = 0, Event? PreEvent = null,
-        string? InputEvent = null, double InputValue = 0);
+        string? InputEvent = null, double InputValue = 0, int InputRepeat = 1);
 
     private static Resolved Invalid(string reason) => new(null, 0, 0, reason);
     private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0,
         Event? followupEvent = null, uint followupData = 0, Event? preEvent = null) =>
         new(e, data0, data1, null, followupEvent, followupData, preEvent);
-    private static Resolved SendInput(string name, double value = 0) =>
-        new(null, 0, 0, null, InputEvent: name, InputValue: value);
+    private static Resolved SendInput(string name, double value = 0, int repeat = 1) =>
+        new(null, 0, 0, null, InputEvent: name, InputValue: value, InputRepeat: repeat);
     private static Resolved AirlinerInput(string name, double value, Resolved fallback) =>
         _sim.HasInputEvent(name) ? SendInput(name, value) : fallback;
     private static readonly Resolved Noop = new(null, 0, 0, null);
@@ -408,8 +419,20 @@ internal static class Program
                 // untouched.
                 var slot = (int)Math.Round(s.ApAltitudeSlotIndex);
                 if (slot < 0 || slot > 3) slot = 0;
-                return AirlinerInput("AIRLINER_MCU_ALT", alt,
-                    Send(Event.ApAltVarSet, (uint)alt, (uint)slot));
+                if (_sim.HasInputEvent("AIRLINER_MCU_ALT"))
+                {
+                    // The A330 FCU accepts a direction, not an altitude. Its
+                    // altitude increment is 1,000 ft, confirmed live here;
+                    // emit the exact count of knob steps for the absolute
+                    // target the Flight Deck API received.
+                    var delta = alt - (int)Math.Round(s.ApAltFt);
+                    if (delta == 0) return Noop;
+                    var steps = (int)Math.Round(Math.Abs(delta) / 1000.0,
+                        MidpointRounding.AwayFromZero);
+                    if (steps == 0) return Invalid("A330 altitude increments are 1000 ft");
+                    return SendInput("AIRLINER_MCU_ALT", Math.Sign(delta), steps);
+                }
+                return Send(Event.ApAltVarSet, (uint)alt, (uint)slot);
 
             case "ap_vs":
                 if (action == "mode")
