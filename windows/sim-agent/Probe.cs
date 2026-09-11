@@ -147,6 +147,59 @@ internal static class Probe
         return events.Count == 0 ? 2 : 0;
     }
 
+    /// <summary>
+    /// Prints the current values that an aircraft exposes for its autopilot
+    /// input events. This is read-only and settles whether a published input
+    /// is a knob value, a latched switch, or merely a cockpit interaction
+    /// name before Flight Deck assigns a command to it.
+    ///
+    ///   flightdeck-sim-agent --probe-input-event-params
+    /// </summary>
+    public static int InputEventParams()
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        SimConnect sim;
+        try { sim = new SimConnect("FlightDeckInputParamProbe", IntPtr.Zero, 0, wait, 0); }
+        catch (COMException ex)
+        {
+            Console.Error.WriteLine($"cannot reach a simulator: {ex.Message}");
+            return 1;
+        }
+
+        var events = new Dictionary<ulong, string>();
+        var values = new Dictionary<ulong, string>();
+        uint expected = 0;
+        sim.OnRecvEnumerateInputEvents += (_, d) =>
+        {
+            expected = Math.Max(expected, d.dwOutOf);
+            foreach (var item in d.rgData)
+                if (item is SIMCONNECT_INPUT_EVENT_DESCRIPTOR e)
+                    events[e.Hash] = e.Name;
+        };
+        sim.OnRecvEnumerateInputEventParams += (_, d) => values[d.Hash] = d.Value ?? "";
+
+        sim.EnumerateInputEvents(ProbeId.Base);
+        var enumerationDeadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < enumerationDeadline && (expected == 0 || events.Count < expected))
+            if (wait.WaitOne(100)) sim.ReceiveMessage();
+
+        var relevant = events.Where(kv => kv.Value.StartsWith("AIRLINER_", StringComparison.OrdinalIgnoreCase)
+                                      && (kv.Value.Contains("AP", StringComparison.OrdinalIgnoreCase)
+                                       || kv.Value.Contains("MCU", StringComparison.OrdinalIgnoreCase)))
+                             .OrderBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase)
+                             .ToArray();
+        foreach (var e in relevant) sim.EnumerateInputEventParams(e.Key);
+
+        var paramsDeadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < paramsDeadline && values.Count < relevant.Length)
+            if (wait.WaitOne(100)) sim.ReceiveMessage();
+
+        foreach (var e in relevant)
+            Console.WriteLine($"{e.Value,-34} {values.GetValueOrDefault(e.Key, "(no value returned)")}");
+        sim.Dispose();
+        return relevant.Length == 0 ? 2 : 0;
+    }
+
     /// <summary>Read-only until the final SetInputEvent call. Used only for a
     /// controlled airframe-integration experiment after the aircraft's input
     /// event and its semantics have been discovered.</summary>

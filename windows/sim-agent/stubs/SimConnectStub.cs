@@ -82,6 +82,12 @@ public class SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS : SIMCONNECT_RECV
     public uint dwOutOf;
 }
 
+public class SIMCONNECT_RECV_ENUMERATE_INPUT_EVENT_PARAMS : SIMCONNECT_RECV
+{
+    public ulong Hash;
+    public string Value = "";
+}
+
 public class SimConnect : IDisposable
 {
     public const uint SIMCONNECT_UNUSED = 0xFFFFFFFF;
@@ -96,6 +102,7 @@ public class SimConnect : IDisposable
     public delegate void RecvFacilityDataEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA data);
     public delegate void RecvFacilityDataEndEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA_END data);
     public delegate void RecvEnumerateInputEventsEventHandler(SimConnect sender, SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS data);
+    public delegate void RecvEnumerateInputEventParamsEventHandler(SimConnect sender, SIMCONNECT_RECV_ENUMERATE_INPUT_EVENT_PARAMS data);
 
     public event RecvOpenEventHandler? OnRecvOpen;
     public event RecvQuitEventHandler? OnRecvQuit;
@@ -105,6 +112,7 @@ public class SimConnect : IDisposable
     public event RecvFacilityDataEventHandler? OnRecvFacilityData;
     public event RecvFacilityDataEndEventHandler? OnRecvFacilityDataEnd;
     public event RecvEnumerateInputEventsEventHandler? OnRecvEnumerateInputEvents;
+    public event RecvEnumerateInputEventParamsEventHandler? OnRecvEnumerateInputEventParams;
 
     public SimConnect(string szName, IntPtr hWnd, uint UserEventWin32, WaitHandle? hEventHandle, uint ConfigIndex)
         => throw new COMException("SimConnect stub: no simulator, and never will be.");
@@ -120,6 +128,7 @@ public class SimConnect : IDisposable
     public void RegisterFacilityDataDefineStruct<T>(SIMCONNECT_FACILITY_DATA_TYPE type) { }
     public void RequestFacilityData(Enum DefineID, Enum RequestID, string Icao, string Region) { }
     public void EnumerateInputEvents(Enum RequestID) { }
+    public void EnumerateInputEventParams(ulong Hash) { }
     public void SetInputEvent(ulong Hash, object Value) { }
     public void TransmitClientEvent(uint ObjectID, Enum EventID, uint dwData, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags) { }
     public void TransmitClientEvent_EX1(uint ObjectID, Enum EventID, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags,
@@ -139,5 +148,6 @@ public class SimConnect : IDisposable
         OnRecvFacilityData?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA());
         OnRecvFacilityDataEnd?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA_END());
         OnRecvEnumerateInputEvents?.Invoke(this, new SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS());
+        OnRecvEnumerateInputEventParams?.Invoke(this, new SIMCONNECT_RECV_ENUMERATE_INPUT_EVENT_PARAMS());
     }
 }

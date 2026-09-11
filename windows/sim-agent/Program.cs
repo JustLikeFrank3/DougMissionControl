@@ -46,6 +46,7 @@ internal static class Program
         if (args.Contains("--probe")) return Probe.Run();
         if (args.Contains("--probe-events")) return Probe.RunEvents();
         if (args.Contains("--probe-input-events")) return Probe.InputEvents();
+        if (args.Contains("--probe-input-event-params")) return Probe.InputEventParams();
         if (args.Contains("--try-input-event"))
         {
             var i = Array.IndexOf(args, "--try-input-event");
