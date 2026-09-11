@@ -29,6 +29,12 @@ internal sealed class SimBridge : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly EventWaitHandle _simEvent = new(false, EventResetMode.AutoReset);
     private readonly ConcurrentQueue<Command> _commands = new();
+    // Aircraft input events are the actual avionics controls exposed by the
+    // loaded aircraft.  Complex airliners can accept a legacy AP event and
+    // then deliberately ignore it; the named input event is their real button
+    // or FCU knob.  The list is populated on the pump thread and read safely
+    // by HTTP command resolution.
+    private readonly ConcurrentDictionary<string, ulong> _inputEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Thread _pump;
 
     private SimConnect? _sim;
@@ -60,7 +66,8 @@ internal sealed class SimBridge : IDisposable
     /// assumed. Empty while offline.</summary>
     public string SimName => _simName;
 
-    private sealed record Command(Event Id, uint Data0, uint Data1, TaskCompletionSource<bool> Result);
+    private sealed record Command(Event? Id, uint Data0, uint Data1, string? InputEvent,
+        double InputValue, TaskCompletionSource<bool> Result);
 
     public SimBridge()
     {
@@ -78,8 +85,22 @@ internal sealed class SimBridge : IDisposable
     {
         if (!Connected) return Task.FromResult(false);
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _commands.Enqueue(new Command(id, data0, data1, tcs));
+        _commands.Enqueue(new Command(id, data0, data1, null, 0, tcs));
         _simEvent.Set();   // wake the pump so the command does not wait on a frame
+        return tcs.Task;
+    }
+
+    public bool HasInputEvent(string name) => _inputEvents.ContainsKey(name);
+
+    /// <summary>Queue a named aircraft-avionics input.  Like TransmitAsync,
+    /// true means the input reached SimConnect, never that the aircraft obeyed
+    /// it; the state stream remains the only confirmation.</summary>
+    public Task<bool> TransmitInputAsync(string name, double value = 0)
+    {
+        if (!Connected || !_inputEvents.ContainsKey(name)) return Task.FromResult(false);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _commands.Enqueue(new Command(null, 0, 0, name, value, tcs));
+        _simEvent.Set();
         return tcs.Task;
     }
 
@@ -135,6 +156,7 @@ internal sealed class SimBridge : IDisposable
             sim.OnRecvException += OnException;
             sim.OnRecvSimobjectData += OnSimObjectData;
             sim.OnRecvSystemState += OnSystemState;
+            sim.OnRecvEnumerateInputEvents += OnEnumerateInputEvents;
             sim.OnRecvFacilityData += OnFacilityData;
             sim.OnRecvFacilityDataEnd += OnFacilityDataEnd;
 
@@ -205,6 +227,9 @@ internal sealed class SimBridge : IDisposable
         sender.RequestDataOnSimObject(Request.Gps, Definition.Gps,
             SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SECOND,
             SIMCONNECT_DATA_REQUEST_FLAG.CHANGED, 0, 0, 0);
+
+        _inputEvents.Clear();
+        sender.EnumerateInputEvents(Request.InputEvents);
     }
 
     private void OnException(SimConnect sender, SIMCONNECT_RECV_EXCEPTION data)
@@ -212,6 +237,14 @@ internal sealed class SimBridge : IDisposable
         // Most useful during Step 0: an unrecognised SimVar name or unit shows up
         // here as NAME_UNRECOGNIZED rather than as a silently zeroed field.
         Console.Error.WriteLine($"simconnect exception {(SIMCONNECT_EXCEPTION)data.dwException} (send id {data.dwSendID}, index {data.dwIndex})");
+    }
+
+    private void OnEnumerateInputEvents(SimConnect sender, SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS data)
+    {
+        if ((Request)data.dwRequestID != Request.InputEvents) return;
+        foreach (var item in data.rgData)
+            if (item is SIMCONNECT_INPUT_EVENT_DESCRIPTOR e && !string.IsNullOrWhiteSpace(e.Name))
+                _inputEvents[e.Name] = e.Hash;
     }
 
     private void OnSimObjectData(SimConnect sender, SIMCONNECT_RECV_SIMOBJECT_DATA data)
@@ -299,6 +332,17 @@ internal sealed class SimBridge : IDisposable
 
             try
             {
+                if (cmd.InputEvent is not null)
+                {
+                    if (!_inputEvents.TryGetValue(cmd.InputEvent, out var hash))
+                    {
+                        cmd.Result.TrySetResult(false);
+                        continue;
+                    }
+                    _sim.SetInputEvent(hash, cmd.InputValue);
+                    cmd.Result.TrySetResult(true);
+                    continue;
+                }
                 // AP_ALT_VAR_SET_ENGLISH takes both an altitude and an altitude
                 // slot. The single-argument API silently writes the default
                 // slot, which is not necessarily the slot the aircraft tracks.
@@ -310,7 +354,7 @@ internal sealed class SimBridge : IDisposable
                 }
                 else
                 {
-                    _sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, cmd.Id, cmd.Data0,
+                    _sim.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, cmd.Id!.Value, cmd.Data0,
                         Group.Main, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
                 }
                 cmd.Result.TrySetResult(true);
@@ -330,6 +374,7 @@ internal sealed class SimBridge : IDisposable
         _haveCaps = false;
         _gps = default;
         _flightPlan = [];
+        _inputEvents.Clear();
         _flightPlanSource = "";
         _pendingFlightPlan = null;
         _requestedDestination = "";

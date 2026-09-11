@@ -87,6 +87,66 @@ internal static class Probe
     private static string _title = "";
     private static bool _open;
 
+    /// <summary>
+    /// Lists the input events exported by the aircraft currently loaded in
+    /// MSFS.  This is deliberately read-only: complex avionics (including the
+    /// Airbus family) often ignore the legacy named AP events even though
+    /// SimConnect accepts them.  Their own input-event list is the evidence
+    /// for the controls the Flight Deck must use instead.
+    ///
+    ///   flightdeck-sim-agent --probe-input-events
+    /// </summary>
+    public static int InputEvents()
+    {
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        SimConnect sim;
+        try { sim = new SimConnect("FlightDeckInputEventProbe", IntPtr.Zero, 0, wait, 0); }
+        catch (COMException ex)
+        {
+            Console.Error.WriteLine($"cannot reach a simulator: {ex.Message}");
+            return 1;
+        }
+
+        var events = new Dictionary<ulong, string>();
+        uint expected = 0;
+        var problems = new List<string>();
+        sim.OnRecvOpen += (_, d) => Console.WriteLine($"connected to: {d.szApplicationName}");
+        sim.OnRecvException += (_, d) => problems.Add(((SIMCONNECT_EXCEPTION)d.dwException).ToString());
+        sim.OnRecvEnumerateInputEvents += (_, d) =>
+        {
+            expected = Math.Max(expected, d.dwOutOf);
+            foreach (var item in d.rgData)
+            {
+                if (item is SIMCONNECT_INPUT_EVENT_DESCRIPTOR e)
+                    events[e.Hash] = e.Name;
+            }
+        };
+
+        sim.EnumerateInputEvents(ProbeId.Base);
+        var deadline = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < deadline && (expected == 0 || events.Count < expected))
+        {
+            if (wait.WaitOne(100)) sim.ReceiveMessage();
+        }
+
+        Console.WriteLine($"input events: {events.Count}" + (expected > 0 ? $" / {expected}" : ""));
+        foreach (var e in events
+            .Where(kv => kv.Value.Contains("AP", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("AUTOPILOT", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("FCU", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("HDG", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("ALT", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("VS", StringComparison.OrdinalIgnoreCase)
+                      || kv.Value.Contains("SPEED", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(kv => kv.Value, StringComparer.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"{e.Key}  {e.Value}");
+        }
+        if (problems.Count > 0) Console.WriteLine("exceptions: " + string.Join(", ", problems.Distinct()));
+        sim.Dispose();
+        return events.Count == 0 ? 2 : 0;
+    }
+
     public static int Run()
     {
         using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);

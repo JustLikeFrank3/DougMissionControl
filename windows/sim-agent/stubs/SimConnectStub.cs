@@ -69,6 +69,19 @@ public class SIMCONNECT_RECV_FACILITY_DATA : SIMCONNECT_RECV
 
 public class SIMCONNECT_RECV_FACILITY_DATA_END : SIMCONNECT_RECV { public uint RequestId; }
 
+public struct SIMCONNECT_INPUT_EVENT_DESCRIPTOR
+{
+    public string Name;
+    public ulong Hash;
+}
+
+public class SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS : SIMCONNECT_RECV
+{
+    public object[] rgData = Array.Empty<object>();
+    public uint dwRequestID;
+    public uint dwOutOf;
+}
+
 public class SimConnect : IDisposable
 {
     public const uint SIMCONNECT_UNUSED = 0xFFFFFFFF;
@@ -82,6 +95,7 @@ public class SimConnect : IDisposable
     public delegate void RecvSystemStateEventHandler(SimConnect sender, SIMCONNECT_RECV_SYSTEM_STATE data);
     public delegate void RecvFacilityDataEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA data);
     public delegate void RecvFacilityDataEndEventHandler(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA_END data);
+    public delegate void RecvEnumerateInputEventsEventHandler(SimConnect sender, SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS data);
 
     public event RecvOpenEventHandler? OnRecvOpen;
     public event RecvQuitEventHandler? OnRecvQuit;
@@ -90,6 +104,7 @@ public class SimConnect : IDisposable
     public event RecvSystemStateEventHandler? OnRecvSystemState;
     public event RecvFacilityDataEventHandler? OnRecvFacilityData;
     public event RecvFacilityDataEndEventHandler? OnRecvFacilityDataEnd;
+    public event RecvEnumerateInputEventsEventHandler? OnRecvEnumerateInputEvents;
 
     public SimConnect(string szName, IntPtr hWnd, uint UserEventWin32, WaitHandle? hEventHandle, uint ConfigIndex)
         => throw new COMException("SimConnect stub: no simulator, and never will be.");
@@ -104,6 +119,8 @@ public class SimConnect : IDisposable
     public void AddToFacilityDefinition(Enum DefineID, string FieldName) { }
     public void RegisterFacilityDataDefineStruct<T>(SIMCONNECT_FACILITY_DATA_TYPE type) { }
     public void RequestFacilityData(Enum DefineID, Enum RequestID, string Icao, string Region) { }
+    public void EnumerateInputEvents(Enum RequestID) { }
+    public void SetInputEvent(ulong Hash, object Value) { }
     public void TransmitClientEvent(uint ObjectID, Enum EventID, uint dwData, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags) { }
     public void TransmitClientEvent_EX1(uint ObjectID, Enum EventID, Enum GroupID, SIMCONNECT_EVENT_FLAG Flags,
         uint dwData0, uint dwData1, uint dwData2, uint dwData3, uint dwData4) { }
@@ -121,5 +138,6 @@ public class SimConnect : IDisposable
         OnRecvSystemState?.Invoke(this, new SIMCONNECT_RECV_SYSTEM_STATE());
         OnRecvFacilityData?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA());
         OnRecvFacilityDataEnd?.Invoke(this, new SIMCONNECT_RECV_FACILITY_DATA_END());
+        OnRecvEnumerateInputEvents?.Invoke(this, new SIMCONNECT_RECV_ENUMERATE_INPUT_EVENTS());
     }
 }

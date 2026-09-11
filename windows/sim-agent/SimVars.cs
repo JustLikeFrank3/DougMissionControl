@@ -49,7 +49,7 @@ internal enum Definition { State = 0, Caps = 1, Title = 2, Gps = 3 }
 
 internal enum FacilityDefinition { Airport = 100 }
 
-internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3, FlightPlan = 4, Facility = 5 }
+internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3, FlightPlan = 4, Facility = 5, InputEvents = 6 }
 
 internal enum Group { Main = 0 }
 

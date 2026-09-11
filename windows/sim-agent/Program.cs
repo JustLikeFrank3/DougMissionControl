@@ -45,6 +45,7 @@ internal static class Program
         // listener — it only reads, so it can run while the agent is running.
         if (args.Contains("--probe")) return Probe.Run();
         if (args.Contains("--probe-events")) return Probe.RunEvents();
+        if (args.Contains("--probe-input-events")) return Probe.InputEvents();
         if (args.Contains("--try-event"))
         {
             var i = Array.IndexOf(args, "--try-event");
@@ -237,19 +238,27 @@ internal static class Program
     {
         if (resolved.PreEvent is not null
             && !await _sim.TransmitAsync(resolved.PreEvent.Value)) return false;
-        if (!await _sim.TransmitAsync(resolved.Event!.Value, resolved.Data0, resolved.Data1)) return false;
+        var sent = resolved.InputEvent is not null
+            ? await _sim.TransmitInputAsync(resolved.InputEvent, resolved.InputValue)
+            : await _sim.TransmitAsync(resolved.Event!.Value, resolved.Data0, resolved.Data1);
+        if (!sent) return false;
         return resolved.FollowupEvent is null
             || await _sim.TransmitAsync(resolved.FollowupEvent.Value, resolved.FollowupData);
     }
 
     private readonly record struct Resolved(
         Event? Event, uint Data0, uint Data1, string? Reason,
-        Event? FollowupEvent = null, uint FollowupData = 0, Event? PreEvent = null);
+        Event? FollowupEvent = null, uint FollowupData = 0, Event? PreEvent = null,
+        string? InputEvent = null, double InputValue = 0);
 
     private static Resolved Invalid(string reason) => new(null, 0, 0, reason);
     private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0,
         Event? followupEvent = null, uint followupData = 0, Event? preEvent = null) =>
         new(e, data0, data1, null, followupEvent, followupData, preEvent);
+    private static Resolved SendInput(string name, double value = 0) =>
+        new(null, 0, 0, null, InputEvent: name, InputValue: value);
+    private static Resolved AirlinerInput(string name, double value, Resolved fallback) =>
+        _sim.HasInputEvent(name) ? SendInput(name, value) : fallback;
     private static readonly Resolved Noop = new(null, 0, 0, null);
 
     /// <summary>
@@ -339,14 +348,26 @@ internal static class Program
                 if (action != "set") return Invalid("unsupported action");
                 return value switch
                 {
-                    "engaged" => On(s.AutopilotMaster) ? Noop : Send(Event.ApMaster),
-                    "off" => On(s.AutopilotMaster) ? Send(Event.ApMaster) : Noop,
+                    // The Airbus AP buttons are not legacy AP_MASTER events.
+                    // AIRLINER_AP1_PUSH is the same control the flight deck
+                    // exposes; use it when this airframe publishes it and
+                    // retain the generic event for conventional aircraft.
+                    "engaged" => On(s.AutopilotMaster) ? Noop
+                        : AirlinerInput("AIRLINER_AP1_PUSH", 0, Send(Event.ApMaster)),
+                    "off" => On(s.AutopilotMaster)
+                        ? AirlinerInput("AIRLINER_AP1_PUSH", 0, Send(Event.ApMaster)) : Noop,
                     _ => Invalid("invalid value"),
                 };
 
             case "ap_hdg":
                 if (action == "mode")
                 {
+                    if (_sim.HasInputEvent("AIRLINER_MCU_HDG_PULL"))
+                    {
+                        if (value == "on") return On(s.ApHdgLock) ? Noop : SendInput("AIRLINER_MCU_HDG_PULL");
+                        if (value == "off") return On(s.ApHdgLock) ? SendInput("AIRLINER_MCU_HDG_PUSH") : Noop;
+                        return Invalid("invalid value");
+                    }
                     // Not differ-guarded like the toggles: stock Boeings report
                     // HEADING LOCK while LNAV owns the roll, so the guard read
                     // real taps as already-done and transmitted nothing. These
@@ -363,10 +384,21 @@ internal static class Program
                 }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
-                return Send(Event.HeadingBugSet, (uint)(((hdg % 360) + 360) % 360));
+                var airlinerHdg = ((hdg % 360) + 360) % 360;
+                return AirlinerInput("AIRLINER_MCU_HDG", airlinerHdg,
+                    Send(Event.HeadingBugSet, (uint)airlinerHdg));
 
             case "ap_alt":
-                if (action == "mode") return Mode(value, s.ApAltLock, Event.ApAltHoldToggle, Event.ApAltHoldToggle);
+                if (action == "mode")
+                {
+                    if (_sim.HasInputEvent("AIRLINER_MCU_ALT_PULL"))
+                    {
+                        if (value == "on") return On(s.ApAltLock) ? Noop : SendInput("AIRLINER_MCU_ALT_PULL");
+                        if (value == "off") return On(s.ApAltLock) ? SendInput("AIRLINER_MCU_ALT_PUSH") : Noop;
+                        return Invalid("invalid value");
+                    }
+                    return Mode(value, s.ApAltLock, Event.ApAltHoldToggle, Event.ApAltHoldToggle);
+                }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var alt) || alt < 0 || alt > 60000) return Invalid("invalid value");
                 // The event's second argument selects the altitude slot.  A
@@ -376,11 +408,18 @@ internal static class Program
                 // untouched.
                 var slot = (int)Math.Round(s.ApAltitudeSlotIndex);
                 if (slot < 0 || slot > 3) slot = 0;
-                return Send(Event.ApAltVarSet, (uint)alt, (uint)slot);
+                return AirlinerInput("AIRLINER_MCU_ALT", alt,
+                    Send(Event.ApAltVarSet, (uint)alt, (uint)slot));
 
             case "ap_vs":
                 if (action == "mode")
                 {
+                    if (_sim.HasInputEvent("AIRLINER_MCU_VS_PULL"))
+                    {
+                        if (value == "on") return On(s.ApVsHold) ? Noop : SendInput("AIRLINER_MCU_VS_PULL");
+                        if (value == "off") return On(s.ApVsHold) ? SendInput("AIRLINER_MCU_VS_PUSH") : Noop;
+                        return Invalid("invalid value");
+                    }
                     if (value == "on" && !On(s.ApVsHold))
                         return Send(Event.ApVsHoldToggle, followupEvent: Event.ApVsVarSet,
                             followupData: unchecked((uint)Math.Round(s.ApVsFpm)),
@@ -392,7 +431,8 @@ internal static class Program
                 if (!int.TryParse(value, out var vs) || Math.Abs(vs) > 8000) return Invalid("invalid value");
                 // Negative climbs ride as two's complement — the sim reads the
                 // event's DWORD back as signed.
-                return Send(Event.ApVsVarSet, unchecked((uint)vs));
+                return AirlinerInput("AIRLINER_MCU_VS", vs,
+                    Send(Event.ApVsVarSet, unchecked((uint)vs)));
 
             case "ap_spd":
                 // Either flag counts as engaged, so switching FLC off when the
@@ -400,6 +440,12 @@ internal static class Program
                 if (action == "mode")
                 {
                     var active = On(s.ApFlcActive) || On(s.ApIasHold) || On(s.ApMachHold);
+                    if (_sim.HasInputEvent("AIRLINER_MCU_SPEED_PULL"))
+                    {
+                        if (value == "on") return active ? Noop : SendInput("AIRLINER_MCU_SPEED_PULL");
+                        if (value == "off") return active ? SendInput("AIRLINER_MCU_SPEED_PUSH") : Noop;
+                        return Invalid("invalid value");
+                    }
                     if (value == "on" && !active)
                         return Send(Event.ApFlcToggle, followupEvent: Event.ApSpdVarSet,
                             followupData: (uint)Math.Max(0, Math.Round(s.ApSpdKt)),
@@ -428,7 +474,7 @@ internal static class Program
                 }
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var spd) || spd < 0 || spd > 900) return Invalid("invalid value");
-                return Send(Event.ApSpdVarSet, (uint)spd);
+                return AirlinerInput("AIRLINER_MCU_SPEED", spd, Send(Event.ApSpdVarSet, (uint)spd));
 
             case "com1" or "com2":
             {
