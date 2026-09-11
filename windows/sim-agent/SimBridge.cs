@@ -264,8 +264,20 @@ internal sealed class SimBridge : IDisposable
                 break;
 
             case Request.Title:
-                _aircraft = ((SimTitleRaw)data.dwData[0]).Title?.Trim() ?? "";
+            {
+                var title = ((SimTitleRaw)data.dwData[0]).Title?.Trim() ?? "";
+                // OnRecvOpen can arrive before a complex aircraft has finished
+                // constructing its avionics, at which point the input-event
+                // enumeration is empty.  The title change is the reliable
+                // aircraft-ready boundary; request again whenever it changes.
+                if (!string.Equals(_aircraft, title, StringComparison.Ordinal))
+                {
+                    _aircraft = title;
+                    _inputEvents.Clear();
+                    sender.EnumerateInputEvents(Request.InputEvents);
+                }
                 break;
+            }
 
             case Request.Gps:
                 _gps = (SimGpsRaw)data.dwData[0];
