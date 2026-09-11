@@ -58,6 +58,8 @@ string Call(string control, string action, string value, object s, object c)
     var t = r.GetType();
     if (t.GetProperty("Reason").GetValue(r) is object reason) return $"REJECT({reason})";
     var ev = t.GetProperty("Event").GetValue(r);
+    var variable = t.GetProperty("Variable").GetValue(r);
+    if (variable is not null) return $"{variable} value={t.GetProperty("InputValue").GetValue(r)}";
     if (ev is null) return "NOOP";
     var result = $"{ev} data={t.GetProperty("Data0").GetValue(r)}";
     var followup = t.GetProperty("FollowupEvent").GetValue(r);
@@ -440,6 +442,44 @@ float[] Bands(double[] mag, int rate = 48000, int fftSize = 4096, int count = 64
         }
         finally { File.Delete(path); }
     }
+
+// A330 mode flags must be taken from its avionics, not the stock AP flags.
+var iniT = asm.GetType("FlightDeckSimAgent.IniA330");
+var iniRawT = asm.GetType("FlightDeckSimAgent.IniA330Raw");
+var iniRaw = Activator.CreateInstance(iniRawT);
+foreach (var (name, value) in new (string, double)[] {
+    ("Ap1", 0), ("Ap2", 0), ("RollMode", 2), ("VerticalMode", 14), ("Heading", 282), ("Fd1", 1) })
+    iniRawT.GetField(name).SetValue(iniRaw, value);
+var applied = iniT.GetMethod("Apply").Invoke(null, new[] {
+    MakeState(("ApHdgLock", 0), ("ApAltLock", 1), ("ApVsHold", 1)), iniRaw });
+var iniControls = (JsonObject)controls.Invoke(null, new[] { applied, airliner });
+Expect("A330 selected heading with AP off",
+    $"{iniControls["ap_hdg"]["deg"]} {iniControls["ap_hdg"]["mode"]} {iniControls["ap_master"]["state"]}",
+    "282 on off");
+Expect("A330 VS does not also claim altitude hold",
+    $"{iniControls["ap_alt"]["mode"]} {iniControls["ap_vs"]["mode"]}", "off on");
+iniRawT.GetField("Ap2").SetValue(iniRaw, 1.0);
+var ap2State = iniT.GetMethod("Apply").Invoke(null, new[] { MakeState(), iniRaw });
+Expect("A330 AP2 counts as engaged", stateT.GetField("AutopilotMaster").GetValue(ap2State).ToString(), "1");
+var iniSnapshot = new JsonObject { ["controls"] = iniControls };
+iniT.GetMethod("Describe").Invoke(null, new[] { iniSnapshot, iniRaw });
+Expect("A330 selected-heading label", iniControls["ap_hdg"]["mode_label"].ToString(), "HDG SELECTED");
+Expect("A330 does not hijack Headwind", iniT.GetMethod("Matches").Invoke(null, new object[] { "Headwind A330-900neo" }).ToString(), "False");
+
+var bridgeT = asm.GetType("FlightDeckSimAgent.SimBridge");
+using (var bridge = (IDisposable)Activator.CreateInstance(bridgeT))
+{
+    bridgeT.GetField("_aircraft", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(bridge, "A330-200 (RR)");
+    prog.GetField("_sim", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, bridge);
+    Expect("A330 absolute heading no detent burst", Call("ap_hdg", "set", "282", st, airliner), "L:INI_HEADING_DIAL value=282");
+    Expect("A330 heading wraps", Call("ap_hdg", "set", "-78", st, airliner), "L:INI_HEADING_DIAL value=282");
+    Expect("A330 select heading command", Call("ap_hdg", "mode", "on", st, airliner), "L:INI_FCU_SELECTED_HEADING_BUTTON value=1");
+    Expect("A330 managed heading command", Call("ap_hdg", "mode", "off", st, airliner), "L:INI_FCU_MANAGED_HEADING_BUTTON value=1");
+    Expect("A330 AP1 uses aircraft button", Call("ap_master", "set", "engaged", st, airliner), "L:INI_AP1_BUTTON value=1");
+    Expect("A330 engaged AP does not toggle off", Call("ap_master", "set", "engaged", MakeState(("AutopilotMaster", 1)), airliner), "NOOP");
+    Expect("A330 off uses explicit event", Call("ap_master", "set", "off", MakeState(("AutopilotMaster", 1)), airliner), "AutopilotOff data=0");
+    prog.GetField("_sim", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+}
 
 Console.WriteLine(fails == 0
     ? "sim-agent resolve and state-shape tests passed"

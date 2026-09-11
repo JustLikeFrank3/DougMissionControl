@@ -33,6 +33,9 @@ public enum SIMCONNECT_PERIOD { NEVER, ONCE, VISUAL_FRAME, SIM_FRAME, SECOND }
 public enum SIMCONNECT_DATA_REQUEST_FLAG { DEFAULT = 0, CHANGED = 1, TAGGED = 2 }
 
 [Flags]
+public enum SIMCONNECT_DATA_SET_FLAG { DEFAULT = 0, TAGGED = 1 }
+
+[Flags]
 public enum SIMCONNECT_EVENT_FLAG { DEFAULT = 0, FAST_REPEAT_TIMER = 1, SLOW_REPEAT_TIMER = 2, GROUPID_IS_PRIORITY = 16 }
 
 public enum SIMCONNECT_EXCEPTION
@@ -90,6 +93,7 @@ public class SIMCONNECT_RECV_ENUMERATE_INPUT_EVENT_PARAMS : SIMCONNECT_RECV
 
 public class SimConnect : IDisposable
 {
+    public void SetDataOnSimObject(Enum defineId, uint objectId, SIMCONNECT_DATA_SET_FLAG flags, object data) { }
     public const uint SIMCONNECT_UNUSED = 0xFFFFFFFF;
     public const uint SIMCONNECT_OBJECT_ID_USER = 0;
     public const uint SIMCONNECT_GROUP_PRIORITY_HIGHEST = 1;

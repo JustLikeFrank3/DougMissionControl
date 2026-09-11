@@ -48,6 +48,17 @@ internal sealed class SimBridge : IDisposable
     private SimGpsRaw _gps;
     private bool _haveState;
     private bool _haveCaps;
+    private IniA330Raw? _iniA330;
+    private DateTime _iniA330At;
+    private bool _iniDefinitionsRegistered;
+    public bool IsIniA330 => IniA330.Matches(_aircraft);
+    public bool HaveIniA330 => IsIniA330 && _iniA330.HasValue
+        && DateTime.UtcNow - _iniA330At < TimeSpan.FromSeconds(2);
+
+    public void DescribeAircraftState(System.Text.Json.Nodes.JsonObject snapshot)
+    {
+        if (HaveIniA330) IniA330.Describe(snapshot, _iniA330!.Value);
+    }
     private string _aircraft = "";
     private string _simName = "";
     private IReadOnlyList<FlightPlanWaypoint> _flightPlan = [];
@@ -72,7 +83,20 @@ internal sealed class SimBridge : IDisposable
     public string SimName => _simName;
 
     private sealed record Command(Event? Id, uint Data0, uint Data1, string? InputEvent,
-        double InputValue, int InputRepeat, TaskCompletionSource<bool> Result);
+        double InputValue, int InputRepeat, TaskCompletionSource<bool> Result, string? Variable = null);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct VariableValue { public double Value; }
+
+    public Task<bool> WriteIniVariableAsync(string name, double value)
+    {
+        if (!Connected || !HaveIniA330 || !IniA330.WriteVars.Contains(name) || !double.IsFinite(value))
+            return Task.FromResult(false);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _commands.Enqueue(new Command(null, 0, 0, null, value, 1, tcs, name));
+        _simEvent.Set();
+        return tcs.Task;
+    }
 
     public SimBridge()
     {
@@ -113,7 +137,7 @@ internal sealed class SimBridge : IDisposable
     /// <summary>Last observed state. False until the first frame has landed.</summary>
     public bool TryGetState(out SimStateRaw state, out SimCapsRaw caps)
     {
-        state = _state;
+        state = HaveIniA330 ? IniA330.Apply(_state, _iniA330!.Value) : _state;
         caps = _caps;
         return _haveState && _haveCaps;
     }
@@ -260,8 +284,17 @@ internal sealed class SimBridge : IDisposable
             case Request.State:
                 _state = (SimStateRaw)data.dwData[0];
                 _haveState = true;
-                if (_haveCaps) StateReceived?.Invoke(_state, _caps, _gps, _aircraft,
+                var publishedState = HaveIniA330 ? IniA330.Apply(_state, _iniA330!.Value) : _state;
+                if (_haveCaps) StateReceived?.Invoke(publishedState, _caps, _gps, _aircraft,
                     _flightPlan, _flightPlanSource);
+                break;
+
+            case Request.IniA330:
+                if (IsIniA330)
+                {
+                    _iniA330 = (IniA330Raw)data.dwData[0];
+                    _iniA330At = DateTime.UtcNow;
+                }
                 break;
 
             case Request.Caps:
@@ -279,6 +312,30 @@ internal sealed class SimBridge : IDisposable
                 if (!string.Equals(_aircraft, title, StringComparison.Ordinal))
                 {
                     _aircraft = title;
+                    _iniA330 = null;
+                    if (IsIniA330)
+                    {
+                        if (!_iniDefinitionsRegistered)
+                        {
+                            foreach (var name in IniA330.ReadVars)
+                                sender.AddToDataDefinition(Definition.IniA330, name, "Number", SIMCONNECT_DATATYPE.FLOAT64, 0, SimConnect.SIMCONNECT_UNUSED);
+                            sender.RegisterDataDefineStruct<IniA330Raw>(Definition.IniA330);
+                            for (var i = 0; i < IniA330.WriteVars.Length; i++)
+                            {
+                                var id = (Definition)((int)Definition.IniWriteBase + i);
+                                sender.AddToDataDefinition(id, IniA330.WriteVars[i], "Number", SIMCONNECT_DATATYPE.FLOAT64, 0, SimConnect.SIMCONNECT_UNUSED);
+                                sender.RegisterDataDefineStruct<VariableValue>(id);
+                            }
+                            _iniDefinitionsRegistered = true;
+                        }
+                        sender.RequestDataOnSimObject(Request.IniA330, Definition.IniA330,
+                            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.SIM_FRAME,
+                            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, StateFrameInterval, 0);
+                    }
+                    else if (_iniDefinitionsRegistered)
+                        sender.RequestDataOnSimObject(Request.IniA330, Definition.IniA330,
+                            SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD.NEVER,
+                            SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 0, 0);
                     _inputEvents.Clear();
                     sender.EnumerateInputEvents(Request.InputEvents);
                 }
@@ -350,6 +407,16 @@ internal sealed class SimBridge : IDisposable
 
             try
             {
+                if (cmd.Variable is not null)
+                {
+                    var index = Array.IndexOf(IniA330.WriteVars, cmd.Variable);
+                    if (!HaveIniA330 || index < 0) { cmd.Result.TrySetResult(false); continue; }
+                    _sim.SetDataOnSimObject((Definition)((int)Definition.IniWriteBase + index),
+                        SimConnect.SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_DATA_SET_FLAG.DEFAULT,
+                        new VariableValue { Value = cmd.InputValue });
+                    cmd.Result.TrySetResult(true);
+                    continue;
+                }
                 if (cmd.InputEvent is not null)
                 {
                     if (!_inputEvents.TryGetValue(cmd.InputEvent, out var hash))
@@ -394,6 +461,8 @@ internal sealed class SimBridge : IDisposable
         Connected = false;
         _haveState = false;
         _haveCaps = false;
+        _iniA330 = null;
+        _iniDefinitionsRegistered = false;
         _gps = default;
         _flightPlan = [];
         _inputEvents.Clear();

@@ -24,6 +24,54 @@ internal enum ProbeId { Base = 1000 }
 
 internal static class Probe
 {
+    public static int TryVariable(string name, double value)
+    {
+        if (!name.StartsWith("L:", StringComparison.Ordinal) || !double.IsFinite(value)) return 1;
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        using var sim = new SimConnect("FlightDeckVariableTry", IntPtr.Zero, 0, wait, 0);
+        var errors = new List<string>();
+        sim.OnRecvException += (_, d) => errors.Add(((SIMCONNECT_EXCEPTION)d.dwException).ToString());
+        sim.AddToDataDefinition(ProbeId.Base, name, "Number", SIMCONNECT_DATATYPE.FLOAT64, 0, SimConnect.SIMCONNECT_UNUSED);
+        sim.RegisterDataDefineStruct<OneDouble>(ProbeId.Base);
+        sim.SetDataOnSimObject(ProbeId.Base, SimConnect.SIMCONNECT_OBJECT_ID_USER,
+            SIMCONNECT_DATA_SET_FLAG.DEFAULT, new OneDouble { Value = value });
+        var deadline = DateTime.UtcNow.AddSeconds(1);
+        while (DateTime.UtcNow < deadline) if (wait.WaitOne(50)) sim.ReceiveMessage();
+        foreach (var error in errors) Console.Error.WriteLine(error);
+        Console.WriteLine($"{name}: {(errors.Count == 0 ? "sent; aircraft readback still required" : "failed")}");
+        return errors.Count == 0 ? 0 : 2;
+    }
+
+    // Bounded, read-only sampling of named variables, including documented
+    // aircraft L: variables. Each definition has its own exception/readback.
+    public static int ReadVariables(string[] names)
+    {
+        if (names.Length == 0) { Console.Error.WriteLine("usage: --probe-vars NAME [NAME ...]"); return 1; }
+        using var wait = new EventWaitHandle(false, EventResetMode.AutoReset);
+        using var sim = new SimConnect("FlightDeckVariableProbe", IntPtr.Zero, 0, wait, 0);
+        var values = new Dictionary<uint, double>();
+        var sent = new Dictionary<uint, string>();
+        var errors = new List<string>();
+        sim.OnRecvSimobjectData += (_, d) => values[d.dwRequestID] = ((OneDouble)d.dwData[0]).Value;
+        sim.OnRecvException += (_, d) => errors.Add($"{sent.GetValueOrDefault(d.dwSendID, "request")}: {(SIMCONNECT_EXCEPTION)d.dwException}");
+        for (var i = 0; i < names.Length; i++)
+        {
+            var id = (ProbeId)((int)ProbeId.Base + i);
+            sim.AddToDataDefinition(id, names[i], "Number", SIMCONNECT_DATATYPE.FLOAT64, 0, SimConnect.SIMCONNECT_UNUSED);
+            sent[sim.GetLastSentPacketID()] = names[i];
+            sim.RegisterDataDefineStruct<OneDouble>(id);
+            sim.RequestDataOnSimObject(id, id, SimConnect.SIMCONNECT_OBJECT_ID_USER,
+                SIMCONNECT_PERIOD.ONCE, SIMCONNECT_DATA_REQUEST_FLAG.DEFAULT, 0, 0, 0);
+        }
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && values.Count < names.Length)
+            if (wait.WaitOne(100)) sim.ReceiveMessage();
+        for (var i = 0; i < names.Length; i++)
+            Console.WriteLine($"{names[i]} = {(values.TryGetValue((uint)((int)ProbeId.Base + i), out var v) ? v.ToString(System.Globalization.CultureInfo.InvariantCulture) : "NO DATA")}");
+        foreach (var error in errors) Console.Error.WriteLine(error);
+        return errors.Count == 0 && values.Count == names.Length ? 0 : 2;
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct OneDouble { public double Value; }
 
@@ -148,10 +196,8 @@ internal static class Probe
     }
 
     /// <summary>
-    /// Prints the current values that an aircraft exposes for its autopilot
-    /// input events. This is read-only and settles whether a published input
-    /// is a knob value, a latched switch, or merely a cockpit interaction
-    /// name before Flight Deck assigns a command to it.
+    /// Prints the parameter TYPE schema for exported autopilot input events.
+    /// This does not read their current values or prove command semantics.
     ///
     ///   flightdeck-sim-agent --probe-input-event-params
     /// </summary>

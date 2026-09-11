@@ -45,11 +45,11 @@ using System.Runtime.InteropServices;
 
 namespace FlightDeckSimAgent;
 
-internal enum Definition { State = 0, Caps = 1, Title = 2, Gps = 3 }
+internal enum Definition { State = 0, Caps = 1, Title = 2, Gps = 3, IniA330 = 4, IniWriteBase = 100 }
 
 internal enum FacilityDefinition { Airport = 100 }
 
-internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3, FlightPlan = 4, Facility = 5, InputEvents = 6 }
+internal enum Request { State = 0, Caps = 1, Title = 2, Gps = 3, FlightPlan = 4, Facility = 5, InputEvents = 6, IniA330 = 7 }
 
 internal enum Group { Main = 0 }
 
@@ -95,6 +95,7 @@ internal enum Event
     ApMachVarSet,
     ApMachRefOn,
     ApMachRefOff,
+    AutopilotOff,
 }
 
 // Field order MUST match the order of StateVars below: SimConnect fills the
@@ -411,6 +412,7 @@ internal static class SimVars
         (Event.LandingLightsOn,  "LANDING_LIGHTS_ON"),          // explicit, so a
         (Event.LandingLightsOff, "LANDING_LIGHTS_OFF"),         // dropped frame
         (Event.ApMaster,         "AP_MASTER"),                  // can't invert state
+        (Event.AutopilotOff,     "AUTOPILOT_OFF"),
         (Event.HeadingBugSet,    "HEADING_BUG_SET"),            // takes degrees
         (Event.ApAltVarSet,      "AP_ALT_VAR_SET_ENGLISH"),     // takes feet
         (Event.ApVsVarSet,       "AP_VS_VAR_SET_ENGLISH"),      // signed fpm

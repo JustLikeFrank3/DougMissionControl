@@ -23,6 +23,9 @@ internal static class AircraftProfiles
 {
     private static readonly AircraftProfile Generic = new(
         "generic", "Standard SimConnect", "simconnect", false);
+    private static readonly AircraftProfile IniA330Profile = new(
+        "ini-a330", "iniBuilds A330", "simconnect-lvars+input-events", false, 0,
+        "Aircraft-specific heading and AP status. A selected heading is not confirmation that AP1 is engaged.");
 
     // Working Title CJ4 controls are designed to answer the standard events;
     // it is called out so a later WT-specific integration has one home.
@@ -57,6 +60,7 @@ internal static class AircraftProfiles
     public static AircraftProfile For(string? title)
     {
         var t = title ?? "";
+        if (IniA330.Matches(t)) return IniA330Profile;
         if (t.Contains("A330", StringComparison.OrdinalIgnoreCase)) return A330;
         if (t.Contains("A320", StringComparison.OrdinalIgnoreCase)
             || t.Contains("A321", StringComparison.OrdinalIgnoreCase)) return A320;
@@ -79,6 +83,8 @@ internal static class AircraftProfiles
     /// </summary>
     public static bool IsDirectlySupported(AircraftProfile profile, string control, string action)
     {
+        if (profile.Id == "ini-a330") return control is "ap_master" or "ap_hdg" or "ap_alt" or "ap_vs"
+            || (control == "ap_spd" && action is "set" or "mode");
         if (profile.Id != "a330") return true;
 
         // The A330 publishes direct FCU input events for these knobs and

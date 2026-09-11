@@ -47,6 +47,16 @@ internal static class Program
         if (args.Contains("--probe-events")) return Probe.RunEvents();
         if (args.Contains("--probe-input-events")) return Probe.InputEvents();
         if (args.Contains("--probe-input-event-params")) return Probe.InputEventParams();
+        if (args.Contains("--probe-vars"))
+            return Probe.ReadVariables(args.Skip(Array.IndexOf(args, "--probe-vars") + 1).ToArray());
+        if (args.Contains("--try-variable"))
+        {
+            var i = Array.IndexOf(args, "--try-variable");
+            if (i + 2 >= args.Length || !double.TryParse(args[i + 2],
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var variableValue))
+            { Console.Error.WriteLine("usage: --try-variable L:NAME VALUE"); return 1; }
+            return Probe.TryVariable(args[i + 1], variableValue);
+        }
         if (args.Contains("--try-input-event"))
         {
             var i = Array.IndexOf(args, "--try-input-event");
@@ -182,6 +192,7 @@ internal static class Program
             var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
             var snapshot = Normalize.State(++_seq, ts, aircraft, state, caps, gps,
                 flightPlan, flightPlanSource);
+            _sim.DescribeAircraftState(snapshot);
 
             _lastPublished = state;
             _lastPublishedAt = DateTime.UtcNow;
@@ -221,7 +232,9 @@ internal static class Program
             return Reject(available.Count == 0 ? "sim not connected" : "control not available on this aircraft");
 
         var profile = AircraftProfiles.For(_sim.Aircraft);
-        if (profile.RequiresCockpitBridge && control.StartsWith("ap_", StringComparison.Ordinal)
+        if (_sim.IsIniA330 && control is "ap_hdg" or "ap_master" && !_sim.HaveIniA330)
+            return Reject("waiting for A330 avionics status");
+        if (control.StartsWith("ap_", StringComparison.Ordinal)
             && !AircraftProfiles.IsDirectlySupported(profile, control, action))
         {
             return Reject(profile.CockpitBridgeNote ??
@@ -233,7 +246,7 @@ internal static class Program
 
         // Already where it was asked to be. Nothing is transmitted, and `noop`
         // tells the panel not to wait for movement that will never come.
-        if (resolved.Event is null && resolved.InputEvent is null)
+        if (resolved.Event is null && resolved.InputEvent is null && resolved.Variable is null)
         {
             return new JsonObject
             {
@@ -278,7 +291,9 @@ internal static class Program
     {
         if (resolved.PreEvent is not null
             && !await _sim.TransmitAsync(resolved.PreEvent.Value)) return false;
-        var sent = resolved.InputEvent is not null
+        var sent = resolved.Variable is not null
+            ? await _sim.WriteIniVariableAsync(resolved.Variable, resolved.InputValue)
+            : resolved.InputEvent is not null
             ? await _sim.TransmitInputAsync(resolved.InputEvent, resolved.InputValue, resolved.InputRepeat)
             : await _sim.TransmitAsync(resolved.Event!.Value, resolved.Data0, resolved.Data1);
         if (!sent) return false;
@@ -289,7 +304,7 @@ internal static class Program
     private readonly record struct Resolved(
         Event? Event, uint Data0, uint Data1, string? Reason,
         Event? FollowupEvent = null, uint FollowupData = 0, Event? PreEvent = null,
-        string? InputEvent = null, double InputValue = 0, int InputRepeat = 1);
+        string? InputEvent = null, double InputValue = 0, int InputRepeat = 1, string? Variable = null);
 
     private static Resolved Invalid(string reason) => new(null, 0, 0, reason);
     private static Resolved Send(Event e, uint data0 = 0, uint data1 = 0,
@@ -297,8 +312,10 @@ internal static class Program
         new(e, data0, data1, null, followupEvent, followupData, preEvent);
     private static Resolved SendInput(string name, double value = 0, int repeat = 1) =>
         new(null, 0, 0, null, InputEvent: name, InputValue: value, InputRepeat: repeat);
+    private static Resolved WriteIni(string name, double value) =>
+        new(null, 0, 0, null, Variable: name, InputValue: value);
     private static Resolved AirlinerInput(string name, double value, Resolved fallback) =>
-        _sim.HasInputEvent(name) ? SendInput(name, value) : fallback;
+        _sim?.HasInputEvent(name) == true ? SendInput(name, value) : fallback;
     private static readonly Resolved Noop = new(null, 0, 0, null);
 
     /// <summary>
@@ -313,6 +330,36 @@ internal static class Program
     private static Resolved Resolve(string control, string action, string? value, SimStateRaw s, SimCapsRaw c)
     {
         bool On(double v) => v > 0.5;
+
+        if (_sim?.IsIniA330 == true)
+        {
+            if (control == "ap_hdg")
+            {
+                if (action == "mode") return value switch
+                {
+                    "on" => WriteIni("L:INI_FCU_SELECTED_HEADING_BUTTON", 1),
+                    "off" => WriteIni("L:INI_FCU_MANAGED_HEADING_BUTTON", 1),
+                    _ => Invalid("invalid value"),
+                };
+                if (action != "set") return Invalid("unsupported action");
+                if (!int.TryParse(value, out var target)) return Invalid("invalid value");
+                // Absolute aircraft dial: repeated detents accelerate and can
+                // overshoot. Both this dial and the sim heading bug read back
+                // the exact value after a direct write (verified in flight).
+                return WriteIni("L:INI_HEADING_DIAL", ((target % 360) + 360) % 360);
+            }
+            if (control == "ap_master")
+            {
+                if (action == "toggle") return Invalid("use explicit engage or off");
+                if (action != "set") return Invalid("unsupported action");
+                return value switch
+                {
+                    "engaged" => On(s.AutopilotMaster) ? Noop : WriteIni("L:INI_AP1_BUTTON", 1),
+                    "off" => On(s.AutopilotMaster) ? Send(Event.AutopilotOff) : Noop,
+                    _ => Invalid("invalid value"),
+                };
+            }
+        }
 
         // Engage or disengage an autopilot mode. Explicit events, guarded
         // against the state already being right so a redundant tap transmits
@@ -402,7 +449,7 @@ internal static class Program
             case "ap_hdg":
                 if (action == "mode")
                 {
-                    if (_sim.HasInputEvent("AIRLINER_MCU_HDG_PULL"))
+                    if (_sim?.HasInputEvent("AIRLINER_MCU_HDG_PULL") == true)
                     {
                         if (value == "on") return On(s.ApHdgLock) ? Noop : SendInput("AIRLINER_MCU_HDG_PULL");
                         if (value == "off") return On(s.ApHdgLock) ? SendInput("AIRLINER_MCU_HDG_PUSH") : Noop;
@@ -425,7 +472,7 @@ internal static class Program
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
                 var airlinerHdg = ((hdg % 360) + 360) % 360;
-                if (_sim.HasInputEvent("AIRLINER_MCU_HDG"))
+                if (_sim?.HasInputEvent("AIRLINER_MCU_HDG") == true)
                 {
                     // The A330's input is an FCU detent, not an absolute
                     // heading. Positive/negative values turn it one degree
@@ -444,7 +491,7 @@ internal static class Program
             case "ap_alt":
                 if (action == "mode")
                 {
-                    if (_sim.HasInputEvent("AIRLINER_MCU_ALT_PULL"))
+                    if (_sim?.HasInputEvent("AIRLINER_MCU_ALT_PULL") == true)
                     {
                         if (value == "on") return On(s.ApAltLock) ? Noop : SendInput("AIRLINER_MCU_ALT_PULL");
                         if (value == "off") return On(s.ApAltLock) ? SendInput("AIRLINER_MCU_ALT_PUSH") : Noop;
@@ -461,7 +508,7 @@ internal static class Program
                 // untouched.
                 var slot = (int)Math.Round(s.ApAltitudeSlotIndex);
                 if (slot < 0 || slot > 3) slot = 0;
-                if (_sim.HasInputEvent("AIRLINER_MCU_ALT"))
+                if (_sim?.HasInputEvent("AIRLINER_MCU_ALT") == true)
                 {
                     // The A330 FCU accepts a direction, not an altitude. Its
                     // altitude increment is 1,000 ft, confirmed live here;
@@ -479,7 +526,7 @@ internal static class Program
             case "ap_vs":
                 if (action == "mode")
                 {
-                    if (_sim.HasInputEvent("AIRLINER_MCU_VS_PULL"))
+                    if (_sim?.HasInputEvent("AIRLINER_MCU_VS_PULL") == true)
                     {
                         if (value == "on") return On(s.ApVsHold) ? Noop : SendInput("AIRLINER_MCU_VS_PULL");
                         if (value == "off") return On(s.ApVsHold) ? SendInput("AIRLINER_MCU_VS_PUSH") : Noop;
@@ -505,7 +552,7 @@ internal static class Program
                 if (action == "mode")
                 {
                     var active = On(s.ApFlcActive) || On(s.ApIasHold) || On(s.ApMachHold);
-                    if (_sim.HasInputEvent("AIRLINER_MCU_SPEED_PULL"))
+                    if (_sim?.HasInputEvent("AIRLINER_MCU_SPEED_PULL") == true)
                     {
                         if (value == "on") return active ? Noop : SendInput("AIRLINER_MCU_SPEED_PULL");
                         if (value == "off") return active ? SendInput("AIRLINER_MCU_SPEED_PUSH") : Noop;

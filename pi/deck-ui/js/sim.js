@@ -222,11 +222,14 @@ function simPaintModes(c) {
     note.hidden = !known;
     if (!known) return;
     var on = ctl.mode === 'on';
-    btn.textContent = AP_MODE_LABEL[key] + (on ? ' · ON' : ' · OFF');
+    btn.textContent = (ctl.mode_label || AP_MODE_LABEL[key]) + (on ? ' · ON' : ' · OFF');
     btn.className = 'simmode' + (on ? ' on' : '');
     // ALT HOLD captures the present altitude; the selected altitude is reached
     // under V/S or FLC. FLC controls pitch for speed, never the throttle.
-    if (key === 'apalt') {
+    if (key === 'aphdg' && ctl.source === 'ini-a330') {
+      note.textContent = on ? (master ? 'AP FLYING SELECTED HEADING' : 'HDG SELECTED · AP OFF')
+        : 'SELECTED HEADING MODE NOT ACTIVE';
+    } else if (key === 'apalt') {
       note.textContent = on ? (master ? 'HOLDING ALTITUDE' : 'ALT HOLD · AP MASTER OFF')
         : 'SELECTED ALT · USE V/S OR FLC';
     } else if (key === 'apspd') {
