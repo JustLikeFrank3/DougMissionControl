@@ -644,6 +644,14 @@ html, body {
            letter-spacing: .16em; color: transparent; }
 .simpend.wait { color: var(--am); }
 .simpend.dead { color: var(--rd); }
+.simpend.ok { color: var(--gr); }
+
+/* Profile is operational context, not decoration: when an airliner routes
+   its FCU through a cockpit bridge the pilot needs to know before assuming a
+   conventional AP button can engage it. */
+.sim-avionics { margin-left: 14px; color: var(--cy); font-size: 12px;
+                letter-spacing: .12em; }
+.sim-avionics.bridge { color: var(--am); }
 
 /* ── now-playing widget (DECK rail) ────────────────────────────────────── */
 /* Replaces the MEDIA surface: album art never needed 2560 px of panel. */

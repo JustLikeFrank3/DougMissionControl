@@ -216,6 +216,14 @@ internal static class Program
         if (!available.ContainsKey(control))
             return Reject(available.Count == 0 ? "sim not connected" : "control not available on this aircraft");
 
+        var profile = AircraftProfiles.For(_sim.Aircraft);
+        if (profile.RequiresCockpitBridge && control.StartsWith("ap_", StringComparison.Ordinal)
+            && !AircraftProfiles.IsDirectlySupported(profile, control, action))
+        {
+            return Reject(profile.CockpitBridgeNote ??
+                $"{profile.Label}: this control needs the cockpit bridge");
+        }
+
         var resolved = Resolve(control, action, value, state, caps);
         if (resolved.Reason is not null) return Reject(resolved.Reason);
 

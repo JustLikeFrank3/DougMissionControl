@@ -118,7 +118,8 @@ export function simSend(control, action, value) {
   // commands whose landing position cannot be known up front.
   simPending[key] = { id: id, want: value || null,
                       from: simObserved(key, c),
-                      sent: Date.now(), dead: false, reason: null };
+                      sent: Date.now(), accepted: false, dead: false, reason: null,
+                      confirmed: 0 };
   post('/api/sim/command',
        { cmd_id: id, control: control, action: action, value: value })
     .then(function (r) {
@@ -131,6 +132,10 @@ export function simSend(control, action, value) {
         // Already in the requested position: the agent transmitted nothing,
         // so nothing is going to move and PENDING would hang forever.
         delete simPending[key];
+      } else {
+        // This is transport acknowledgement only. It means the agent placed
+        // the command into SimConnect, not that this aircraft accepted it.
+        p.accepted = true;
       }
     });
 }
@@ -142,7 +147,18 @@ function simRenderPending(key, control, c) {
 
   var now = simObserved(control, c);
   var moved = p.want ? (now === p.want) : (now !== null && now !== p.from);
-  if (moved) { delete simPending[control]; el.className = 'simpend'; el.textContent = ''; return; }
+  if (moved && !p.confirmed) p.confirmed = Date.now();
+
+  if (p.confirmed) {
+    if (Date.now() - p.confirmed > 5000) {
+      delete simPending[control];
+      el.className = 'simpend'; el.textContent = '';
+      return;
+    }
+    el.className = 'simpend ok';
+    el.textContent = 'CONFIRMED · OBSERVED';
+    return;
+  }
 
   var age = Date.now() - p.sent;
   if (p.dead) {
@@ -159,7 +175,9 @@ function simRenderPending(key, control, c) {
     return;
   }
   el.className = 'simpend wait';
-  el.textContent = 'PENDING' + (p.want ? ' · ' + p.want.toUpperCase() : '');
+  el.textContent = p.accepted
+    ? 'SENT TO SIM · WAITING FOR AIRCRAFT'
+    : 'SENDING' + (p.want ? ' · ' + p.want.toUpperCase() : '');
 }
 
 // Absent from `controls` means the aircraft has not got it — skids instead of
@@ -258,6 +276,13 @@ export function paintSim(d) {
   $('sim-live').classList.toggle('stale', Date.now() - simLastOk > 1500);
   $('sim-ac').textContent = st.aircraft || '(no aircraft)';
   $('sim-meta').textContent = 'SEQ ' + st.seq;
+  var av = st.avionics || {};
+  var avEl = $('sim-avionics');
+  avEl.textContent = av.label
+    ? ('PROFILE · ' + av.label + (av.bridge_required ? ' · BRIDGE REQUIRED' : ''))
+    : '';
+  avEl.className = 'sim-avionics' + (av.bridge_required ? ' bridge' : '');
+  avEl.title = av.bridge_note || av.control_path || '';
 
   var c = st.controls || {};
 
