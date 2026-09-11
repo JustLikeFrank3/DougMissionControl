@@ -20,6 +20,11 @@ namespace FlightDeckSimAgent;
 internal sealed class SimBridge : IDisposable
 {
     private const int ReconnectDelayMs = 3000;
+    // Complex aircraft read FCU knobs from their avionics update loop. A burst
+    // of SetInputEvent calls in one SimConnect dispatch is commonly collapsed
+    // to one detent (the A330 did exactly that for a 5,000 ft request), so
+    // leave one avionics frame between successive knob inputs.
+    private const int InputRepeatIntervalMs = 200;
     private static readonly TimeSpan FlightPlanPollInterval = TimeSpan.FromSeconds(5);
 
     // Every 6th sim frame: ~5-10 Hz at 30-60 fps, comfortably above the 4 Hz
@@ -353,7 +358,10 @@ internal sealed class SimBridge : IDisposable
                         continue;
                     }
                     for (var i = 0; i < cmd.InputRepeat; i++)
+                    {
                         _sim.SetInputEvent(hash, cmd.InputValue);
+                        if (i + 1 < cmd.InputRepeat) Thread.Sleep(InputRepeatIntervalMs);
+                    }
                     cmd.Result.TrySetResult(true);
                     continue;
                 }

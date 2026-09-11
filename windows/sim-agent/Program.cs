@@ -246,7 +246,24 @@ internal static class Program
 
         var sent = TransmitResolvedAsync(resolved);
         var done = await Task.WhenAny(sent, Task.Delay(TimeSpan.FromMilliseconds(500)));
-        if (done != sent) return Reject("agent busy");
+        if (done != sent)
+        {
+            // A multi-detent FCU movement is deliberately paced so the loaded
+            // avionics can see every click. The queue owns the remainder; it
+            // is already a valid SimConnect command, so report it as accepted
+            // and let the observed target remain the confirmation.
+            if (resolved.InputEvent is not null && resolved.InputRepeat > 1)
+            {
+                return new JsonObject
+                {
+                    ["cmd_id"] = cmdId,
+                    ["accepted"] = true,
+                    ["queued"] = true,
+                    ["seq"] = Interlocked.Read(ref _seq),
+                };
+            }
+            return Reject("agent busy");
+        }
         if (!await sent) return Reject("sim not connected");
 
         return new JsonObject
@@ -408,8 +425,21 @@ internal static class Program
                 if (action != "set") return Invalid("unsupported action");
                 if (!int.TryParse(value, out var hdg)) return Invalid("invalid value");
                 var airlinerHdg = ((hdg % 360) + 360) % 360;
-                return AirlinerInput("AIRLINER_MCU_HDG", airlinerHdg,
-                    Send(Event.HeadingBugSet, (uint)airlinerHdg));
+                if (_sim.HasInputEvent("AIRLINER_MCU_HDG"))
+                {
+                    // The A330's input is an FCU detent, not an absolute
+                    // heading. Positive/negative values turn it one degree
+                    // each; choose the shorter way around the compass and
+                    // pace the required detents on the SimConnect pump.
+                    var current = ((int)Math.Round(s.ApHdgDeg) % 360 + 360) % 360;
+                    var clockwise = (airlinerHdg - current + 360) % 360;
+                    var counterClockwise = (current - airlinerHdg + 360) % 360;
+                    if (clockwise == 0) return Noop;
+                    return SendInput("AIRLINER_MCU_HDG",
+                        clockwise <= counterClockwise ? 1 : -1,
+                        Math.Min(clockwise, counterClockwise));
+                }
+                return Send(Event.HeadingBugSet, (uint)airlinerHdg);
 
             case "ap_alt":
                 if (action == "mode")
