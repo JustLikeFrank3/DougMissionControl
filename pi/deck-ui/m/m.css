@@ -32,7 +32,15 @@ button { font-family: inherit; color: inherit; }
   padding: 12px 16px; background: rgba(11, 15, 21, .94); border-bottom: 1px solid var(--ln);
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
-.top b { letter-spacing: .3em; font-size: 15px; }
+/* The full name gets a line of its own: sharing one with the status and
+   clock cut it to "Doug Mission Control - Mobi…" on a 390 px phone. The
+   status and clock sit on a short second line under it. */
+.top { flex-wrap: wrap; row-gap: 2px; }
+.top b { flex: 1 0 100%; letter-spacing: .08em; font-size: 15px; font-weight: 600;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top .conn { margin-left: 0; }
+.top .clock { margin-left: auto; }
+.conn, .clock { flex: none; }
 .conn { margin-left: auto; font-size: 12px; color: var(--mut); }
 .conn.live { color: var(--gr); }
 .conn.dead { color: var(--rd); }
