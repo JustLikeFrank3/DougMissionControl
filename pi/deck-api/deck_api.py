@@ -13,6 +13,8 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/launch             target already up — fire greeting + profile
     POST /api/abort              kill an in-flight run
     POST /api/hook/greeting      Windows reports the greeting spoke (phase 6/7)
+    GET  /api/douglas            Douglas's metrics, voice state and transcript
+    POST /api/douglas/ptt        {"action":"start|stop|cancel"} push-to-talk
     GET  /                       the deck UI
 
 State detection reuses exactly the probes the orchestrator already relies on
@@ -150,6 +152,28 @@ MAC_LAN = cfg("MAC_LAN", "192.168.68.68")
 # "off" is also what a closed lid reports — that is the truth of a laptop,
 # not a fault, so nothing alarms on it.
 MOBILE_HOST = cfg("MOBILE_HOST", "DougMobile.local")
+# Douglas — the AI. A headless GEEKOM A9 Mega that does nothing but host the
+# assistants, reached by its Tailscale MagicDNS name so the same address works
+# from this Pi, the phone and DougVoice alike (this Pi must be on the tailnet
+# with MagicDNS accepted, or set the full douglas.<tailnet>.ts.net here).
+# Ports are the services it is built to run: llama.cpp's OpenAI-compatible
+# server, the Open WebUI chat front end, and Wyoming speech-to-text and
+# text-to-speech for DougVoice. Each is observed as an open door, nothing more.
+DOUGLAS_HOST = cfg("DOUGLAS_HOST", "douglas")
+DOUGLAS_LLM_PORT = int(cfg("DOUGLAS_LLM_PORT", "8081"))
+DOUGLAS_CHAT_PORT = int(cfg("DOUGLAS_CHAT_PORT", "8080"))
+DOUGLAS_STT_PORT = int(cfg("DOUGLAS_STT_PORT", "10300"))
+DOUGLAS_TTS_PORT = int(cfg("DOUGLAS_TTS_PORT", "10200"))
+# DougVoice — Douglas's ears and mouth: a Pi Zero 2 W under a Whisplay HAT.
+# It hears and speaks; every thought happens on Douglas. Liveness, ssh, and
+# the Wyoming satellite port it listens for Douglas on.
+VOICE_HOST = cfg("VOICE_HOST", "dougvoice")
+VOICE_SAT_PORT = int(cfg("VOICE_SAT_PORT", "10700"))
+# douglas/douglas-agent.py on Douglas: one JSON for the DOUGLAS surface
+# (host, GPU and model-server metrics, voice state, recent transcript) and
+# the push-to-talk relay. Token-gated both ways — the transcript is private.
+DOUGLAS_AGENT_PORT = int(cfg("DOUGLAS_AGENT_PORT", "9111"))
+DOUGLAS_AGENT_TOKEN = cfg("DOUGLAS_AGENT_TOKEN", "")
 # Which inputs to offer on a monitor that will NOT declare its own. Empty -
 # the default - means offer everything.
 #
@@ -234,7 +258,9 @@ except OSError:
 # macro deck, and its SendInput keystrokes never reached the game anyway.
 # nav rides the sim agent's /state (lat/lon/gs/track readouts) via /api/sim —
 # no new endpoint, the pass-through already carries it.
-SURFACES = ("deck", "evals", "nav", "sim", "displays", "audio", "idle")
+# douglas is the AI's own surface: its metrics, the conversation, and a
+# push-to-talk that asks DougVoice to listen (this panel has no microphone).
+SURFACES = ("deck", "evals", "nav", "sim", "displays", "audio", "douglas", "idle")
 # idle is the resting state: a clock and the boot tiles, nothing that updates
 # faster than once a second. The panel spends most of its life with nothing
 # happening, and its previous default - a dense wallboard for a stack that has
@@ -293,6 +319,15 @@ class Deck:
             # has no address worth pinning.
             "mobile": {"up": False, "ssh": False, "screen": False,
                        "host": MOBILE_HOST, "last_alive": None},
+            # Douglas: liveness, its service doors, and what the model
+            # server says it is doing. `model.state` is absent while Douglas
+            # itself cannot be reached — absent is not "stopped".
+            "douglas": {"up": False, "ssh": False, "chat": False,
+                        "stt": False, "tts": False,
+                        "model": {"state": "absent", "name": None},
+                        "host": DOUGLAS_HOST, "last_alive": None},
+            "voice": {"up": False, "ssh": False, "satellite": False,
+                      "host": VOICE_HOST, "last_alive": None},
             # Which copy of this file is actually running. `git pull` updates
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
@@ -566,6 +601,63 @@ def fetch_mobile() -> dict:
             "host": MOBILE_HOST,
             "last_alive": time.time() if up else
                 DECK.state.get("mobile", {}).get("last_alive")}
+
+
+def douglas_model() -> dict:
+    """What Douglas's llama.cpp server says, right now.
+
+    llama.cpp's /health answers 503 while the weights are still loading and
+    200 once it serves, so loading is observed rather than guessed. The model
+    name is the server's own /v1/models id, trimmed to a readable stem."""
+    base = f"http://{DOUGLAS_HOST}:{DOUGLAS_LLM_PORT}"
+    try:
+        with urllib.request.urlopen(f"{base}/health", timeout=3) as r:
+            ok = 200 <= r.status < 300
+    except urllib.error.HTTPError as e:
+        return {"state": "loading" if e.code == 503 else "stopped", "name": None}
+    except (urllib.error.URLError, OSError, ValueError):
+        return {"state": "stopped", "name": None}
+    if not ok:
+        return {"state": "stopped", "name": None}
+    name = None
+    try:
+        with urllib.request.urlopen(f"{base}/v1/models", timeout=3) as r:
+            data = json.loads(r.read(65536)).get("data") or []
+        if data and data[0].get("id"):
+            name = os.path.basename(str(data[0]["id"]))
+            if name.lower().endswith(".gguf"):
+                name = name[:-5]
+    except (urllib.error.URLError, OSError, ValueError, AttributeError):
+        pass
+    return {"state": "running", "name": name}
+
+
+def fetch_douglas() -> dict:
+    """Douglas's card: is the AI box up, which of its doors are open, and
+    what the model server reports. Always-on hardware, so down is a fault
+    worth showing — unlike the laptop's AWAY."""
+    up = pingable(DOUGLAS_HOST)
+    return {"up": up,
+            "ssh": up and tcp_open(DOUGLAS_HOST, 22),
+            "chat": up and tcp_open(DOUGLAS_HOST, DOUGLAS_CHAT_PORT),
+            "stt": up and tcp_open(DOUGLAS_HOST, DOUGLAS_STT_PORT),
+            "tts": up and tcp_open(DOUGLAS_HOST, DOUGLAS_TTS_PORT),
+            "model": douglas_model() if up else {"state": "absent", "name": None},
+            "host": DOUGLAS_HOST,
+            "last_alive": time.time() if up else
+                DECK.state.get("douglas", {}).get("last_alive")}
+
+
+def fetch_voice() -> dict:
+    """DougVoice's card: liveness, ssh, and whether its satellite is
+    listening for Douglas."""
+    up = pingable(VOICE_HOST)
+    return {"up": up,
+            "ssh": up and tcp_open(VOICE_HOST, 22),
+            "satellite": up and tcp_open(VOICE_HOST, VOICE_SAT_PORT),
+            "host": VOICE_HOST,
+            "last_alive": time.time() if up else
+                DECK.state.get("voice", {}).get("last_alive")}
 
 
 def pingable(host: str) -> bool:
@@ -1278,6 +1370,8 @@ def poll_once(prev_os):
     sim_link = fetch_sim_link(os_now)
     mini = fetch_mini()
     mobile = fetch_mobile()
+    douglas = fetch_douglas()
+    voice = fetch_voice()
 
     def apply(s):
         w = s["workstation"]
@@ -1290,6 +1384,8 @@ def poll_once(prev_os):
         s["sim"] = sim_link
         s["mini"] = mini
         s["mobile"] = mobile
+        s["douglas"] = douglas
+        s["voice"] = voice
         s["pi"] = read_pi_metrics()
         # Latest reading only. The browser holds the rolling window.
         s["telemetry"] = {"ts": time.time(), "source": source,
@@ -1465,49 +1561,36 @@ def fire_launch() -> tuple[bool, str]:
     return False, "boot-agent did not answer"
 
 
-def llama_state() -> dict:
-    """The local model, as observed right now — never remembered.
+def douglas_status() -> dict:
+    """The DOUGLAS surface's frame: douglas-agent's /status, passed through.
 
-    Windows answers through the boot agent's /llama/status, which can tell
-    "loading" (process up, /health not yet 200) from "stopped". Linux has no
-    agent route for this yet, so the Pi probes :8081/health itself — running
-    or stopped, no loading distinction, and no toggle. `toggle` says whether
-    POST /api/llama can act, so the panel never renders a control that can
-    only 502. When nothing that could host the model is up, the state is
-    absent — not "stopped", per the absent-is-not-false rule.
-    """
-    os_now = DECK.state["workstation"]["os"]
-    if os_now == "windows":
-        try:
-            with urllib.request.urlopen(
-                    f"http://{WS_LAN}:{AGENT_PORT}/llama/status", timeout=4) as r:
-                word = r.read(32).decode("ascii", "replace").strip()
-            if word in ("running", "loading", "stopped"):
-                return {"os": os_now, "state": word, "toggle": True}
-        except OSError:
-            pass
-        return {"os": os_now, "state": "unknown", "toggle": False}
-    if os_now == "linux":
-        up = http_ok(f"http://{WS_LAN}:8081/health", timeout=3)
-        return {"os": os_now, "state": "running" if up else "stopped",
-                "toggle": False}
-    return {"os": os_now, "state": "absent", "toggle": False}
+    `agent: false` when it cannot be read — the surface then shows what the
+    fleet probe already knows and says plainly that the detail is missing,
+    rather than drawing zeros that look like an idle machine."""
+    if not DOUGLAS_AGENT_TOKEN:
+        return {"agent": False, "why": "DOUGLAS_AGENT_TOKEN unset in boot.env"}
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/status"
+           f"?token={DOUGLAS_AGENT_TOKEN}")
+    got = _ws_json(url, timeout=3)
+    if not isinstance(got, dict):
+        return {"agent": False, "why": "douglas-agent did not answer"}
+    got["agent"] = True
+    return got
 
 
-def fire_llama(action: str) -> tuple[bool, str]:
-    if action not in ("start", "stop"):
-        return False, "action must be start or stop"
-    # Windows only for now: the Linux boot's llama is a systemd unit and its
-    # agent has no llama route yet. Mirrored by `toggle` in llama_state().
-    if DECK.state["workstation"]["os"] != "windows":
-        return False, "the llama toggle needs Windows up"
-    if not AGENT_TOKEN:
-        return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
-    url = f"http://{WS_LAN}:{AGENT_PORT}/llama/{action}?token={AGENT_TOKEN}"
-    if http_ok(url, timeout=5):
-        DECK.event("deck", f"local model {action} via boot-agent")
-        return True, f"{action} requested"
-    return False, "the boot agent did not answer"
+def douglas_ptt(action: str) -> tuple[bool, str]:
+    """Press or release the push-to-talk. The panel has no microphone: this
+    asks Douglas to have DougVoice listen, exactly as its own button does."""
+    if action not in ("start", "stop", "cancel"):
+        return False, "action must be start, stop or cancel"
+    if not DOUGLAS_AGENT_TOKEN:
+        return False, "DOUGLAS_AGENT_TOKEN unset in boot.env"
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/ptt"
+           f"?token={DOUGLAS_AGENT_TOKEN}")
+    got = _ws_json(url, {"action": action, "via": "deck"}, timeout=4)
+    if not isinstance(got, dict):
+        return False, "douglas-agent did not answer"
+    return bool(got.get("ok")), str(got.get("message") or "")
 
 
 def fire_abort() -> tuple[bool, str]:
@@ -1622,15 +1705,15 @@ class Handler(BaseHTTPRequestHandler):
                 {"name": n, "count": len(w)} for n, w in sorted(plans.items())
             ]})
 
-        # Same fast-poll family as /api/sim: polled only while the DECK
-        # surface shows the LOCAL MODEL control, off the SSE state.
-        if path == "/api/llama":
-            if not self._authorised(query):
-                return self._json(403, {"error": "forbidden"})
-            return self._json(200, llama_state())
-
         # Media and squadrons ride the same fast-poll pattern as /api/sim and
         # stay off the SSE state for the same reasons.
+        # Fast-poll family, like /api/sim and /api/media: read only while the
+        # DOUGLAS surface is showing, and kept off the SSE state.
+        if path == "/api/douglas":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, douglas_status())
+
         if path == "/api/media":
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
@@ -1682,8 +1765,8 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = fire_launch()
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
-        if path == "/api/llama":
-            ok, msg = fire_llama(str(body.get("action") or ""))
+        if path == "/api/douglas/ptt":
+            ok, msg = douglas_ptt(str(body.get("action") or ""))
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/sim/command":

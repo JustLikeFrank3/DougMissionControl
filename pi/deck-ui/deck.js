@@ -11,7 +11,7 @@ import { buildTrack, renderTrack,
 import { drawAllSparks } from './js/spark.js';
 import { dspPoll } from './js/screens.js';
 import { npPoll } from './js/media.js';
-import { llamaPoll, wireLlama } from './js/llama.js';
+import { douglasPoll, wireDouglas, paintDouglasTile } from './js/douglas.js';
 import { vizPoll } from './js/viz.js';
 import { wireIdle, idlePoll, paintIdle } from './js/idle.js';
 import { navPoll, setNavPlan, setNavPlanDisabled } from './js/nav.js';
@@ -97,7 +97,7 @@ import { warningPoll } from './js/warnings.js';
     // runs for either. The spectrum is the expensive one at 10 Hz, and it
     // stops the moment neither surface is showing it.
     npPoll(active === 'deck' || active === 'nav' || active === 'audio');
-    llamaPoll(active === 'deck');
+    douglasPoll(active === 'douglas');
     vizPoll(active === 'deck' || active === 'audio');
     navPoll(active === 'nav');
     dspPoll(active === 'displays');
@@ -291,6 +291,8 @@ import { warningPoll } from './js/warnings.js';
       t.disabled = !!boot.in_flight;
     });
     $('abort').hidden = !boot.in_flight;
+    // ABORT needs the rail's height mid-boot; Douglas stays on its fleet card.
+    $('dgl-tile').hidden = !!boot.in_flight;
     // SHUTDOWN only when there is something to shut down and no boot to race:
     // the same gate deck-api enforces, mirrored so the button is never an
     // invitation to a 409.
@@ -349,6 +351,35 @@ import { warningPoll } from './js/warnings.js';
       ['last seen', mobile.up ? 'now' : fmtAgo(mobile.last_alive)]
     ]);
 
+    // Douglas: always-on, so a dark Douglas is red. The model row is the
+    // model server's own answer; the doors are what DougVoice and the phone
+    // need open.
+    var dgl = s.douglas || {};
+    $('dgl-pill').textContent = dgl.up ? 'ONLINE' : 'OFFLINE';
+    $('dgl-pill').className = 'h-pill ' + (dgl.up ? 'ok' : 'bad');
+    var dm = dgl.model || {};
+    // Space-joined, not ' · ': four doors in a third of the column.
+    var ddoors = [dgl.chat ? 'chat' : null, dgl.stt ? 'stt' : null,
+                  dgl.tts ? 'tts' : null, dgl.ssh ? 'ssh' : null]
+      .filter(Boolean).join(' ');
+    rows($('dgl-rows'), [
+      ['model', !dgl.up ? '—' : dm.state === 'running' ? (dm.name || 'serving')
+        : dm.state === 'loading' ? 'loading…' : 'down'],
+      ['services', dgl.up ? (ddoors || 'none visible') : '—'],
+      ['last seen', dgl.up ? 'now' : fmtAgo(dgl.last_alive)]
+    ]);
+    paintDouglasTile(dgl);
+
+    // DougVoice: Douglas's ears and mouth. The satellite row is whether it
+    // is listening for Douglas, which is the only job it has.
+    var voice = s.voice || {};
+    $('voice-pill').textContent = voice.up ? 'ONLINE' : 'OFFLINE';
+    $('voice-pill').className = 'h-pill ' + (voice.up ? 'ok' : 'off');
+    rows($('voice-rows'), [
+      ['satellite', voice.up ? (voice.satellite ? 'listening' : 'not running') : '—'],
+      ['last seen', voice.up ? 'now' : fmtAgo(voice.last_alive)]
+    ]);
+
     var log = $('log');
     log.innerHTML = '';
     (s.events || []).slice(0, 9).forEach(function (e) {
@@ -381,9 +412,16 @@ import { warningPoll } from './js/warnings.js';
     });
   });
   wireHold($('abort'), function () { post('/api/abort', {}); });
-  // LOCAL MODEL refusals surface like SHUT DOWN's: a hold answered "needs
-  // Windows up" must say so, or it reads as a broken button.
-  wireLlama(footNotice);
+  // The DOUGLAS tile is navigation: a tap opens the DOUGLAS surface, the
+  // same gesture as the now-playing widget opening AUDIO.
+  $('dgl-tile').addEventListener('click', function () {
+    if (state && state.surface) {
+      state.surface.active = 'douglas';
+      renderSurface(state);
+    }
+    post('/api/surface', { surface: 'douglas' });
+  });
+  wireDouglas();
   // A refused shutdown SAYS SO. The first field deployment had the panel
   // updated and both boot agents not, so every hold was answered "the boot
   // agent did not answer" - and the panel swallowed it, which reads as a

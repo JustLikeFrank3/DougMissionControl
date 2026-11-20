@@ -33,6 +33,9 @@
         <button class="navb" data-surface="audio">
           <span class="t">AUDIO</span><span class="s" id="nav-audio">no source</span>
         </button>
+        <button class="navb" data-surface="douglas">
+          <span class="t">DOUGLAS</span><span class="s" id="nav-douglas">—</span>
+        </button>
       </nav>
 
       <div class="status" id="status">
@@ -102,18 +105,16 @@
               <span class="hold"></span>
             </button>
 
-            <!-- LOCAL MODEL: a half-height sub-tile in the grid's own gutters,
-                 left column only, so it reads as the Windows column's child
-                 rather than a fifth boot option (no .tile class - the boot
-                 wiring selects '#tiles .tile', same escape .sqd-launch uses).
-                 The right half of this row is where a Linux-side toggle would
-                 land if the :9108 agent ever grows one. Hidden whenever no
-                 agent can act on it - absent, not disabled. State text is the
-                 observed /api/llama answer; llama.js paints it. -->
-            <button class="llamabar" id="llama" hidden>
-              <span class="t-name">LOCAL MODEL</span>
-              <span class="t-sub" id="llama-sub">—</span>
-              <span class="hold"></span>
+            <!-- DOUGLAS: a half-height sub-tile in the grid's own gutters,
+                 spanning both columns, so it reads as a status line under the
+                 boot options rather than a fifth one (no .tile class - the
+                 boot wiring selects '#tiles .tile'). Local inference moved off
+                 the workstation onto Douglas, so there is nothing here to
+                 start or stop: the state is the observed answer of Douglas's
+                 model server, and a tap opens the DOUGLAS surface. -->
+            <button class="dglbar" id="dgl-tile">
+              <span class="t-name">DOUGLAS</span>
+              <span class="t-sub" id="dgl-tile-sub">—</span>
             </button>
           </div>
 
@@ -194,6 +195,15 @@
             </div>
             <div class="h-rows" id="pi-rows"></div>
           </div>
+          <!-- Douglas, the AI. Always on, so down reads OFFLINE in red: a
+               dark Douglas is a fault, not a laptop out of the house. -->
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">DOUGLAS</span>
+              <span class="h-pill" id="dgl-pill">—</span>
+            </div>
+            <div class="h-rows" id="dgl-rows"></div>
+          </div>
           <!-- Liveness only: the mini runs no exporter, so this card claims
                nothing beyond a ping and which service doors are open. -->
           <div class="host">
@@ -211,6 +221,14 @@
               <span class="h-pill" id="mobile-pill">—</span>
             </div>
             <div class="h-rows" id="mobile-rows"></div>
+          </div>
+          <!-- DougVoice: Douglas's ears and mouth, a Pi Zero 2 W. -->
+          <div class="host">
+            <div class="h-top">
+              <span class="h-name">DOUGVOICE</span>
+              <span class="h-pill" id="voice-pill">—</span>
+            </div>
+            <div class="h-rows" id="voice-rows"></div>
           </div>
           <div class="bar">
             <span id="conn">connecting…</span>
@@ -497,6 +515,35 @@
       </section>
 
       <!-- ─────────── SIM ─────────── -->
+      <!-- DOUGLAS — the AI, on its own box. Three columns: talk to it,
+           read what was said, see what it costs. Everything is observed:
+           metrics and the transcript come from douglas-agent on Douglas via
+           /api/douglas, polled only while this surface shows. The panel has
+           no microphone, so PUSH TO TALK asks Douglas to have DougVoice
+           listen - the same thing DougVoice's own button does. -->
+      <section class="surface body-douglas" data-name="douglas">
+        <div class="dgl-talk">
+          <div class="lbl">VOICE</div>
+          <button class="dgl-ptt" id="dgl-ptt" data-state="absent">
+            <span class="dgl-ptt-t">HOLD TO TALK</span>
+            <span class="dgl-ptt-s" id="dgl-ptt-s">—</span>
+          </button>
+          <div class="h-rows" id="dgl-voice-rows"></div>
+          <div class="dgl-note" id="dgl-note"></div>
+        </div>
+
+        <div class="dgl-convo">
+          <div class="lbl">CONVERSATION</div>
+          <div class="dgl-log" id="dgl-log"></div>
+        </div>
+
+        <div class="dgl-sys">
+          <div class="lbl">DOUGLAS · <span id="dgl-model">—</span></div>
+          <div class="dgl-meters" id="dgl-meters"></div>
+          <div class="h-rows" id="dgl-sys-rows"></div>
+        </div>
+      </section>
+
       <section class="surface body-sim" data-name="sim">
         <!-- No agent or no session: the placeholder stays. The agent lives and
              dies with Windows, so its absence is an absence, not a fault. -->

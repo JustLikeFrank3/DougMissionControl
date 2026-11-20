@@ -54,9 +54,13 @@ const FRAME = {
               { name: 'WALT DISNEY WORLD', lat: 28.385, lon: -81.564 },
               { name: 'LAKELAND LINDER', lat: 27.988, lon: -82.018 } ],
   mini: { up: true, ssh: true, screen: false, ip: '192.168.68.68', last_alive: now - 4 },
+  mobile: { up: false, ssh: false, screen: false, host: 'DougMobile.local', last_alive: now - 5400 },
+  douglas: { up: true, ssh: true, chat: true, stt: true, tts: true, host: 'douglas',
+             model: { state: 'running', name: 'Qwen3-235B-A22B-Q3_K_M' }, last_alive: now - 2 },
+  voice: { up: true, ssh: true, satellite: true, host: 'dougvoice', last_alive: now - 3 },
   surface: { active: 'deck', default: 'evals', previous: null, episode: 'boot',
              manual_in_episode: false,
-             all: ['deck', 'evals', 'nav', 'sim', 'displays', 'audio', 'idle'] },
+             all: ['deck', 'evals', 'nav', 'sim', 'displays', 'audio', 'douglas', 'idle'] },
   // The jobContext surface is a frame around a Grafana wallboard that is NOT
   // part of this repo. Rendering it against a stand-in shows what Flight Deck
   // contributes — the sub-nav, AUTO pinning, the unreachable overlay — without
@@ -144,6 +148,28 @@ const BANDS = Array.from({ length: 64 }, (_, i) =>
     + 0.22 * Math.sin(i * 1.7) * Math.sin(i * 0.4))));
 const AUDIO = { active: true, peak: Math.max(...BANDS), bands: BANDS.map(b => +b.toFixed(3)) };
 
+// Douglas mid-conversation: an answer being spoken, real-shaped metrics for
+// a ~100 GB MoE model resident in GTT on the A9 Mega.
+const DOUGLAS = { agent: true, ts: now,
+  host: { cpu_pct: 14, mem_total_bytes: 128 * 2 ** 30, mem_used_bytes: 104.2 * 2 ** 30,
+          uptime_s: 3 * 86400 + 4 * 3600, temp_c: 68.5, power_w: 112 },
+  gpu: { busy_pct: 91, vram_used_bytes: 0.4 * 2 ** 30, vram_total_bytes: 0.5 * 2 ** 30,
+         gtt_used_bytes: 98.6 * 2 ** 30, gtt_total_bytes: 110 * 2 ** 30 },
+  llm: { state: 'running', model: 'Qwen3-235B-A22B-Q3_K_M', ctx: 32768,
+         prompt_tps: 386, gen_tps: 21.4, processing: 1, deferred: 0 },
+  voice: { state: 'speaking', satellite: true, last_turn: now - 6 },
+  transcript: [
+    { ts: now - 260, who: 'user', via: 'chat', text: 'What is on the calendar tomorrow?' },
+    { ts: now - 255, who: 'douglas', via: 'chat',
+      text: 'A dentist appointment at 9:30, then nothing until the 2 pm design review.' },
+    { ts: now - 40, who: 'user', via: 'voice', text: 'Douglas, what is the weather at Orlando Exec?' },
+    { ts: now - 34, who: 'douglas', via: 'voice',
+      text: 'Wind 210 at 8, ten miles visibility, few clouds at 4,500. A good afternoon for the Baron.' },
+    { ts: now - 12, who: 'user', via: 'deck', text: 'Start the flight sim.' },
+    { ts: now - 6, who: 'douglas', via: 'deck',
+      text: 'Booting the workstation into Windows for the sim. About ninety seconds.' },
+  ] };
+
 const streams = new Set();
 /** Push a frame naming the surface to show. The page owns which surface is
     active — it is state, not a class the harness can set behind its back. */
@@ -198,6 +224,7 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/monitor') return json(MONITORS);
   if (url.pathname === '/api/media')   return json(MEDIA);
   if (url.pathname === '/api/audio')   return json(AUDIO);
+  if (url.pathname === '/api/douglas') return json(DOUGLAS);
   if (url.pathname.startsWith('/api/')) return json({});
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   try {
@@ -213,7 +240,8 @@ const SHOTS = [
   ['sim',     'sim',      'SIM — observed aircraft state and controls'],
   ['screens', 'displays', 'SCREENS — one card per monitor, DDC input switching'],
   ['audio',   'audio',     'AUDIO — now playing, and the workstation\'s real output spectrum'],
-  ['idle',    'idle',      'IDLE — the resting state: clock, boot tiles, three dots'],
+  ['douglas', 'douglas',   'DOUGLAS — push-to-talk, the conversation, and what the AI is spending'],
+  ['idle',    'idle',      'IDLE — the resting state: clock, boot tiles, the fleet'],
   ['evals',   'evals',    'jobContext — the existing Grafana wallboard, framed'],
 ];
 

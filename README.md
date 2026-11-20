@@ -58,8 +58,6 @@ windows/efi-entry.ps1         finds the GRUB firmware entry, so /reboot can
                          hand back to Linux without writing to ext4
 windows/set-primary-display.ps1  makes one monitor primary, so a profile can
                          say which screen its game opens on (`-List` to look)
-windows/llama-logon.ps1       starts the llama.cpp server at logon, so :8081
-                         answers under Windows too (config: llama.env)
 linux/setup.sh           GRUB saved-default, boot-to-windows helper, WOL, greeting, media-agent
 linux/set-boot-order.sh  points the UEFI boot order at Windows, so a COLD
                          power-on lands in the sim in one boot, not two
@@ -73,6 +71,8 @@ linux/seamless-displays.sh  pins EDID + forces connectors on, so a SCREENS input
 linux/media-agent.py     :9110 — now-playing (MPRIS), monitor input switching
                          (DDC) and the output spectrum (parec + numpy), the
                          Linux twin of the sim-agent's /media, /monitor, /audio
+douglas/douglas-agent.py :9111 on Douglas — metrics, voice state, transcript and
+                         push-to-talk relay for the DOUGLAS surface (douglas/setup.sh)
 tests/                   shell tests for the above — `bash tests/test_*.sh`
 
 Flight Deck — the touchscreen front-end (v0.1):
@@ -258,8 +258,21 @@ position, which this panel refuses to do anywhere else.
 
 ![AUDIO](docs/img/audio.png)
 
+**DOUGLAS** — the AI, on its own box. Push-to-talk on the left, the
+conversation in the middle, and on the right what Douglas is spending: GPU,
+unified model memory, tok/s, CPU, RAM, temperature and power. The panel has no
+microphone, so holding PUSH TO TALK asks Douglas to have DougVoice listen —
+the same as DougVoice's own button — and the button's colour is the voice
+pipeline's observed state, not the press. Everything comes from
+`douglas-agent` via `/api/douglas`, polled only while the surface shows; with
+the agent unreachable every meter reads "—" rather than an idle-looking 0.
+Reachable from the strip or by tapping the DOUGLAS line under DECK's boot
+tiles.
+
+![DOUGLAS](docs/img/douglas.png)
+
 **IDLE** — the resting state, and the default surface: a clock, the boot
-tiles, and three status dots. The panel spends most of its life with nothing
+tiles, and the fleet's status cards. The panel spends most of its life with nothing
 happening, and its previous default was the densest surface it has. Nothing
 here updates faster than once a second, nothing glows, and the only colour is
 the green of a machine that is actually up. The strip has no IDLE button on
@@ -319,6 +332,10 @@ Most values live in `/etc/flightsim/boot.env` on the Pi (created by
 | `SIM_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\sim-agent.token`. The same token guards SIM, MEDIA and SCREENS under Windows — one agent serves all three |
 | `SIM_AGENT_PORT` | the Windows sim agent's port (default 9109) |
 | `POLL_SECS` | how long to keep watching a boot (default 300) |
+| `DOUGLAS_HOST` | Douglas's address (default `douglas`, its MagicDNS name) |
+| `DOUGLAS_AGENT_TOKEN` | must match `/etc/douglas/agent.env` on Douglas. Unset means the DOUGLAS surface says so instead of drawing meters |
+| `DOUGLAS_LLM_PORT` / `DOUGLAS_CHAT_PORT` / `DOUGLAS_STT_PORT` / `DOUGLAS_TTS_PORT` / `DOUGLAS_AGENT_PORT` | Douglas's service ports (defaults 8081 / 8080 / 10300 / 10200 / 9111) |
+| `VOICE_HOST` / `VOICE_SAT_PORT` | DougVoice's address (default `dougvoice`) and Wyoming satellite port (default 10700) |
 
 Hardcoded elsewhere and worth knowing about: the Pi's address in
 `jarvis-greeting.ps1` (for the intent read-back), the device names and
@@ -413,33 +430,25 @@ Neither step is required. On a legacy-BIOS install, or a firmware whose
 boot list has no Windows entry, `set-boot-order.sh` refuses and says why,
 and both agents fall back to the old GRUB-default behaviour.
 
-### llama.cpp at boot
+### Local inference lives on Douglas
 
-`:8081` is meant to answer under either OS, but the two halves live in
-different places, which is worth knowing before you go looking.
+The workstation no longer runs a model. Douglas — a headless GEEKOM A9 Mega
+(Ryzen AI Max+ 395, 128 GB unified memory) on the tailnet — is the home of
+the assistants, so the workstation's GPU belongs to the games and the old
+"a game's boot keeps its VRAM" juggling is gone. Re-running `setup.ps1`
+removes the `LlamaServer` logon task and its firewall rule. On the Linux
+boot, disable the old unit by hand (it was never installed by this repo):
 
-**Linux** is not configured by this repo. A templated
-`llama-server@<profile>.service` already exists on the workstation, with its
-profiles in `/etc/llama-server/`. Enable exactly **one** instance — every
-profile binds the same port and the model takes nearly all the VRAM, so two
-enabled instances race at boot and whichever loses crash-loops into `failed`:
+    sudo systemctl disable --now 'llama-server@*'
 
-    systemctl list-unit-files 'llama-server@*'
-    ls /etc/systemd/system/multi-user.target.wants/llama-server@*
-    sudo systemctl disable llama-server@<the-one-you-do-not-want>
-
-**Windows** is `llama-logon.ps1`, registered as the `LlamaServer` logon task
-by `setup.ps1` and configured through `C:\ProgramData\dualboot\llama.env`.
-Until `LLAMA_BIN` and `MODEL` name files that exist it does nothing, so the
-task is safe to register before llama.cpp is installed. It also no-ops if the
-port is already served, for the same one-instance reason as the Linux side.
-
-The models are the actual obstacle, not the service. They live on the Linux
-root filesystem, which Windows cannot read — so the Windows side needs either
-its own copy on an NTFS volume or a shared NTFS data partition that Linux
-mounts instead (Linux reads NTFS fine, so one copy can serve both). Paths in
-`llama.env` are Windows-native: a Linux `PROFILE_ARGS` string cannot be
-pasted across unchanged, because it names the draft model by its Linux path.
+Douglas serves llama.cpp on `:8081` (start it with `--metrics` for the
+tok/s meters), Open WebUI on `:8080`, and Wyoming speech-to-text/text-to-speech
+on `:10300`/`:10200` for DougVoice. `douglas/setup.sh`, run on Douglas,
+installs `douglas-agent` (`:9111`) — the panel's one window into it — and
+mints the token that goes into the Pi's `boot.env` as `DOUGLAS_AGENT_TOKEN`.
+The Pi reaches Douglas and DougVoice by MagicDNS name (`douglas`,
+`dougvoice`), so the Pi must be on the tailnet with `--accept-dns`, or
+`DOUGLAS_HOST` / `VOICE_HOST` must be set to full names.
 
 ### Docker at boot
 
@@ -528,6 +537,7 @@ fauxmo — see the WOL note in Troubleshooting.
 ```
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
+python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 ```
 
 | Suite | Covers |

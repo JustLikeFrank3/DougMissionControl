@@ -39,6 +39,8 @@ export function paintIdle(s) {
   var ws = (s && s.workstation) || {};
   var mini = (s && s.mini) || {};
   var mobile = (s && s.mobile) || {};
+  var douglas = (s && s.douglas) || {};
+  var voice = (s && s.voice) || {};
   var boot = (s && s.boot) || {};
 
   // The tiles lock during a boot exactly as DECK's do - one action at a time
@@ -47,7 +49,7 @@ export function paintIdle(s) {
     t.disabled = !!boot.in_flight;
   });
 
-  // Four cards, two by two. Green only when up, muted when off - "off" is
+  // Six cards, three by two. Green only when up, muted when off - "off" is
   // this screen's normal, not a warning.
   var rows = [
     ['workstation', ws.os === 'off' ? 'off' : (ws.os || 'unknown'),
@@ -57,6 +59,12 @@ export function paintIdle(s) {
     // A laptop that is out of the house reads the same as one that is
     // asleep on the desk: off, and that is all this panel can honestly say.
     ['dougmobile', mobile.up ? 'up' : 'off', !!mobile.up],
+    // Douglas is meant to be up: say what the model is doing, not just "up".
+    ['douglas', !douglas.up ? 'off'
+      : (douglas.model || {}).state === 'running' ? 'up'
+      : (douglas.model || {}).state === 'loading' ? 'loading' : 'no model',
+     !!douglas.up],
+    ['dougvoice', voice.up ? 'up' : 'off', !!voice.up],
   ];
   var el = $('idle-fleet');
   el.innerHTML = '';

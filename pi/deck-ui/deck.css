@@ -97,7 +97,7 @@ html, body {
 .surfaces { flex: 1; position: relative; min-height: 0; }
 .surface { position: absolute; inset: 0; display: none; }
 .surface.on { display: grid; }
-.body-deck  { grid-template-columns: 600px 1100px 860px; }
+.body-deck  { grid-template-columns: 600px 940px 1020px; }
 .body-evals { grid-template-columns: 1fr; grid-template-rows: 56px 1fr; }
 .body-plain { grid-template-columns: 1fr; place-items: center; }
 
@@ -108,12 +108,13 @@ html, body {
          min-height: 0; overflow: hidden; }
 .mid   { padding: 16px 22px; border-left: 1px solid var(--ln);
          display: flex; flex-direction: column; gap: 11px; }
-/* Four hosts, two by two — the same formation as the idle screen's fleet.
-   A grid rather than a flex stack: stacked, the fourth card pushed the
-   live/window bar off the bottom of the 720px panel. The label and the bar
-   span both columns; the cards fill the two equal rows between them. */
+/* Six hosts, three by two — the same formation as the idle screen's fleet.
+   A grid rather than a flex stack: stacked, the fourth card already pushed
+   the live/window bar off the bottom of the 720px panel, and a third row
+   would halve every card. Width is what this column has to spare. The label
+   and the bar span all columns; the cards fill the two equal rows. */
 .right { padding: 16px 20px; border-left: 1px solid var(--ln);
-         display: grid; grid-template-columns: 1fr 1fr;
+         display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
          grid-template-rows: auto 1fr 1fr auto; gap: 10px;
          min-height: 0; overflow: hidden; }
 .right .lbl, .right .bar { grid-column: 1 / -1; }
@@ -250,28 +251,25 @@ html, body {
 
 .tile[disabled], .abort[disabled] { opacity: .32; cursor: default; }
 
-/* LOCAL MODEL: a half-height sub-tile inside the boot grid, left column
-   only — the grid's own gutters attach it to the Windows column instead of
-   leaving it to float between the tiles and now-playing. Auto row, so the
-   1fr boot rows above keep their split and its disappearance costs one gap.
-   The state word wears the state palette (green running / amber loading),
-   never decoratively; the hold sweep colours by what the hold would DO —
-   amber ends the model the way SHUT DOWN ends a session, magenta starts
-   one like the boot tiles. */
-.tiles { grid-template-rows: 1fr 1fr auto; }
-.llamabar { grid-column: 1; position: relative; overflow: hidden;
-  display: flex; flex-direction: column; justify-content: center; gap: 3px;
-  padding: 9px 16px; background: var(--pan); border: 1px solid var(--ln);
+/* DOUGLAS: a half-height status line inside the boot grid, spanning both
+   columns. Auto row, so the 1fr boot rows above keep their split. The state
+   word wears the state palette (green serving / amber loading / red when an
+   always-on box is unreachable), never decoratively. A tap is navigation,
+   not a command, so there is no hold sweep. */
+/* minmax(0, 1fr): plain 1fr rows refuse to shrink below their tiles' content,
+   which starved the auto row and clipped the DOUGLAS line to a sliver. */
+.tiles { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.dglbar[hidden] { display: none; }
+.dglbar { grid-column: 1 / -1; position: relative; overflow: hidden;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding: 10px 16px; background: var(--pan); border: 1px solid var(--ln);
   color: var(--fg); font-family: inherit; text-align: left; cursor: pointer; }
-.llamabar .t-name { font-size: 14px; letter-spacing: .16em; }
-.llamabar .t-sub  { font-size: 12px; letter-spacing: .08em; }
-.llamabar[data-state="running"] .t-sub { color: var(--gr); }
-.llamabar[data-state="loading"] .t-sub { color: var(--am); }
-.llamabar[data-state="stopped"] .t-sub { color: var(--mut); }
-.llamabar[data-act="stop"]  .hold { background: var(--am); }
-.llamabar[data-act="start"] .hold { background: var(--acc); }
-.llamabar[data-act="stop"].arming  { border-color: var(--am); }
-.llamabar[data-act="start"].arming { border-color: var(--acc); }
+.dglbar .t-name { font-size: 14px; letter-spacing: .16em; }
+.dglbar .t-sub  { font-size: 12px; letter-spacing: .08em; color: var(--mut);
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dglbar[data-state="running"] .t-sub { color: var(--gr); }
+.dglbar[data-state="loading"] .t-sub { color: var(--am); }
+.dglbar[data-state="down"]    .t-sub { color: var(--rd); }
 
 .foot { flex: none; font-size: 15px; color: var(--mut); margin-top: auto; }
 
@@ -330,11 +328,15 @@ html, body {
 .h-pill.ok   { color: var(--gr); }
 .h-pill.busy { color: var(--am); }
 .h-pill.off  { color: var(--mut); }
+.h-pill.bad  { color: var(--rd); }
 
 .h-rows { display: flex; flex-direction: column; gap: 6px; font-size: 16px; }
-.h-rows .row { display: flex; justify-content: space-between; }
-.h-rows .k { color: var(--mut); }
-.h-rows .v { color: var(--fg); }
+.h-rows .row { display: flex; justify-content: space-between; gap: 12px; }
+.h-rows .k { color: var(--mut); flex: none; }
+/* One line per row, always: a long value (a model name, four service doors)
+   ellipsises rather than wrapping under its own label. */
+.h-rows .v { color: var(--fg); min-width: 0; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; text-align: right; }
 
 .bar { flex: none; display: flex; justify-content: space-between;
        font-size: 14px; color: var(--mut); }
@@ -721,10 +723,10 @@ html, body {
             cursor: pointer; }
 .idletile.arming { border-color: var(--acc); color: var(--fg); }
 .idletile:disabled { opacity: .35; cursor: default; }
-/* Four hosts, two by two. A single row was fine at three names; at four it
+/* Six hosts, three by two. A single row was fine at three names; at four it
    read as a queue, and this panel has width to spare but no height for a
    vertical list under the tiles. */
-.idle-fleet { display: grid; grid-template-columns: repeat(2, 270px);
+.idle-fleet { display: grid; grid-template-columns: repeat(3, 270px);
               gap: 14px; margin-top: 14px; }
 .idle-host { display: flex; align-items: center; gap: 10px; font-size: 14px;
              letter-spacing: .14em; color: var(--mut);
@@ -1044,3 +1046,57 @@ html, body {
    can put a monitor somewhere the panel cannot reach it. */
 .dsp-warn { margin-top: 8px; font-size: 10px; letter-spacing: .1em;
             color: var(--mut); opacity: .75; }
+
+/* ── DOUGLAS ───────────────────────────────────────────────────────────────
+   Talk / conversation / cost, left to right. The push-to-talk is the one
+   control and gets the column's height: it is pressed by a thumb walking
+   past, not aimed at. Its colour is the voice pipeline's observed state,
+   never the press itself — a press that Douglas did not hear must not look
+   like it was heard. */
+.body-douglas { grid-template-columns: 560px 1fr 780px; }
+.dgl-talk, .dgl-convo, .dgl-sys { padding: 18px 22px; display: flex;
+  flex-direction: column; gap: 14px; min-height: 0; overflow: hidden; }
+.dgl-convo, .dgl-sys { border-left: 1px solid var(--ln); }
+
+.dgl-ptt { position: relative; flex: 1; min-height: 0; display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: var(--pan); border: 2px solid var(--ln); color: var(--fg);
+  font-family: inherit; cursor: pointer; touch-action: none; user-select: none; }
+.dgl-ptt-t { font-size: 34px; letter-spacing: .2em; }
+.dgl-ptt-s { font-size: 16px; letter-spacing: .14em; color: var(--mut); }
+.dgl-ptt.pressed { border-color: var(--acc); }
+.dgl-ptt:disabled { opacity: .35; cursor: default; }
+.dgl-ptt[data-state="listening"] { border-color: var(--acc); background: #22142a; }
+.dgl-ptt[data-state="listening"] .dgl-ptt-s { color: var(--acc); }
+.dgl-ptt[data-state="thinking"]  { border-color: var(--am); }
+.dgl-ptt[data-state="thinking"]  .dgl-ptt-s { color: var(--am); }
+.dgl-ptt[data-state="speaking"]  { border-color: var(--cy); }
+.dgl-ptt[data-state="speaking"]  .dgl-ptt-s { color: var(--cy); }
+.dgl-ptt[data-state="idle"]      .dgl-ptt-s { color: var(--gr); }
+.dgl-note { font-size: 14px; color: var(--mut); min-height: 18px; }
+
+/* Newest at the bottom, like every chat: the eye lands where the next line
+   will appear. Speaker is told by alignment and colour of the name, the
+   text itself stays in the foreground colour. */
+.dgl-log { flex: 1; min-height: 0; overflow-y: auto; display: flex;
+  flex-direction: column; gap: 12px; padding-right: 6px; }
+.dgl-turn { max-width: 82%; display: flex; flex-direction: column; gap: 4px; }
+.dgl-turn.user { align-self: flex-end; text-align: right; }
+.dgl-turn .who { font-size: 12px; letter-spacing: .14em; color: var(--mut); }
+.dgl-turn.douglas .who b { color: var(--acc); font-weight: 400; }
+.dgl-turn.user .who b { color: var(--cy); font-weight: 400; }
+.dgl-turn .txt { font-size: 20px; line-height: 1.35; padding: 10px 14px;
+  background: var(--pan); border: 1px solid var(--ln); white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+.dgl-empty { margin: auto; color: var(--mut); font-size: 16px; text-align: center;
+  max-width: 560px; line-height: 1.5; }
+
+.dgl-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.dgl-m { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
+.dgl-m .k { font-size: 13px; letter-spacing: .14em; color: var(--mut); }
+.dgl-m .v { font-size: 30px; line-height: 1.15; margin-top: 2px; }
+.dgl-m .v .u { font-size: 15px; color: var(--mut); margin-left: 4px; }
+.dgl-m .v.stale { color: var(--mut); }
+.dgl-m .mb { height: 5px; margin-top: 8px; background: #0b1016; border: 1px solid var(--ln); }
+.dgl-m .mb i { display: block; height: 100%; width: 0; background: var(--cy); }
+.dgl-m .mb i.hot { background: var(--am); }
