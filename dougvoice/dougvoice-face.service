@@ -1,0 +1,18 @@
+[Unit]
+Description=DougVoice - LCD, RGB LED and push-to-talk button on the Whisplay HAT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/dougvoice/dougvoice.env
+ExecStart=/usr/bin/python3 /opt/dougvoice/dougvoice.py face
+User=dougvoice
+# gpio for the button and LED lines, spi for the LCD.
+SupplementaryGroups=gpio spi
+NoNewPrivileges=yes
+ProtectHome=yes
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
