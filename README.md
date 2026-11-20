@@ -73,6 +73,8 @@ linux/media-agent.py     :9110 — now-playing (MPRIS), monitor input switching
                          Linux twin of the sim-agent's /media, /monitor, /audio
 douglas/douglas-agent.py :9111 on Douglas — metrics, voice state, transcript and
                          push-to-talk relay for the DOUGLAS surface (douglas/setup.sh)
+dougvoice/setup.sh       Pi Zero 2 W + Whisplay HAT → DougVoice, Douglas's satellite
+dougvoice/dougvoice.py   :10700 Wyoming satellite launcher, and the LCD/LED/button face
 tests/                   shell tests for the above — `bash tests/test_*.sh`
 
 Flight Deck — the touchscreen front-end (v0.1):
@@ -450,6 +452,71 @@ The Pi reaches Douglas and DougVoice by MagicDNS name (`douglas`,
 `dougvoice`), so the Pi must be on the tailnet with `--accept-dns`, or
 `DOUGLAS_HOST` / `VOICE_HOST` must be set to full names.
 
+### DougVoice — Douglas's ears
+
+DougVoice is a Raspberry Pi Zero 2 W wearing a PiSugar Whisplay HAT (WM8960
+codec with two mics and a speaker, a 1.69" 240×280 LCD, an RGB LED, one
+button). It does no inference: it is a [Wyoming
+satellite](https://github.com/rhasspy/wyoming-satellite) on `:10700` that
+Douglas's voice pipeline connects to, sending the mic one way and Douglas's
+text-to-speech the other. Flash Raspberry Pi OS Lite (64-bit), then on the Pi:
+
+    sudo DOUGLAS_AGENT_TOKEN=<from Douglas's /etc/douglas/agent.env> ./dougvoice/setup.sh
+    sudo reboot          # first run only: loads the Whisplay sound card
+
+`setup.sh` names the Pi `dougvoice`, joins the tailnet (set `TS_AUTHKEY` to skip
+the login URL), installs the Whisplay driver, puts `wyoming-satellite` in a venv,
+and installs three units, configured from `/etc/dougvoice/dougvoice.env`:
+
+| Unit | Does |
+|---|---|
+| `dougvoice-satellite` | `wyoming-satellite` on `:10700`, mic and speaker through the `whisplaysound` ALSA card |
+| `dougvoice-face` | the LCD and LED show **offline / idle / listening / thinking / speaking**; the button is push-to-talk |
+| `dougvoice-wake` | local openWakeWord, only when `WAKE_WORD` is set |
+
+**The driver is PiSugar's own.** It comes from
+[PiSugar/Whisplay](https://github.com/PiSugar/Whisplay): its `install_driver.sh`
+enables SPI and installs PiSugar's `whisplay-soundcard` overlay and WM8960
+driver. PiSugar ships this driver themselves; it is not the Seeed or Waveshare
+one. Their `runtime/whisplay.py` drives the LCD, LED and button, and the face
+imports it from the same checkout. `WHISPLAY_REF` pins a commit. Check the card
+with `aplay -l | grep whisplay`, and the levels with
+`alsamixer -c whisplaysound`.
+
+**What the face shows** comes from whichever source changed most recently:
+the satellite's own events (`--event-uri`), Douglas's voice state polled from
+`douglas-agent` once a second, and the button, which lights "listening" the
+moment it is pressed. Douglas unreachable, no pipeline on Douglas, or the
+pipeline not connected to the satellite all show **offline**, a red ring.
+"Thinking" breathes amber on the LED, so a long answer still looks alive.
+
+**Push-to-talk, two ways:**
+
+- *Stream mode* (default, `WAKE_WORD` empty). The satellite streams the mic to
+  Douglas whenever Douglas is connected, about 32 KB/s, and Douglas's pipeline
+  gates it. The button posts `{"action": "start|stop|cancel", "via": "button"}`
+  to `douglas-agent`'s `/ptt`, the same path the deck's on-screen button
+  uses. Hold to talk. A tap shorter than 0.25 s cancels, and a press while
+  Douglas is thinking or speaking cancels the turn. If a wake word is wanted
+  in this mode, it runs on Douglas, against the stream.
+- *Wake mode* (`WAKE_WORD=ok_nabu`, then re-run `setup.sh`). openWakeWord runs
+  on the Pi, and the satellite streams only after a detection. The face sits
+  between the two as the satellite's wake service, and the button injects a
+  detection, so it still opens a turn. The turn then ends on Douglas's
+  voice-activity detection. One trade-off: the deck's on-screen push-to-talk
+  cannot open the mic in this mode, because nothing reaches Douglas until the
+  Pi has woken. openWakeWord takes roughly 150 MB of the Zero's 512 MB, and
+  its unit is capped at 200 MB so it cannot starve the satellite.
+
+**Hardware caveats.**
+
+- **Use standoffs.** The Whisplay sits on a shallow GPIO header. Without
+  standoffs between the HAT and the Zero, pressing the button rocks the board
+  on its pins, and the audio and LCD drop out intermittently.
+- **Do not pair it with a PiSugar S battery board.** That combination has been
+  reported to destroy both the Whisplay and the Zero under it. Power DougVoice
+  from USB, or use a battery that PiSugar documents as Whisplay-compatible.
+
 ### Docker at boot
 
 Also two halves, and the Linux one is already done — it just doesn't look
@@ -538,6 +605,7 @@ fauxmo — see the WOL note in Troubleshooting.
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
+python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 ```
 
 | Suite | Covers |
@@ -549,6 +617,7 @@ python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
+| `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
 `test_deck_ui.sh` skips cleanly where node is absent; the Pi runs the panel in
 Chromium and has no reason to have node installed. `test_sim_agent.sh` skips

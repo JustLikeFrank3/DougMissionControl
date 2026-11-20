@@ -1,0 +1,17 @@
+[Unit]
+Description=DougVoice - local openWakeWord (optional; only with WAKE_WORD set)
+Before=dougvoice-face.service
+
+[Service]
+EnvironmentFile=/etc/dougvoice/dougvoice.env
+ExecStart=/usr/bin/python3 /opt/dougvoice/dougvoice.py wake
+User=dougvoice
+NoNewPrivileges=yes
+ProtectHome=yes
+# The Zero 2 W has 512 MB; a runaway model must not take the satellite with it.
+MemoryMax=200M
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
