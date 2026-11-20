@@ -1,0 +1,24 @@
+[Unit]
+Description=douglas-voice - DougVoice satellite -> STT -> Douglas -> TTS, PTT on :10800
+After=network-online.target wyoming-whisper.service wyoming-piper.service llama-server.service
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+# /run/douglas/voice.json and /var/lib/douglas/transcript.jsonl, both
+# world-readable so douglas-agent (a DynamicUser) can read them.
+RuntimeDirectory=douglas
+RuntimeDirectoryMode=0755
+StateDirectory=douglas
+StateDirectoryMode=0755
+EnvironmentFile=/etc/douglas/voice.env
+ExecStart=/usr/bin/python3 /opt/douglas/douglas-voice.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

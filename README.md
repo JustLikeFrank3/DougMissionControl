@@ -73,6 +73,9 @@ linux/media-agent.py     :9110 — now-playing (MPRIS), monitor input switching
                          Linux twin of the sim-agent's /media, /monitor, /audio
 douglas/douglas-agent.py :9111 on Douglas — metrics, voice state, transcript and
                          push-to-talk relay for the DOUGLAS surface (douglas/setup.sh)
+douglas/provision.sh     fresh Ubuntu 24.04 → Douglas: tailnet, GTT limit, llama.cpp
+                         (Vulkan) :8081, Open WebUI :8080, Wyoming STT/TTS, voice
+douglas/douglas-voice.py :10800 — DougVoice's pipeline: satellite → STT → Douglas → TTS
 tests/                   shell tests for the above — `bash tests/test_*.sh`
 
 Flight Deck — the touchscreen front-end (v0.1):
@@ -450,6 +453,66 @@ The Pi reaches Douglas and DougVoice by MagicDNS name (`douglas`,
 `dougvoice`), so the Pi must be on the tailnet with `--accept-dns`, or
 `DOUGLAS_HOST` / `VOICE_HOST` must be set to full names.
 
+#### Provisioning Douglas
+
+`douglas/provision.sh` takes a fresh Ubuntu Server 24.04 to all of the above
+and runs `douglas/setup.sh` at the end. In order:
+
+1. **BIOS:** set the iGPU's UMA frame buffer to its minimum (512 MB). The
+   model lives in GTT, which is ordinary RAM the GPU maps; RAM carved out as
+   VRAM is RAM GTT can never have.
+2. **`sudo TS_AUTHKEY=tskey-… ./douglas/provision.sh`** — hostname `douglas`,
+   the HWE kernel and Mesa (Strix Halo's gfx1151 needs both newer than 24.04
+   GA), Tailscale, the GTT/TTM limit on the kernel command line, llama.cpp
+   built for Vulkan/RADV, Open WebUI, faster-whisper, Piper, `douglas-voice`
+   and `douglas-agent`. Without `TS_AUTHKEY` it prints a login URL and waits.
+3. **`sudo reboot`** — the GTT limit and the new kernel only exist after one.
+4. **Put a model in `/srv/models`** and point `LLAMA_MODEL` at it in
+   `/etc/douglas/llama.env` (nothing multi-GB is downloaded for you).
+5. **Run `provision.sh` again.** It is idempotent: config files are written
+   only when missing, so this run just rebuilds what moved and ends with a
+   port-by-port up/down list that means something.
+6. Copy `DOUGLAS_AGENT_TOKEN` from `/etc/douglas/agent.env` into the Pi's
+   `boot.env`; give DougVoice `VOICE_PTT_TOKEN` from `/etc/douglas/voice.env`
+   for its button.
+
+Vulkan rather than ROCm: on gfx1151 RADV matches or beats ROCm at token
+generation, comes from Ubuntu's own archive, and has no toolkit to keep in
+step with the kernel. Rebuild with `-DGGML_HIP=ON` if prompt processing on
+very long contexts ever matters more.
+
+Script knobs (environment): `TS_AUTHKEY`, `GTT_GB` (default 110 of the
+128 GB), `LLAMA_REF` (default `master`), `REBUILD_LLAMA=1`, `MESA_PPA=1` (adds
+kisak-mesa if RADV still cannot see the GPU after the reboot),
+`OPEN_WEBUI_HTTPS=0` (skip `tailscale serve`; phones need HTTPS for the
+microphone, which needs HTTPS certificates enabled for the tailnet),
+`SKIP_APT=1`.
+
+Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
+`systemctl restart` the unit named in each file's header:
+
+| File | Knobs |
+|---|---|
+| `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --no-mmap --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
+| `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
+| `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE`, `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT`, `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long) |
+| `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
+
+**The voice pipeline.** `douglas-voice` connects *to* DougVoice's
+`wyoming-satellite` (run in always-streaming mode: no wake word, no VAD) and
+sends `run-satellite`; the satellite then streams its microphone for good.
+That audio is dropped unless push-to-talk is held, so nothing reaches the
+model without a press — DougVoice's own button or the deck's, both of which
+`POST /ptt` (`{"action":"start|stop|cancel","via":"voice|deck"}`; DougVoice
+needs `?token=`). On stop the kept audio goes to faster-whisper, the text to
+llama.cpp as Douglas, the reply to Piper, and the speech back to the
+satellite's speaker, resampled to the format its `run-pipeline` asked for.
+`/run/douglas/voice.json` follows idle → listening → thinking → speaking →
+idle and is rewritten at least every 5 s; each side of the exchange is one
+line in `/var/lib/douglas/transcript.jsonl`. Pressing again while Douglas is
+speaking interrupts the reply; cancel drops the turn wherever it is.
+
 ### Docker at boot
 
 Also two halves, and the Linux one is already done — it just doesn't look
@@ -538,6 +601,7 @@ fauxmo — see the WOL note in Troubleshooting.
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
+python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
 ```
 
 | Suite | Covers |
@@ -549,6 +613,7 @@ python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it |
 
 `test_deck_ui.sh` skips cleanly where node is absent; the Pi runs the panel in
 Chromium and has no reason to have node installed. `test_sim_agent.sh` skips

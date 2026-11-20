@@ -1,0 +1,22 @@
+[Unit]
+Description=llama.cpp server - Douglas's model, OpenAI-compatible on :8081 (Vulkan)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+SupplementaryGroups=render video
+# LLAMA_MODEL, LLAMA_HOST, LLAMA_PORT, LLAMA_ARGS. ${X} is one argument,
+# $X is split on whitespace, so LLAMA_ARGS can hold any number of flags.
+EnvironmentFile=/etc/douglas/llama.env
+ExecStart=/opt/llama.cpp/build/bin/llama-server --host ${LLAMA_HOST} --port ${LLAMA_PORT} --metrics -m ${LLAMA_MODEL} $LLAMA_ARGS
+# A 60+ GB model takes a while to page in; /health answers 503 meanwhile.
+TimeoutStartSec=15min
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

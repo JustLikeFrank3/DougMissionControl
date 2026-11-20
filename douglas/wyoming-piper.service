@@ -1,0 +1,19 @@
+[Unit]
+Description=Wyoming Piper - text-to-speech for DougVoice on :10200
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+StateDirectory=wyoming/piper
+Environment=HOME=/var/lib/wyoming/piper
+EnvironmentFile=/etc/douglas/speech.env
+ExecStart=/opt/wyoming-piper/bin/wyoming-piper --uri tcp://0.0.0.0:${PIPER_PORT} --voice ${PIPER_VOICE} --data-dir /var/lib/wyoming/piper --download-dir /var/lib/wyoming/piper $PIPER_ARGS
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

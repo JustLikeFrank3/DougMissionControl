@@ -282,6 +282,12 @@ def relay_ptt(body: dict) -> tuple[int, dict]:
     try:
         with urllib.request.urlopen(req, timeout=3) as r:
             ok = 200 <= r.status < 300
+    except urllib.error.HTTPError as e:     # it answered, and said no
+        try:
+            why = json.loads(e.read(4096)).get("message")
+        except (ValueError, AttributeError, OSError):
+            why = None
+        return 200, {"ok": False, "message": str(why or "the voice pipeline refused")}
     except (urllib.error.URLError, OSError, ValueError):
         return 200, {"ok": False, "message": "the voice pipeline did not answer"}
     return 200, {"ok": ok, "message": action if ok else "the voice pipeline refused"}

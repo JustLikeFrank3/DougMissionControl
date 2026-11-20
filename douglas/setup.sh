@@ -4,7 +4,7 @@
 # Run ON DOUGLAS, from a checkout:   sudo ./douglas/setup.sh
 #
 # Installs only the panel's window into Douglas. The model server, chat UI
-# and voice services are Douglas's own business and are not touched here.
+# and voice services come from ./provision.sh, which runs this at its end.
 # Idempotent: re-running updates the agent and keeps the existing token.
 set -euo pipefail
 
