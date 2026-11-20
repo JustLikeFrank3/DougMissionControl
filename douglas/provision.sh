@@ -66,6 +66,7 @@ if [ "${SKIP_APT:-0}" != 1 ]; then
     apt-get install -y \
         linux-generic-hwe-24.04 \
         mesa-vulkan-drivers vulkan-tools libvulkan-dev glslc \
+        spirv-headers glslang-tools \
         build-essential cmake git curl ca-certificates pkg-config \
         libcurl4-openssl-dev libssl-dev \
         python3 python3-venv python3-pip \
