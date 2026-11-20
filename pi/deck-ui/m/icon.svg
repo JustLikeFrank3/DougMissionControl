@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0b0f15"/>
+  <rect x="56" y="56" width="400" height="400" fill="none" stroke="#232e3e" stroke-width="12"/>
+  <!-- The deck's own glyph language: a hold-to-arm sweep under a D. -->
+  <path d="M168 136 h88 a120 120 0 0 1 0 240 h-88 z" fill="none" stroke="#e2e9f2" stroke-width="28" stroke-linejoin="round"/>
+  <rect x="104" y="404" width="304" height="16" fill="#d95bb8"/>
+  <circle cx="392" cy="128" r="16" fill="#4fc48a"/>
+</svg>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f15">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Doug">
+  <title>Doug Mission Control</title>
+  <!-- Absolute paths throughout: this page is served at /m as well as /m/,
+       and a relative "m.js" from /m resolves to /m.js. -->
+  <link rel="manifest" href="/m/manifest.webmanifest">
+  <link rel="icon" href="/m/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/m/icon-180.png">
+  <link rel="stylesheet" href="/m/m.css">
+</head>
+<body>
+  <!-- The phone view of the same deck. Same SSE frame, same endpoints, same
+       rules: everything shown is observed, every command is a hold, and a
+       missing reading is a dash, never a zero. It reaches node1 over the
+       tailnet; every request carries the DECK_TOKEN this phone was given. -->
+  <header class="top">
+    <b>DOUG</b>
+    <span class="conn" id="conn">connecting…</span>
+    <span class="clock" id="clock">--:--</span>
+  </header>
+
+  <!-- Shown instead of everything else when deck-api refuses this phone. -->
+  <section class="gate" id="gate" hidden>
+    <h1>Needs the deck token</h1>
+    <p>This phone reaches node1, but deck-api wants its <code>DECK_TOKEN</code>.
+       Run <code>pi/mobile-link.sh</code> on node1 and open the link it prints,
+       or paste the token here.</p>
+    <form id="gate-form">
+      <input id="gate-token" type="password" autocomplete="off" autocapitalize="off"
+             spellcheck="false" placeholder="DECK_TOKEN">
+      <button type="submit">Save</button>
+    </form>
+  </section>
+
+  <main id="main">
+    <!-- Workstation: the one machine this deck can start and stop. -->
+    <section class="card ws" id="ws">
+      <div class="row1">
+        <span class="pill" id="ws-pill">—</span>
+        <span class="meta" id="ws-meta"></span>
+      </div>
+      <div class="big" id="ws-os">—</div>
+      <div class="phase" id="ws-phase" hidden></div>
+      <div class="tiles" id="tiles">
+        <button class="tile" data-intent="sim"><span>FLIGHT SIM</span><small>MSFS 2024</small><i class="hold"></i></button>
+        <button class="tile" data-intent="squadrons"><span>SQUADRONS</span><small>STAR WARS</small><i class="hold"></i></button>
+        <button class="tile" data-intent="plain"><span>WINDOWS</span><small>greeting only</small><i class="hold"></i></button>
+        <button class="tile" data-intent="code"><span>LINUX</span><small>VS Code</small><i class="hold"></i></button>
+      </div>
+      <button class="wide warn" id="shutdown" hidden><span id="shutdown-t">HOLD TO SHUT DOWN</span><i class="hold"></i></button>
+      <button class="wide bad" id="abort" hidden><span>HOLD TO ABORT</span><i class="hold"></i></button>
+      <div class="note" id="ws-note"></div>
+    </section>
+
+    <!-- Douglas: talk to it, see what it said, see what it costs. -->
+    <section class="card dgl" id="dgl">
+      <div class="head">
+        <h2>DOUGLAS</h2>
+        <span class="pill" id="dgl-pill">—</span>
+      </div>
+      <div class="sub" id="dgl-model">—</div>
+      <div class="meters" id="dgl-meters"></div>
+      <div class="log" id="dgl-log"></div>
+      <button class="ptt" id="dgl-ptt" data-state="absent">
+        <span>HOLD TO TALK</span><small id="dgl-ptt-s">—</small>
+      </button>
+      <a class="wide link" id="dgl-chat" hidden target="_blank" rel="noopener">OPEN CHAT</a>
+      <div class="note" id="dgl-note"></div>
+    </section>
+
+    <!-- Now playing, from whichever OS is up. -->
+    <section class="card np" id="np">
+      <img class="art" id="np-art" alt="" hidden>
+      <div class="np-meta">
+        <div class="np-title" id="np-title">no source</div>
+        <div class="np-artist" id="np-artist"></div>
+        <div class="np-time" id="np-time"></div>
+      </div>
+      <div class="np-btns">
+        <button data-a="prev" aria-label="previous">⏮</button>
+        <button data-a="play_pause" aria-label="play or pause">⏯</button>
+        <button data-a="next" aria-label="next">⏭</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>FLEET</h2>
+      <div class="fleet" id="fleet"></div>
+    </section>
+
+    <section class="card">
+      <h2>EVENTS</h2>
+      <div class="events" id="events"></div>
+    </section>
+
+    <footer class="foot" id="foot"></footer>
+  </main>
+
+  <script type="module" src="/m/m.js"></script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+/* m.css — the deck at phone width. Same palette and the same rule as the
+   panel: colour means state (green up, amber busy, red fault) and nothing
+   else. One column, thumb-sized targets, no horizontal scroll. */
+
+:root {
+  --bg:   #0b0f15;
+  --pan:  #131a24;
+  --ln:   #232e3e;
+  --fg:   #e2e9f2;
+  --mut:  #7f8da2;
+  --acc:  #d95bb8;
+  --cy:   #56cfe1;
+  --gr:   #4fc48a;
+  --am:   #e6a339;
+  --rd:   #e2564d;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--mono);
+  font-size: 15px; line-height: 1.35;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  -webkit-tap-highlight-color: transparent;
+}
+button { font-family: inherit; color: inherit; }
+[hidden] { display: none !important; }
+
+.top {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px; background: rgba(11, 15, 21, .94); border-bottom: 1px solid var(--ln);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.top b { letter-spacing: .3em; font-size: 15px; }
+.conn { margin-left: auto; font-size: 12px; color: var(--mut); }
+.conn.live { color: var(--gr); }
+.conn.dead { color: var(--rd); }
+.clock { font-size: 14px; color: var(--mut); }
+
+main { padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 12px;
+       max-width: 640px; margin: 0 auto; }
+.card { background: var(--pan); border: 1px solid var(--ln); padding: 14px;
+        display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color: var(--mut); }
+.head { display: flex; align-items: center; justify-content: space-between; }
+.note { font-size: 12px; color: var(--mut); min-height: 0; }
+.note:empty { display: none; }
+.note.bad { color: var(--rd); }
+
+.pill { font-size: 11px; letter-spacing: .14em; padding: 2px 7px; border: 1px solid currentColor;
+        color: var(--mut); white-space: nowrap; }
+.pill.ok   { color: var(--gr); }
+.pill.busy { color: var(--am); }
+.pill.bad  { color: var(--rd); }
+
+/* ── workstation ── */
+.row1 { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.meta { font-size: 12px; color: var(--mut); overflow: hidden; text-overflow: ellipsis;
+        white-space: nowrap; }
+.big { font-size: 34px; letter-spacing: .04em; line-height: 1.1; }
+.phase { font-size: 13px; color: var(--am); }
+
+/* Hold-to-arm, as on the panel: a brush of the thumb cannot boot a machine.
+   The sweep is the .hold child that ui.js's wireHold grows. */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile, .wide {
+  position: relative; overflow: hidden; border: 1px solid var(--ln); background: #0f151e;
+  padding: 14px 12px; text-align: left; min-height: 64px; cursor: pointer;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.tile span { display: block; font-size: 15px; letter-spacing: .1em; position: relative; z-index: 1; }
+.tile small { display: block; font-size: 11px; color: var(--mut); margin-top: 3px;
+              position: relative; z-index: 1; }
+.tile:disabled, .wide:disabled { opacity: .35; }
+.hold { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--acc);
+        opacity: .28; pointer-events: none; }
+.tile.arming { border-color: var(--acc); }
+.wide { display: flex; align-items: center; justify-content: center; min-height: 52px;
+        letter-spacing: .14em; font-size: 14px; text-align: center; }
+.wide span { position: relative; z-index: 1; }
+.wide.warn { color: var(--am); }
+.wide.warn .hold { background: var(--am); }
+.wide.bad { color: var(--rd); border-color: var(--rd); }
+.wide.bad .hold { background: var(--rd); }
+.wide.link { color: var(--cy); text-decoration: none; touch-action: auto; }
+
+/* ── Douglas ── */
+.sub { font-size: 13px; color: var(--mut); overflow-wrap: anywhere; }
+.sub.ok { color: var(--gr); }
+.sub.busy { color: var(--am); }
+.meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.meters:empty { display: none; }
+.m { border: 1px solid var(--ln); padding: 8px; min-width: 0; }
+.m .k { font-size: 10px; letter-spacing: .14em; color: var(--mut); }
+.m .v { font-size: 20px; margin-top: 2px; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; }
+.m .v small { font-size: 11px; color: var(--mut); margin-left: 3px; }
+.m .v.stale { color: var(--mut); }
+
+.log { display: flex; flex-direction: column; gap: 8px; }
+.log:empty { display: none; }
+.turn { max-width: 88%; display: flex; flex-direction: column; gap: 2px; }
+.turn.user { align-self: flex-end; text-align: right; }
+.turn .who { font-size: 10px; letter-spacing: .14em; color: var(--mut); }
+.turn.user .who b { color: var(--cy); font-weight: 400; }
+.turn.douglas .who b { color: var(--acc); font-weight: 400; }
+.turn .txt { padding: 8px 10px; background: #0f151e; border: 1px solid var(--ln);
+             white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Its colour is the pipeline's observed state, never the press. */
+.ptt {
+  min-height: 112px; border: 2px solid var(--ln); background: #0f151e; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.ptt span { font-size: 20px; letter-spacing: .2em; }
+.ptt small { font-size: 12px; letter-spacing: .12em; color: var(--mut); }
+.ptt.pressed { border-color: var(--acc); }
+.ptt:disabled { opacity: .35; }
+.ptt[data-state="idle"] small { color: var(--gr); }
+.ptt[data-state="listening"] { border-color: var(--acc); background: #22142a; }
+.ptt[data-state="listening"] small { color: var(--acc); }
+.ptt[data-state="thinking"] { border-color: var(--am); }
+.ptt[data-state="thinking"] small { color: var(--am); }
+.ptt[data-state="speaking"] { border-color: var(--cy); }
+.ptt[data-state="speaking"] small { color: var(--cy); }
+
+/* ── now playing ── */
+.np { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
+.art { width: 64px; height: 64px; object-fit: cover; flex: none; }
+.np-meta { flex: 1; min-width: 0; }
+.np-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 16px; }
+.np-artist { color: var(--cy); font-size: 13px; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+.np-time { color: var(--mut); font-size: 12px; margin-top: 2px; }
+.np-btns { display: flex; gap: 8px; width: 100%; }
+.np-btns button { flex: 1; min-height: 48px; border: 1px solid var(--ln); background: #0f151e;
+                  font-size: 18px; cursor: pointer; }
+.np-btns button:disabled { opacity: .3; }
+.np.idle .np-btns { display: none; }
+.np.idle .np-title { color: var(--mut); }
+
+/* ── fleet ── */
+.fleet { display: flex; flex-direction: column; }
+.host { display: flex; align-items: center; gap: 10px; padding: 9px 0;
+        border-top: 1px solid var(--ln); min-width: 0; }
+.host:first-child { border-top: 0; }
+.host i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--ln); }
+.host.up i { background: var(--gr); }
+.host.bad i { background: var(--rd); }
+.host b { font-weight: 400; letter-spacing: .1em; flex: none; }
+.host span { margin-left: auto; color: var(--mut); font-size: 13px; text-align: right;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ── events ── */
+.events { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ev { display: flex; gap: 8px; min-width: 0; }
+.ev time { color: var(--mut); flex: none; }
+.ev b { color: var(--cy); font-weight: 400; flex: none; }
+.ev span { overflow-wrap: anywhere; min-width: 0; }
+.ev.warn span { color: var(--am); }
+.ev.error span { color: var(--rd); }
+
+.foot { font-size: 11px; color: var(--mut); text-align: center; }
+
+/* ── token gate ── */
+.gate { padding: 24px 16px; max-width: 640px; margin: 0 auto; }
+.gate h1 { font-size: 18px; font-weight: 400; letter-spacing: .1em; }
+.gate p { color: var(--mut); }
+.gate code { color: var(--fg); }
+.gate form { display: flex; gap: 8px; }
+.gate input { flex: 1; min-width: 0; padding: 12px; background: var(--pan); color: var(--fg);
+              border: 1px solid var(--ln); font: inherit; font-size: 16px; }
+.gate button { padding: 12px 16px; background: var(--pan); border: 1px solid var(--acc);
+               color: var(--acc); font-size: 14px; letter-spacing: .1em; }

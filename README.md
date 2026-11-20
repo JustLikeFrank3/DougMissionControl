@@ -271,6 +271,15 @@ tiles.
 
 ![DOUGLAS](docs/img/douglas.png)
 
+**On a phone** — `http://node1:8088/m`, over the tailnet. The same deck in one
+column: the workstation with its hold-to-arm boot tiles, Douglas (status,
+meters, the last few turns, push-to-talk, and a link to its own chat page),
+now playing, the fleet and the event log. Same SSE frame, same endpoints, same
+rules as the panel. A phone is not loopback, so it needs `DECK_TOKEN`: run
+`sudo ./pi/mobile-link.sh` on node1 and open the link it prints (a QR code too
+when `qrencode` is installed). The page keeps the token in that browser and
+strips it from the address bar; "Add to Home Screen" makes it a full-screen app.
+
 **IDLE** — the resting state, and the default surface: a clock, the boot
 tiles, and the fleet's status cards. The panel spends most of its life with nothing
 happening, and its previous default was the densest surface it has. Nothing

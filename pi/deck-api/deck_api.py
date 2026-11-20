@@ -15,7 +15,8 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/hook/greeting      Windows reports the greeting spoke (phase 6/7)
     GET  /api/douglas            Douglas's metrics, voice state and transcript
     POST /api/douglas/ptt        {"action":"start|stop|cancel"} push-to-talk
-    GET  /                       the deck UI
+    GET  /                       the deck UI (the 2560x720 panel)
+    GET  /m                      the same deck for a phone, over the tailnet
 
 State detection reuses exactly the probes the orchestrator already relies on
 -- no new exporters are installed by this project:
@@ -1612,6 +1613,8 @@ CONTENT_TYPES = {
     ".js": "application/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
     ".json": "application/json",
+    ".webmanifest": "application/manifest+json",
+    ".png": "image/png",
 }
 
 
@@ -1705,8 +1708,6 @@ class Handler(BaseHTTPRequestHandler):
                 {"name": n, "count": len(w)} for n, w in sorted(plans.items())
             ]})
 
-        # Media and squadrons ride the same fast-poll pattern as /api/sim and
-        # stay off the SSE state for the same reasons.
         # Fast-poll family, like /api/sim and /api/media: read only while the
         # DOUGLAS surface is showing, and kept off the SSE state.
         if path == "/api/douglas":
@@ -1714,6 +1715,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, douglas_status())
 
+        # Media and squadrons ride the same fast-poll pattern as /api/sim and
+        # stay off the SSE state for the same reasons.
         if path == "/api/media":
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
@@ -1873,6 +1876,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, path: str) -> None:
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
+        # The phone page: /m is a directory with its own index. Served like
+        # every other static file — no token — because it holds no state;
+        # every request it makes carries the token the phone was given.
+        if rel in ("m", "m/"):
+            rel = "m/index.html"
         target = (UI_DIR / rel).resolve()
         try:
             target.relative_to(UI_DIR.resolve())
