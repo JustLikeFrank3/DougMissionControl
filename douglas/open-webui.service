@@ -1,0 +1,19 @@
+[Unit]
+Description=Open WebUI - chat with Douglas on :8080, from any tailnet device
+After=network-online.target llama-server.service
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+StateDirectory=open-webui
+Environment=DATA_DIR=/var/lib/open-webui HOME=/var/lib/open-webui
+EnvironmentFile=/etc/douglas/open-webui.env
+ExecStart=/opt/open-webui/bin/open-webui serve --host 0.0.0.0 --port ${OPEN_WEBUI_PORT}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

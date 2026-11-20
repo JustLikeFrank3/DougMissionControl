@@ -1,0 +1,19 @@
+[Unit]
+Description=Wyoming faster-whisper - speech-to-text for DougVoice on :10300
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+StateDirectory=wyoming/whisper
+Environment=HOME=/var/lib/wyoming/whisper
+EnvironmentFile=/etc/douglas/speech.env
+ExecStart=/opt/wyoming-whisper/bin/wyoming-faster-whisper --uri tcp://0.0.0.0:${WHISPER_PORT} --model ${WHISPER_MODEL} --language ${WHISPER_LANGUAGE} --device cpu --compute-type ${WHISPER_COMPUTE} --data-dir /var/lib/wyoming/whisper $WHISPER_ARGS
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
