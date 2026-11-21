@@ -147,10 +147,11 @@ LLAMA_MODEL=/srv/models/model.gguf
 LLAMA_HOST=0.0.0.0
 LLAMA_PORT=8081
 # -ngl 999      every layer on the GPU (it is all one memory anyway)
-# --no-mmap     load into GTT up front; mmap'd weights page in slowly here
+# --load-mode none  load into GTT up front; mmap'd weights page in slowly here
+#               (llama.cpp master replaced --no-mmap with --load-mode)
 # --jinja       the model's own chat template, so reasoning stays out of content
 # --alias       the name /v1/models and Open WebUI show
-LLAMA_ARGS="-ngl 999 --no-mmap --jinja -c 32768 --parallel 2 --alias douglas"
+LLAMA_ARGS="-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas"
 CONF
 
 # ── speech ───────────────────────────────────────────────────────────────
