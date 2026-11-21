@@ -63,10 +63,37 @@ LLM_URL = E("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 LLM_MODEL = E("LLM_MODEL", "douglas")
 LLM_MAX_TOKENS = int(E("LLM_MAX_TOKENS", "400"))
 LLM_TIMEOUT_S = float(E("LLM_TIMEOUT_S", "120"))
+# Who Douglas is and, as importantly, what he cannot know. The first version
+# said only "you are the household's assistant" and the model filled the gap
+# with a living room, a sofa and a dog that do not exist: with no sensors and
+# no instruction to admit it, inventing an answer is what a language model does.
 SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
-    "You are Douglas, the household's assistant, speaking aloud through a "
-    "small speaker. Answer in one to three short spoken sentences. No "
-    "markdown, lists, code or emoji — everything you write is read out."))
+    "You are Douglas, an AI assistant that runs on a computer in this home. "
+    "All you know about the present is what this message states and what "
+    "has been said in this conversation. You have no eyes, sensors, "
+    "calendar or internet, you cannot see or control any device, and you "
+    "remember nothing from before this conversation. Never invent facts "
+    "about the house, the people or animals in it, where anyone is, or "
+    "what is happening. If you do not know, say so in a few words and, "
+    "when it helps, say what you would need in order to know. "
+    "Talk like a capable colleague with a dry sense of humour, not a help "
+    "desk: no apologies, no flattery, no offers of further help, and do "
+    "not repeat the question back."))
+# True things about this household, in the owner's words (one line, in
+# /etc/douglas/voice.env). They are the only local knowledge Douglas has.
+FACTS = E("DOUGLAS_FACTS", "")
+STYLE = {
+    True: ("Your reply will be read aloud through a small speaker: one to "
+           "three short spoken sentences, with no markdown, lists, code or emoji."),
+    False: ("Your reply will be read on a screen: plain text, a few short "
+            "sentences unless more is asked for, with no markdown or emoji."),
+}
+SOURCES = {
+    "voice": "DougVoice, the microphone-and-speaker puck",
+    "deck": "the Doug Mission Control touchscreen",
+    "phone": "the Mission Control page on a phone",
+    "chat": "a chat window",
+}
 HISTORY_TURNS = int(E("VOICE_HISTORY_TURNS", "6"))       # exchanges kept
 HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "300"))  # forget after quiet
 MAX_LISTEN_S = float(E("VOICE_MAX_LISTEN_S", "20"))
@@ -238,6 +265,20 @@ def speakable(text: str) -> str:
     text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)   # unterminated
     text = MARKUP.sub(lambda m: m.group(1) or "", text)
     return " ".join(text.split())
+
+
+def system_prompt(via: str, spoken: bool) -> str:
+    """The instructions for one turn: who Douglas is, what he has been told
+    is true, the time and where the message came from - the only facts about
+    the present he has - and how the reply will be delivered."""
+    parts = [SYSTEM_PROMPT]
+    if FACTS:
+        parts.append("You have been told these things are true: " + FACTS)
+    parts.append(time.strftime("It is %A %d %B %Y, %H:%M local time. ")
+                 + "This message was sent from "
+                 + SOURCES.get(via, "an unknown device") + ".")
+    parts.append(STYLE[bool(spoken)])
+    return "\n\n".join(parts)
 
 
 def readable(text: str) -> str:
@@ -508,13 +549,13 @@ class Pipeline:
         self.send("transcript", {"text": heard})
         if not heard or not self._current(turn):
             return
-        reply = self._exchange(heard, via, turn, speakable)
+        reply = self._exchange(heard, via, turn, speakable, True)
         if reply is not None:
             self._speak(reply, turn)
 
     def run_text(self, text: str, via: str, turn: int, speak: bool) -> None:
         try:
-            reply = self._exchange(text, via, turn, readable)
+            reply = self._exchange(text, via, turn, readable, speak)
             if reply is not None and speak:
                 self._speak(speakable(reply), turn)
         except Exception as e:                   # noqa: BLE001 — never wedge
@@ -525,13 +566,13 @@ class Pipeline:
                 if self._current(turn) and self.state != "listening":
                     self.st.update(state="idle")
 
-    def _exchange(self, said: str, via: str, turn: int, clean) -> str | None:
+    def _exchange(self, said: str, via: str, turn: int, clean, spoken: bool) -> str | None:
         """One user line in, one Douglas line out, both in the transcript and
         the shared memory. None when a newer turn has superseded this one."""
         self.tr.append("user", said, via)
         if time.time() - self.last_exchange > HISTORY_IDLE_S:
             self.history = []
-        msgs = ([{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+        msgs = ([{"role": "system", "content": system_prompt(via, spoken)}] + self.history
                 + [{"role": "user", "content": said}])
         reply = clean(self.llm(msgs))
         if not self._current(turn):

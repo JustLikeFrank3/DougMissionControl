@@ -157,6 +157,12 @@ check("stop", pipe.ptt("stop", "deck"), (True, "thinking"))
 check("back to idle after speaking", until(lambda: on_disk()["state"] == "idle"), True)
 check("stt got both seconds", SEEN["stt"], (64000, (16000, 2, 1)))
 check("system prompt names Douglas", "Douglas" in SEEN["messages"][0]["content"], True)
+SYS = SEEN["messages"][0]["content"]
+check("prompt forbids inventing facts about the house", "Never invent facts" in SYS, True)
+check("prompt admits he has no sensors", "no eyes, sensors" in SYS, True)
+check("prompt says where the message came from", "Doug Mission Control touchscreen" in SYS, True)
+check("prompt carries today's date", time.strftime("%A %d %B %Y") in SYS, True)
+check("a voice turn is told it will be read aloud", "read aloud" in SYS, True)
 check("reasoning and markdown not spoken", SEEN["tts"], "It is ten past nine.")
 check("transcript: user then douglas, via deck",
       [(t["who"], t["text"], t["via"]) for t in lines()],
@@ -271,6 +277,14 @@ check("screen reply keeps words and lines, drops reasoning",
 check("shares the spoken conversation's memory",
       [m["content"] for m in SAID[0][1:3]], ["earlier", "spoken reply"])
 check("not spoken unless asked", [e for e in SENT if e.startswith("audio")], [])
+check("a typed turn is told it will be read on a screen",
+      ("read on a screen" in SAID[0][0]["content"], "read aloud" in SAID[0][0]["content"]), (True, False))
+check("a typed turn names the phone as its source", "page on a phone" in SAID[0][0]["content"], True)
+voice.FACTS = "The cat is called Bob."
+check("household facts are passed on verbatim",
+      "told these things are true: The cat is called Bob." in voice.system_prompt("chat", False), True)
+check("an unknown source is not guessed at", "an unknown device" in voice.system_prompt("fax", True), True)
+voice.FACTS = ""
 tpipe.st.update(state="thinking")
 check("refused while thinking", tpipe.say("again", "deck")[0], False)
 tpipe.st.update(state="idle")
