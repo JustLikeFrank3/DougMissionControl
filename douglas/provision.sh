@@ -8,6 +8,8 @@
 # What it leaves behind, all as systemd units:
 #     tailscaled          joined to the tailnet as `douglas`
 #     llama-server        llama.cpp (Vulkan/RADV) on :8081, --metrics, OpenAI API
+#     llama-eyes          a small vision model on :8082, so Douglas can be shown
+#                         a picture (optional: enabled once its model is on disk)
 #     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net)
 #     wyoming-whisper     faster-whisper STT on :10300
 #     wyoming-piper       Piper TTS on :10200
@@ -154,6 +156,30 @@ LLAMA_PORT=8081
 LLAMA_ARGS="-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas"
 CONF
 
+env=/etc/douglas/eyes.env
+[ -f "$env" ] || cat > "$env" <<'CONF'
+# llama-eyes: a small vision model beside Douglas's own, which reads only
+# text. A picture sent to him is put into words here first. Restart after
+# editing:  sudo systemctl restart llama-eyes
+#
+# Nothing is downloaded for you. A good fit beside a ~90 GB model is
+# Qwen3-VL-8B-Instruct at Q8_0, about 10 GB with its projector, from
+# https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF :
+#     Qwen3VL-8B-Instruct-Q8_0.gguf  and  mmproj-Qwen3VL-8B-Instruct-F16.gguf
+# Put both in /srv/models/eyes, re-run provision.sh (it enables the unit once
+# the model is there), then set EYES_URL=http://127.0.0.1:8082 in voice.env
+# and restart douglas-voice.
+EYES_MODEL_FILE=/srv/models/eyes/Qwen3VL-8B-Instruct-Q8_0.gguf
+EYES_MMPROJ=/srv/models/eyes/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+# Loopback: only the voice pipeline on this machine talks to it.
+EYES_HOST=127.0.0.1
+EYES_PORT=8082
+# --image-min-tokens  Qwen-VL reads small pictures poorly below about 1024
+# --image-max-tokens  how much of the context one picture may take; a large
+#                     photo is scaled down to fit
+EYES_ARGS="-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes"
+CONF
+
 # ── speech ───────────────────────────────────────────────────────────────
 step "Wyoming faster-whisper and Piper"
 [ -x /opt/wyoming-whisper/bin/python ] || python3 -m venv /opt/wyoming-whisper
@@ -227,6 +253,15 @@ TTS_PORT=10200
 #TTS_VOICE=en_GB-alan-medium
 LLM_URL=http://127.0.0.1:8081
 LLM_MAX_TOKENS=400
+# Lookups (weather, news, Wikipedia, reading a web page) are on. Each one
+# sends its own words to a public service; DOUGLAS_TOOLS=0 turns them off.
+#DOUGLAS_TOOLS=0
+# Where "the weather" means when no place is named, and US units for it.
+#DOUGLAS_HOME=Springfield, Illinois
+#DOUGLAS_UNITS=us
+# His eyes: the vision model llama-eyes serves (see eyes.env). Unset, he
+# cannot be shown a picture and says so.
+#EYES_URL=http://127.0.0.1:8082
 #DOUGLAS_SYSTEM_PROMPT=You are Douglas, ...
 VOICE_MAX_LISTEN_S=20
 VOICE_HISTORY_TURNS=6
@@ -240,10 +275,17 @@ chown root:douglas "$env" && chmod 640 "$env"
 # ── units ────────────────────────────────────────────────────────────────
 step "systemd units"
 units="llama-server open-webui wyoming-whisper wyoming-piper douglas-voice"
-for u in $units; do
+for u in $units llama-eyes; do
     install -m 644 "$here/$u.service" "/etc/systemd/system/$u.service"
 done
 systemctl daemon-reload
+# The eyes are optional: without their model the unit would only flap.
+eyes="$(envval /etc/douglas/eyes.env EYES_MODEL_FILE)"
+if [ -f "$eyes" ]; then
+    units="$units llama-eyes"
+else
+    echo "  no vision model at $eyes - Douglas cannot be shown pictures (see /etc/douglas/eyes.env)"
+fi
 for u in $units; do
     systemctl enable "$u"
     systemctl restart "$u" || warn "$u did not start - journalctl -u $u"
@@ -274,7 +316,9 @@ fi
 # ── what is up ───────────────────────────────────────────────────────────
 step "status"
 sleep 3
-for p in "8081 llama-server" "8080 open-webui" "10300 wyoming-whisper" \
+eyes_port=""
+[ -f "$eyes" ] && eyes_port="$(envval /etc/douglas/eyes.env EYES_PORT) llama-eyes"
+for p in "8081 llama-server" ${eyes_port:+"$eyes_port"} "8080 open-webui" "10300 wyoming-whisper" \
          "10200 wyoming-piper" "10800 douglas-voice" "9111 douglas-agent"; do
     set -- $p
     if (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then

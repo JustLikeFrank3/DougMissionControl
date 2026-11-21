@@ -8,7 +8,8 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
                              voice-pipeline state, the recent transcript
     POST /ptt?token=<t>      {"action":"start|stop|cancel","via":"deck"}
                              relayed to the voice pipeline's own PTT endpoint
-    POST /say?token=<t>      {"text":"...","via":"deck|phone","speak":false}
+    POST /say?token=<t>      {"text":"...","via":"deck|phone","speak":false,
+                              "image":"<base64>"}  (the picture is optional)
                              a typed turn, relayed to the pipeline's /say
     GET  /health             200 "ok" — liveness, no token, no data
 
@@ -20,7 +21,8 @@ because "idle" and "unknown" are different facts on the panel.
 
 The voice pipeline contract (whatever implements DougVoice's brain):
     VOICE_STATE_FILE   JSON {"state": "idle|listening|thinking|speaking",
-                             "satellite": bool, "ts": <epoch>, "last_turn": <epoch>}
+                             "satellite": bool, "eyes": bool, "ts": <epoch>,
+                             "last_turn": <epoch>}
                        rewritten on every change and at least every 10 s;
                        older than VOICE_STALE_S reads as no pipeline.
     TRANSCRIPT_FILE    JSONL, one {"ts", "who": "user|douglas", "text",
@@ -49,6 +51,7 @@ PORT = int(os.environ.get("DOUGLAS_AGENT_PORT", "9111"))
 TOKEN = os.environ.get("DOUGLAS_AGENT_TOKEN", "")
 LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 VOICE_STATE_FILE = os.environ.get("VOICE_STATE_FILE", "/run/douglas/voice.json")
+SAY_BODY_MAX = 12 * 1024 * 1024          # a typed turn may carry a picture
 VOICE_STALE_S = float(os.environ.get("VOICE_STALE_S", "30"))
 TRANSCRIPT_FILE = os.environ.get("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 TRANSCRIPT_TURNS = int(os.environ.get("TRANSCRIPT_TURNS", "40"))
@@ -239,6 +242,7 @@ def voice_state() -> dict:
         return {"state": "absent", "satellite": False}
     return {"state": str(v.get("state") or "absent"),
             "satellite": bool(v.get("satellite")),
+            "eyes": bool(v.get("eyes")),          # he can be sent a picture
             "last_turn": v.get("last_turn")}
 
 
@@ -280,24 +284,29 @@ def relay_ptt(body: dict) -> tuple[int, dict]:
 
 
 def relay_say(body: dict) -> tuple[int, dict]:
-    """A typed turn, relayed to the pipeline's /say beside its /ptt (same
-    token). The pipeline answers at once; the reply lands in the transcript."""
+    """A typed turn, with or without a picture, relayed to the pipeline's
+    /say beside its /ptt (same token). The pipeline answers at once; the
+    reply lands in the transcript."""
     text = str(body.get("text") or "").strip()
-    if not text:
+    image = body.get("image") if isinstance(body.get("image"), str) else ""
+    if not text and not image:
         return 400, {"ok": False, "message": "nothing to say"}
     url = VOICE_PTT_URL.replace("/ptt", "/say", 1) if VOICE_PTT_URL else ""
-    return _relay(url, {"text": text[:2000], "via": str(body.get("via") or "deck"),
-                        "speak": bool(body.get("speak"))}, "thinking")
+    payload = {"text": text[:2000], "via": str(body.get("via") or "deck"),
+               "speak": bool(body.get("speak"))}
+    if image:
+        payload["image"] = image            # base64, passed on untouched
+    return _relay(url, payload, "thinking", timeout=20 if image else 3)
 
 
-def _relay(url: str, payload: dict, done: str) -> tuple[int, dict]:
+def _relay(url: str, payload: dict, done: str, timeout: float = 3) -> tuple[int, dict]:
     if not url:
         return 200, {"ok": False, "message": "no voice pipeline installed on Douglas yet"}
     req = urllib.request.Request(
         url, method="POST", data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=3) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             ok = 200 <= r.status < 300
     except urllib.error.HTTPError as e:     # it answered, and said no
         try:
@@ -355,7 +364,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
         try:
-            n = min(int(self.headers.get("Content-Length") or 0), 16384)
+            n = min(int(self.headers.get("Content-Length") or 0),
+                    SAY_BODY_MAX if path == "/say" else 16384)
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}

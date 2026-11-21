@@ -124,6 +124,15 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .ask button { padding: 0 16px; background: #0f151e; border: 1px solid var(--acc);
               color: var(--acc); letter-spacing: .12em; font-size: 13px; cursor: pointer; }
 .ask button:disabled, .ask input:disabled { opacity: .4; }
+.ask .cam { display: flex; align-items: center; padding: 0 12px; border-color: var(--ln);
+            color: var(--cy); }
+/* The photo waiting to go with the next question. */
+.shot { display: flex; align-items: center; gap: 10px; padding: 6px;
+        border: 1px solid var(--cy); background: #0f151e; }
+.shot img { width: 56px; height: 56px; object-fit: cover; flex: none; }
+.shot span { font-size: 11px; letter-spacing: .14em; color: var(--cy); }
+.shot button { margin-left: auto; width: 44px; height: 44px; background: none;
+               border: 1px solid var(--ln); color: var(--mut); font-size: 22px; cursor: pointer; }
 
 /* Its colour is the pipeline's observed state, never the press. */
 .ptt {

@@ -1,0 +1,22 @@
+[Unit]
+Description=llama.cpp server - Douglas's eyes, a small vision model on :8082 (Vulkan)
+After=network-online.target llama-server.service
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+SupplementaryGroups=render video
+# EYES_MODEL_FILE, EYES_MMPROJ, EYES_HOST, EYES_PORT, EYES_ARGS. ${X} is one
+# argument, $X is split on whitespace, so EYES_ARGS can hold any number of
+# flags. provision.sh enables this unit only once the model file exists.
+EnvironmentFile=/etc/douglas/eyes.env
+ExecStart=/opt/llama.cpp/build/bin/llama-server --host ${EYES_HOST} --port ${EYES_PORT} -m ${EYES_MODEL_FILE} --mmproj ${EYES_MMPROJ} $EYES_ARGS
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

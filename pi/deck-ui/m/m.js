@@ -197,6 +197,7 @@ function paintEvents(evs) {
 var VOICE_SUB = { idle: 'READY', listening: 'LISTENING…', thinking: 'THINKING…',
                   speaking: 'SPEAKING…' };
 var pressed = false, lastDgl = null, asking = false;
+var shot = null;                 // { b64, url }: the photo going with the next question
 
 function paintDouglasHead(dgl) {
   var m = dgl.model || {};
@@ -234,7 +235,10 @@ function paintDouglas(d) {
   $('dgl-ask-go').disabled = !canAsk || asking;
   $('dgl-ask-text').placeholder = !agent ? 'Douglas is unreachable'
     : vstate === 'absent' ? 'no voice pipeline on Douglas'
-    : vstate === 'thinking' ? 'Douglas is thinking…' : 'Ask Douglas…';
+    : vstate === 'thinking' ? (shot ? 'Douglas is looking…' : 'Douglas is thinking…')
+    : shot ? 'Ask about the photo…' : 'Ask Douglas…';
+  // The camera is offered only when he can actually see.
+  $('dgl-cam').hidden = !(agent && voice.eyes);
   var note = $('dgl-note');
   if (note.dataset.sticky !== '1') {
     note.className = 'note';
@@ -292,17 +296,72 @@ function dglNote(msg) {
   setTimeout(function () { note.dataset.sticky = ''; }, 5000);
 }
 
+// ── a photo for Douglas ─────────────────────────────────────────────────
+// The phone's camera or library is his eye. The photo is scaled down here,
+// on the phone: a 12-megapixel original is megabytes he has no use for, and
+// redrawing it also turns whatever the phone shot (HEIC included) into JPEG.
+
+var SHOT_EDGE = 1280;            // longest side sent, in pixels
+
+function shrink(file) {
+  return new Promise(function (resolve, reject) {
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, SHOT_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+      var c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k));
+      c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(function (b) { if (b) resolve(b); else reject(new Error('encode')); },
+               'image/jpeg', 0.85);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode')); };
+    img.src = url;
+  });
+}
+
+function clearShot() {
+  if (shot) URL.revokeObjectURL(shot.url);
+  shot = null;
+  $('dgl-shot').hidden = true;
+  $('dgl-photo').value = '';
+  if (lastDgl) paintDouglas(lastDgl);          // the placeholder follows
+}
+
+$('dgl-cam').addEventListener('click', function () { $('dgl-photo').click(); });
+$('dgl-shot-x').addEventListener('click', clearShot);
+$('dgl-photo').addEventListener('change', function () {
+  var f = this.files && this.files[0];
+  if (!f) return;
+  shrink(f).then(function (blob) {
+    var rd = new FileReader();
+    rd.onload = function () {
+      clearShot();
+      shot = { b64: String(rd.result).split(',')[1], url: URL.createObjectURL(blob) };
+      $('dgl-shot-img').src = shot.url;
+      $('dgl-shot').hidden = false;
+      if (lastDgl) paintDouglas(lastDgl);
+    };
+    rd.onerror = function () { dglNote('could not read that photo'); };
+    rd.readAsDataURL(blob);
+  }).catch(function () { dglNote('could not open that photo'); });
+});
+
 $('dgl-ask').addEventListener('submit', function (e) {
   e.preventDefault();
   var box = $('dgl-ask-text');
   var text = box.value.trim();
-  if (!text || asking) return;
+  if ((!text && !shot) || asking) return;     // a photo alone asks "what is this?"
   asking = true;
   $('dgl-ask-go').disabled = true;
-  post('/api/douglas/say', { text: text, via: 'phone' }).then(function (r) {
+  var body = { text: text, via: 'phone' };
+  if (shot) body.image = shot.b64;
+  post('/api/douglas/say', body).then(function (r) {
     asking = false;
     if (r && r.ok) {
       box.value = '';
+      clearShot();
       box.blur();                    // drop the keyboard so the reply is visible
       tickDouglas();                 // shows our line now; 'thinking' speeds the poll
     } else {

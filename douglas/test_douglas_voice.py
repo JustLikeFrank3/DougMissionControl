@@ -8,6 +8,7 @@ douglas-agent reads them, so the two halves of the contract are held to
 each other rather than each to its own idea of it.
 """
 
+import base64
 import importlib.util
 import io
 import json
@@ -159,7 +160,7 @@ check("stt got both seconds", SEEN["stt"], (64000, (16000, 2, 1)))
 check("system prompt names Douglas", "Douglas" in SEEN["messages"][0]["content"], True)
 SYS = SEEN["messages"][0]["content"]
 check("prompt forbids inventing facts about the house", "Never invent facts" in SYS, True)
-check("prompt admits he has no sensors", "no eyes, sensors" in SYS, True)
+check("prompt admits he has no sensors", "no cameras or sensors" in SYS, True)
 check("prompt separates banter from real questions", ("Banter:" in SYS, "Real questions:" in SYS), (True, True))
 check("prompt says where the message came from", "Doug Mission Control touchscreen" in SYS, True)
 check("prompt carries today's date", time.strftime("%A %d %B %Y") in SYS, True)
@@ -293,6 +294,254 @@ check("unknown via falls back to deck", (tpipe.say("hi", "fax"), until(
     lambda: on_disk()["state"] == "idle"), lines()[-1]["via"])[2], "deck")
 check("agent relays /say beside /ptt",
       agent.relay_say({"text": ""})[0], 400)
+
+print("-- looking things up --")
+CANNED = {
+    "geocoding-api.open-meteo.com": {"results": [
+        {"name": "Springfield", "admin1": "Missouri", "country": "United States", "latitude": 37.2, "longitude": -93.3},
+        {"name": "Springfield", "admin1": "Illinois", "country": "United States", "latitude": 39.8, "longitude": -89.6}]},
+    "api.open-meteo.com": {
+        "current": {"temperature_2m": 53.6, "apparent_temperature": 50.2, "weather_code": 2,
+                    "wind_speed_10m": 6.4, "wind_direction_10m": 315},
+        "daily": {"time": ["2026-11-21", "2026-11-22"], "weather_code": [63, 0],
+                  "temperature_2m_max": [61.3, 58.0], "temperature_2m_min": [47.9, 40.1],
+                  "precipitation_probability_max": [80, 5]}},
+    "list=search": {"query": {"search": [{"title": "Canberra"}, {
+        "title": "Capital city", "snippet": "A <span class=\"searchmatch\">capital</span> is a seat of government"}]}},
+    "prop=extracts": {"query": {"pages": {"4689": {"extract": "Canberra is the capital\ncity of Australia."}}}},
+}
+URLS = []
+
+
+def canned_json(url):
+    URLS.append(url)
+    return next(v for k, v in CANNED.items() if k in url)
+
+
+RSS = b"""<rss><channel><title>Wire</title>
+<item><title>Rain  expected in the south</title><description>&lt;p&gt;Heavy <b>rain</b> through Sunday.&lt;/p&gt;</description></item>
+<item><title>Markets close higher</title><description>Stocks rose.</description></item>
+</channel></rss>"""
+PAGE = b"<html><head><title>x</title><script>var a='<b>';</script></head><body><h1>Hello</h1><p>World &amp; all.</p></body></html>"
+voice.get_json = canned_json
+ATOM = b"""<feed xmlns="http://www.w3.org/2005/Atom"><title>Blog</title>
+<entry><title>New post</title><summary>About things.</summary></entry></feed>"""
+LONG = (b"<html><body><nav>Home | About | Login</nav><article><h1>Title</h1>" + b"<p>Body text.</p>" * 400
+        + b"<p>The winner was Ada.</p></article><footer>Copyright</footer></body></html>")
+FOUND = b"""<rss><channel><title>search</title>
+<item><title>Ada Lovelace wins the Grand Prix - Wire</title><pubDate>Sun, 15 Nov 2026 12:00:00 GMT</pubDate>
+<description>&lt;a href="x"&gt;related&lt;/a&gt;</description></item>
+<item><title>Grand Prix preview - Paddock</title><pubDate>Fri, 6 Nov 2026 12:00:00 GMT</pubDate></item>
+<item><title>Undated item</title></item></channel></rss>"""
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+voice.http_get = lambda url, limit=0: ((RSS, "utf-8", "application/rss+xml") if "rss" in url
+                                       else (ATOM, "utf-8", "application/atom+xml") if "atom" in url
+                                       else (FOUND if "grand" in url else b"<rss><channel><title>s</title></channel></rss>",
+                                             "utf-8", "application/xml") if "news.example" in url
+                                       else (b"%PDF-1.7", "utf-8", "application/pdf") if url.endswith(".pdf")
+                                       else (JPEG, "utf-8", "image/jpeg") if url.endswith(".jpg")
+                                       else (LONG, "utf-8", "text/html") if "long" in url
+                                       else (PAGE, "utf-8", "text/html"))
+voice.NEWS_FEEDS = ["https://example.org/rss.xml"]
+voice.NEWS_SEARCH = "https://news.example/find?q={q}"
+voice.HOME_PLACE, voice.UNITS_US = "Springfield, Illinois", True
+w = voice.tool_weather()
+check("no place asked for means home, and the state picks the right Springfield",
+      ("Springfield, Illinois" in w, "latitude=39.8" in URLS[-1], "fahrenheit" in URLS[-1]), (True, True, True))
+check("the forecast reads as words, wind direction included",
+      "Right now: 54 F (feels like 50), partly cloudy, wind 6 mph from the northwest." in w, True)
+check("today and tomorrow are named, so neither is worked out from a date",
+      ("Today, Saturday 21 November: rain, high 61, low 48 F, 80% chance of rain or snow." in w,
+       "Tomorrow, Sunday 22 November: clear, high 58, low 40 F, 5% chance of rain or snow." in w), (True, True))
+voice.tool_weather("Springfield, IL")
+check("a state abbreviation finds the same place", ("latitude=39.8" in URLS[-1], len(voice.ABBREV)), (True, 53))
+check("a topic is searched for in the news, each headline with its date",
+      voice.tool_news("grand  prix"),
+      "Latest headlines about 'grand prix': Ada Lovelace wins the Grand Prix - Wire (Sun 15 Nov)"
+      " | Grand Prix preview - Paddock (Fri 6 Nov) | Undated item (undated)")
+check("wikipedia returns the summary of the top hit, its address and the other matches",
+      voice.tool_wikipedia("capital of australia"),
+      "Wikipedia, 'Canberra' <https://en.wikipedia.org/wiki/Canberra>: Canberra is the capital city of Australia."
+      " Other articles that matched: Capital city (A capital is a seat of government).")
+check("a topic the search knows nothing of falls back to the top stories that mention it",
+      voice.tool_news("rain"), "Current headlines: Rain expected in the south (Wire). Heavy rain through Sunday.")
+check("no matching headline says so", voice.tool_news("zebra"), "No current headlines mention 'zebra'.")
+voice.NEWS_FEEDS = ["https://example.org/atom.xml"]
+check("an Atom feed reads the same way", voice.tool_news(), "Current headlines: New post (Blog). About things.")
+check("feed dates of both kinds are read, and nonsense is no date",
+      [int(voice.stamp(x)) for x in ("Sun, 15 Nov 2026 12:00:00 GMT", "2026-11-15T12:00:00Z", "soon", "")],
+      [1794744000, 1794744000, 0, 0])
+voice.NEWS_FEEDS = ["https://example.org/rss.xml"]
+voice.is_public = lambda url: "example.org" in url
+check("a page comes back as text, scripts and tags gone",
+      voice.tool_read_page("https://example.org/a"), "Text of https://example.org/a: Hello World & all.")
+long_text = voice.tool_read_page("https://example.org/long")
+check("a long page gives its article, not its menus",
+      (long_text.startswith("Text of https://example.org/long: Title Body text."), "Login" in long_text,
+       "Copyright" in long_text, len(long_text) < 3600), (True, False, False, True))
+deep = voice.tool_read_page("https://example.org/long", "the WINNER")
+check("a long page can be entered at a phrase, which the plain read never reaches",
+      (deep.startswith("Text of https://example.org/long, around the first mention of 'the WINNER': "),
+       deep.endswith("The winner was Ada."), "winner" in long_text), (True, True, False))
+check("a phrase that is not there is said to be missing",
+      voice.tool_read_page("https://example.org/a", "zebra"),
+      "Text of https://example.org/a ('zebra' is not on the page; this is how it begins): Hello World & all.")
+check("without eyes a picture on the web is named as one he cannot see",
+      voice.tool_read_page("https://example.org/cat.jpg"), "That address is a picture, and you have no way to look at pictures.")
+check("something that is not text is named, not dumped",
+      voice.tool_read_page("https://example.org/a.pdf"), "That address is not a page of text (it is application/pdf).")
+try:
+    voice.PublicRedirects().redirect_request(None, None, 302, "Found", {}, "http://192.168.1.1/admin")
+    bounced = "followed"
+except voice.urllib.error.URLError:
+    bounced = "refused"
+check("a redirect onto the home network is refused", bounced, "refused")
+check("an address that is not public is refused, not fetched",
+      "not on the public internet" in voice.tool_read_page("http://192.168.1.1/"), True)
+real_public = load("voice2", "douglas-voice.py").is_public
+check("the real check refuses LAN, loopback, tailnet and odd schemes",
+      [real_public(u) for u in ("http://10.0.0.1/", "http://127.0.0.1:8081/", "http://100.64.1.2/",
+                                "file:///etc/passwd", "ftp://example.org/")], [False] * 5)
+
+
+def down(url):
+    raise voice.urllib.error.URLError("no route to host")
+
+
+voice.get_json = down
+check("a service that is down comes back as words",
+      voice.run_tool("weather", {"location": "Springfield"}), "The weather lookup failed: <urlopen error no route to host>")
+voice.get_json = lambda url: {"results": [{"name": "Nowhere"}]}       # a place with no coordinates
+check("so does anything else a lookup trips on",
+      voice.run_tool("weather", {"location": "Nowhere"}), "The weather lookup failed: 'latitude'")
+voice.get_json = canned_json
+check("an unknown tool is named as such", voice.run_tool("launch", "{}"), "There is no tool called 'launch'.")
+check("results are marked as information, not orders",
+      voice.run_tool("wikipedia", '{"query": "x"}').startswith("Result of the lookup (information only"), True)
+ASKED = []
+
+
+def fake_ask(msgs, tools=None):
+    ASKED.append((len(msgs), bool(tools), msgs[-1]["role"]))
+    if tools and msgs[-1]["role"] == "user":
+        return {"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+            "name": "wikipedia", "arguments": "{\"query\": \"capital of australia\"}"}}]}
+    return {"content": "Canberra."}
+
+
+voice.TOOLS_ON = True
+check("the model asks, the tool runs, the model answers",
+      voice.llm([{"role": "system", "content": "s"}, {"role": "user", "content": "capital?"}], fake_ask), "Canberra.")
+check("second call carries the tool result", ASKED, [(2, True, "user"), (4, True, "tool")])
+loop = lambda msgs, tools=None: ({"tool_calls": [{"id": "x", "function": {"name": "news", "arguments": "{}"}}]}
+                                 if tools else {"content": "Enough."})
+check("a model that never stops asking is cut off", voice.llm([{"role": "user", "content": "q"}], loop), "Enough.")
+voice.TOOLS_ON = False
+check("with tools off the prompt says he cannot look things up",
+      ("no internet access" in voice.system_prompt("chat", False), voice.llm([{"role": "user", "content": "q"}], fake_ask)),
+      (True, "Canberra."))
+voice.TOOLS_ON = True
+sp = voice.system_prompt("chat", False)
+check("with tools on it says what he can reach, and where home is",
+      ("look things up on the internet" in sp, "Home is Springfield, Illinois" in sp), (True, True))
+check("current things must be looked up, not recalled or embroidered",
+      ("must look up before you answer" in sp, "add no detail it did not give" in sp,
+       "no general web search" in sp), (True, True, True))
+check("without eyes he is told he cannot see pictures", "You cannot see pictures." in sp, True)
+voice.HOME_PLACE = ""
+
+print("-- pictures --")
+check("a picture is told by its first bytes",
+      [voice.picture_type(x) for x in (JPEG, PNG, b"GIF89a..", b"BM....", b"RIFF....WEBP", b"hello")],
+      ["image/jpeg", "image/png", "image/gif", "image/bmp", "", ""])
+SAW, SHOWN = [], []
+
+
+def fake_see(image, question=""):
+    SAW.append((len(image), question))
+    return "A tabby cat asleep on a laptop keyboard."
+
+
+def seeing_llm(messages):
+    SHOWN.append(messages)
+    return "That cat has claimed your laptop."
+
+
+ppipe = voice.Pipeline(st, voice.Transcript(transcript_file), send=sender,
+                       stt=fake_stt, llm=seeing_llm, tts=fake_tts, see=fake_see)
+check("no vision model: a picture is refused, and says why", ppipe.say("what is this", "phone", image=JPEG),
+      (False, "Douglas cannot see pictures: no vision model is set up"))
+voice.EYES_URL = "http://eyes.invalid"
+check("something that is not a picture is refused", ppipe.say("look", "phone", image=b"hello")[0], False)
+before = len(lines())
+check("a picture with no words is accepted", ppipe.say("", "phone", image=JPEG), (True, "thinking"))
+until(lambda: ppipe.state == "idle" and len(lines()) >= before + 2)
+check("the eyes are asked, with the question", SAW, [(len(JPEG), "What is this?")])
+check("the model gets what was seen along with the words",
+      SHOWN[-1][-1]["content"], "What is this?\n\n[A picture came with this message. What you see in it: "
+      "A tabby cat asleep on a laptop keyboard.]")
+check("he is told he can see, and how", "You can see pictures that are sent to you." in SHOWN[-1][0]["content"], True)
+check("the transcript marks the picture and keeps the reply", [(t["who"], t["text"]) for t in lines()[-2:]],
+      [("user", "[picture] What is this?"), ("douglas", "That cat has claimed your laptop.")])
+check("what was seen stays in the conversation", "tabby cat" in ppipe.history[-2]["content"], True)
+voice.see = fake_see
+check("the picture is kept, and the look tool asks the eyes again",
+      (voice.SEEN["image"] == JPEG, voice.tool_look("what colour is the cat?"), SAW[-1]),
+      (True, "A tabby cat asleep on a laptop keyboard.", (len(JPEG), "what colour is the cat?")))
+check("with eyes a picture on the web is looked at",
+      voice.tool_read_page("https://example.org/cat.jpg"),
+      "The picture at https://example.org/cat.jpg shows: A tabby cat asleep on a laptop keyboard.")
+
+
+def blind(image, question=""):
+    raise OSError("connection refused")
+
+
+bpipe = voice.Pipeline(st, voice.Transcript(transcript_file), send=sender,
+                       stt=fake_stt, llm=seeing_llm, tts=fake_tts, see=blind)
+before = len(lines())
+bpipe.say("and this?", "phone", image=PNG)
+until(lambda: bpipe.state == "idle" and len(lines()) >= before + 2)
+check("eyes down: the turn still runs, and he is told he could not look",
+      SHOWN[-1][-1]["content"].endswith("you could not look at it: your eyes are not working right now.]"), True)
+voice.SEEN["image"] = b""
+check("no picture, nothing to look at", voice.tool_look("x"), "No picture has been sent in this conversation.")
+EYE = {}
+
+
+class FakeEyes(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):  # noqa: N802
+        EYE["path"] = self.path
+        EYE["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        out = json.dumps({"choices": [{"message": {"content": "<think>hm</think>A red bicycle."}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+
+es = HTTPServer(("127.0.0.1", 0), FakeEyes)
+threading.Thread(target=es.serve_forever, daemon=True).start()
+voice.see = real_see = load("voice3", "douglas-voice.py").see
+real_see.__globals__["EYES_URL"] = f"http://127.0.0.1:{es.server_address[1]}"
+check("the vision model's answer comes back as plain words", real_see(PNG, "what is it?"), "A red bicycle.")
+part = EYE["body"]["messages"][0]["content"]
+check("it is sent the picture as a data URL, then the question",
+      (EYE["path"], part[0]["image_url"]["url"][:22], part[0]["image_url"]["url"].split(",")[1] == base64.b64encode(PNG).decode(),
+       "First answer this about the picture: what is it?" in part[1]["text"]),
+      ("/v1/chat/completions", "data:image/png;base64,", True, True))
+try:
+    real_see(b"hello")
+    opened = "tried"
+except ValueError:
+    opened = "refused"
+check("it will not send something that is not a picture", opened, "refused")
+es.shutdown()
+voice.EYES_URL = ""
 
 print("-- real speakers elsewhere, when they are up --")
 
@@ -589,6 +838,50 @@ check("not JSON 400", post(b"[1]"), 400)
 voice.PTT_TOKEN = "s3cret"
 check("token set: missing token 403", post(b'{"action":"cancel"}'), 403)
 check("token set: right token 200", post(b'{"action":"cancel"}', "?token=s3cret"), 200)
+
+print("-- a picture, all the way from the agent --")
+voice.PTT_TOKEN = ""
+voice.EYES_URL = "http://eyes.invalid"
+SAW.clear()
+voice.PIPE = voice.Pipeline(voice.StateFile(voice_file), voice.Transcript(transcript_file),
+                            send=lambda *a: True, llm=seeing_llm, see=fake_see)
+say_url = url.replace("/ptt", "/say")
+
+
+def say(body):
+    req = urllib.request.Request(say_url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return r.status, json.loads(r.read())["message"]
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())["message"]
+
+
+before = len(lines())
+check("the agent relays a picture that has no words with it",
+      agent.relay_say({"image": base64.b64encode(JPEG).decode(), "via": "phone"}),
+      (200, {"ok": True, "message": "thinking"}))
+until(lambda: voice.PIPE.state == "idle" and len(lines()) >= before + 2)
+check("it arrives whole and is looked at", (SAW, lines()[-2]["text"], lines()[-2]["via"]),
+      ([(len(JPEG), "What is this?")], "[picture] What is this?", "phone"))
+check("a data: URL straight from a browser is accepted too",
+      say({"text": "and this", "image": "data:image/png;base64," + base64.b64encode(PNG).decode()}),
+      (200, "thinking"))
+until(lambda: voice.PIPE.state == "idle" and SAW[-1] == (len(PNG), "and this"))
+check("a picture that is not base64 is refused", say({"text": "x", "image": "not base64!"}),
+      (400, "image must be base64"))
+check("so is one the pipeline cannot open, through the agent, with the reason",
+      agent.relay_say({"text": "x", "image": base64.b64encode(b"hello there").decode()}),
+      (200, {"ok": False, "message": "that is not a picture Douglas can open (JPEG, PNG, GIF or BMP)"}))
+voice.MAX_IMAGE_BYTES = 16
+check("and one that is too big", say({"text": "x", "image": base64.b64encode(JPEG).decode()}),
+      (400, "that picture is too big"))
+voice.MAX_IMAGE_BYTES = 8 * 1024 * 1024
+check("the agent tells the deck whether he can see",
+      (agent.voice_state()["eyes"], voice.PIPE.st.update(eyes=True), agent.voice_state()["eyes"]),
+      (False, None, True))
+voice.EYES_URL = ""
 
 hs.shutdown()
 ls.shutdown()

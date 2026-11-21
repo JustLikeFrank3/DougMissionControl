@@ -279,8 +279,11 @@ tiles.
 
 **On a phone** — `http://node1:8088/m`, over the tailnet. The same deck in one
 column: the workstation with its hold-to-arm boot tiles, Douglas (status,
-meters, the last few turns, push-to-talk, and a link to its own chat page),
-now playing, the fleet and the event log. Same SSE frame, same endpoints, same
+meters, the last few turns, a box to type to him, push-to-talk, and a link
+to its own chat page), now playing, the fleet and the event log. When Douglas
+has a vision model the ask box grows a camera button: take or pick a photo,
+add a question or not, and he answers about what is in it. The photo is
+scaled to 1280 px on the phone before it is sent. Same SSE frame, same endpoints, same
 rules as the panel. A phone is not loopback, so it needs `DECK_TOKEN`: run
 `sudo ./pi/mobile-link.sh` on node1 and open the link it prints (a QR code too
 when `qrencode` is installed). The page keeps the token in that browser and
@@ -481,6 +484,9 @@ and runs `douglas/setup.sh` at the end. In order:
 3. **`sudo reboot`** — the GTT limit and the new kernel only exist after one.
 4. **Put a model in `/srv/models`** and point `LLAMA_MODEL` at it in
    `/etc/douglas/llama.env` (nothing multi-GB is downloaded for you).
+   Optionally put a small vision model and its projector in
+   `/srv/models/eyes` (`/etc/douglas/eyes.env` names a good one) and set
+   `EYES_URL` in `voice.env`: that is what lets him be shown a picture.
 5. **Run `provision.sh` again.** It is idempotent: config files are written
    only when missing, so this run just rebuilds what moved and ends with a
    port-by-port up/down list that means something.
@@ -506,10 +512,11 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 
 | File | Knobs |
 |---|---|
-| `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --no-mmap --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
+| `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
+| `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE`, `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE`, `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -525,6 +532,36 @@ satellite's speaker, resampled to the format its `run-pipeline` asked for.
 idle and is rewritten at least every 5 s; each side of the exchange is one
 line in `/var/lib/douglas/transcript.jsonl`. Pressing again while Douglas is
 speaking interrupts the reply; cancel drops the turn wherever it is.
+
+**What he can look up.** A model on a box with an Ethernet cable still has no
+internet: it can only use what the program around it hands over. So
+`douglas-voice` gives it four read-only tools and runs them when the model
+asks: `weather` (Open-Meteo: current conditions and seven named days, for
+`DOUGLAS_HOME` when no place is given), `news` (the top stories from
+`DOUGLAS_NEWS_FEEDS`, or a news search for a topic, each headline dated),
+`wikipedia` (the best article's introduction, its address and the other
+matches) and `read_page` (the text of a public web page, optionally from a
+phrase onward). He is told to look up anything about the present every time
+rather than recall it, to add nothing the lookup did not return, and to say so
+when a lookup fails. There is no general web search: search engines answer an
+automated client with a bot challenge, which this does not try to get past, so
+that needs a search service's API key. `read_page` fetches public addresses
+only (loopback, LAN and tailnet addresses are refused, redirects included), and
+whatever a lookup returns is handed to the model marked as information, not
+instructions. Lookups are the one thing that leaves the house: the words of
+the question go to the service asked. `DOUGLAS_TOOLS=0` turns them off, and he
+then says he has no internet.
+
+**What he can see.** His own model reads only text, so pictures go through a
+second, small vision model (`llama-eyes`, `:8082`). `POST /say` takes an
+optional `"image"` (base64 JPEG, PNG, GIF or BMP); the pipeline has the vision
+model describe it with the question in mind, hands that to Douglas as what he
+saw, and marks the line `[picture]` in the transcript. The picture is kept for
+the rest of the conversation so that he can take a second look (the `look`
+tool) when a follow-up asks about a detail, and `read_page` on a picture's
+address looks at it the same way. Pictures never leave Douglas. With no
+vision model configured he refuses a picture and says why, and the phone page
+does not offer its camera button.
 ### DougVoice — Douglas's ears
 
 DougVoice is a Raspberry Pi Zero 2 W wearing a PiSugar Whisplay HAT (WM8960

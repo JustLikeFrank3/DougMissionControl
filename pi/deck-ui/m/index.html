@@ -70,8 +70,22 @@
       <div class="meters" id="dgl-meters"></div>
       <div class="log" id="dgl-log"></div>
       <!-- Typed turns join the same conversation as spoken ones; the reply
-           arrives in the log above, not in this box. -->
+           arrives in the log above, not in this box. The camera button is
+           this phone lending Douglas its eye: it is offered only when he has
+           a vision model, and the photo is shrunk here before it is sent. -->
+      <div class="shot" id="dgl-shot" hidden>
+        <img id="dgl-shot-img" alt="the photo about to be sent">
+        <span>PHOTO ATTACHED</span>
+        <button type="button" id="dgl-shot-x" aria-label="remove the photo">×</button>
+      </div>
       <form class="ask" id="dgl-ask">
+        <button type="button" class="cam" id="dgl-cam" aria-label="show Douglas a photo" hidden>
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none"
+               stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+            <path d="M3 8h3.4l1.5-2.5h8.2L17.6 8H21v11H3z"/><circle cx="12" cy="13.3" r="3.6"/>
+          </svg>
+        </button>
+        <input id="dgl-photo" type="file" accept="image/*" hidden>
         <input id="dgl-ask-text" type="text" enterkeyhint="send" autocomplete="off"
                maxlength="2000" placeholder="Ask Douglas…">
         <button type="submit" id="dgl-ask-go">SEND</button>

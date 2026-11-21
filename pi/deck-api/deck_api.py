@@ -15,7 +15,8 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/hook/greeting      Windows reports the greeting spoke (phase 6/7)
     GET  /api/douglas            Douglas's metrics, voice state and transcript
     POST /api/douglas/ptt        {"action":"start|stop|cancel"} push-to-talk
-    POST /api/douglas/say        {"text":"...","via":"deck|phone"} typed turn
+    POST /api/douglas/say        {"text":"...","via":"deck|phone"} typed turn;
+                                 "image":"<base64>" adds a picture to look at
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -176,6 +177,7 @@ VOICE_SAT_PORT = int(cfg("VOICE_SAT_PORT", "10700"))
 # the push-to-talk relay. Token-gated both ways — the transcript is private.
 DOUGLAS_AGENT_PORT = int(cfg("DOUGLAS_AGENT_PORT", "9111"))
 DOUGLAS_AGENT_TOKEN = cfg("DOUGLAS_AGENT_TOKEN", "")
+DOUGLAS_PICTURE_MAX = 11_000_000      # base64 characters: about 8 MB of picture
 # Which inputs to offer on a monitor that will NOT declare its own. Empty -
 # the default - means offer everything.
 #
@@ -1595,18 +1597,24 @@ def douglas_ptt(action: str) -> tuple[bool, str]:
     return bool(got.get("ok")), str(got.get("message") or "")
 
 
-def douglas_say(text: str, via: str) -> tuple[bool, str]:
-    """A typed turn for Douglas, from the panel or the phone. Answered
-    asynchronously: the reply arrives in /api/douglas's transcript."""
+def douglas_say(text: str, via: str, image: object = None) -> tuple[bool, str]:
+    """A typed turn for Douglas, from the panel or the phone, with or without
+    a picture (base64, as the phone page sends it). Answered asynchronously:
+    the reply arrives in /api/douglas's transcript."""
     text = " ".join(str(text or "").split())
-    if not text:
+    image = image if isinstance(image, str) else ""
+    if not text and not image:
         return False, "nothing to say"
+    if len(image) > DOUGLAS_PICTURE_MAX:
+        return False, "that picture is too big"
     if not DOUGLAS_AGENT_TOKEN:
         return False, "DOUGLAS_AGENT_TOKEN unset in boot.env"
     url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/say"
            f"?token={DOUGLAS_AGENT_TOKEN}")
-    got = _ws_json(url, {"text": text[:2000],
-                         "via": via if via in ("deck", "phone") else "deck"}, timeout=5)
+    payload = {"text": text[:2000], "via": via if via in ("deck", "phone") else "deck"}
+    if image:
+        payload["image"] = image
+    got = _ws_json(url, payload, timeout=20 if image else 5)
     if not isinstance(got, dict):
         return False, "douglas-agent did not answer"
     return bool(got.get("ok")), str(got.get("message") or "")
@@ -1787,7 +1795,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/douglas/say":
-            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"))
+            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"),
+                                  body.get("image"))
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/douglas/ptt":
