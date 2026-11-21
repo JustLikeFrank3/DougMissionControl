@@ -117,6 +117,14 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .turn .txt { padding: 8px 10px; background: #0f151e; border: 1px solid var(--ln);
              white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.ask { display: flex; gap: 8px; }
+.ask input { flex: 1; min-width: 0; padding: 12px; background: #0f151e; color: var(--fg);
+             border: 1px solid var(--ln); font: inherit; font-size: 16px; border-radius: 0; }
+.ask input:focus { outline: none; border-color: var(--acc); }
+.ask button { padding: 0 16px; background: #0f151e; border: 1px solid var(--acc);
+              color: var(--acc); letter-spacing: .12em; font-size: 13px; cursor: pointer; }
+.ask button:disabled, .ask input:disabled { opacity: .4; }
+
 /* Its colour is the pipeline's observed state, never the press. */
 .ptt {
   min-height: 112px; border: 2px solid var(--ln); background: #0f151e; cursor: pointer;

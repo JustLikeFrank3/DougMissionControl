@@ -1091,6 +1091,14 @@ html, body {
 .dgl-empty { margin: auto; color: var(--mut); font-size: 16px; text-align: center;
   max-width: 560px; line-height: 1.5; }
 
+.dgl-ask { display: flex; gap: 10px; flex: none; }
+.dgl-ask input { flex: 1; min-width: 0; padding: 12px 14px; font: inherit; font-size: 18px;
+  background: var(--pan); color: var(--fg); border: 1px solid var(--ln); }
+.dgl-ask input:focus { outline: none; border-color: var(--acc); }
+.dgl-ask button { padding: 0 22px; background: var(--pan); border: 1px solid var(--acc);
+  color: var(--acc); font: inherit; font-size: 15px; letter-spacing: .14em; cursor: pointer; }
+.dgl-ask button:disabled, .dgl-ask input:disabled { opacity: .4; }
+
 .dgl-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .dgl-m { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
 .dgl-m .k { font-size: 13px; letter-spacing: .14em; color: var(--mut); }

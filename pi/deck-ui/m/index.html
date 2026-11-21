@@ -69,6 +69,13 @@
       <div class="sub" id="dgl-model">—</div>
       <div class="meters" id="dgl-meters"></div>
       <div class="log" id="dgl-log"></div>
+      <!-- Typed turns join the same conversation as spoken ones; the reply
+           arrives in the log above, not in this box. -->
+      <form class="ask" id="dgl-ask">
+        <input id="dgl-ask-text" type="text" enterkeyhint="send" autocomplete="off"
+               maxlength="2000" placeholder="Ask Douglas…">
+        <button type="submit" id="dgl-ask-go">SEND</button>
+      </form>
       <button class="ptt" id="dgl-ptt" data-state="absent">
         <span>HOLD TO TALK</span><small id="dgl-ptt-s">—</small>
       </button>

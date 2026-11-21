@@ -8,6 +8,8 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
                              voice-pipeline state, the recent transcript
     POST /ptt?token=<t>      {"action":"start|stop|cancel","via":"deck"}
                              relayed to the voice pipeline's own PTT endpoint
+    POST /say?token=<t>      {"text":"...","via":"deck|phone","speak":false}
+                             a typed turn, relayed to the pipeline's /say
     GET  /health             200 "ok" — liveness, no token, no data
 
 Everything it reports is read at request time from where it already lives:
@@ -273,11 +275,26 @@ def relay_ptt(body: dict) -> tuple[int, dict]:
     action = str(body.get("action") or "")
     if action not in ("start", "stop", "cancel"):
         return 400, {"ok": False, "message": "action must be start, stop or cancel"}
-    if not VOICE_PTT_URL:
+    return _relay(VOICE_PTT_URL, {"action": action,
+                                  "via": str(body.get("via") or "deck")}, action)
+
+
+def relay_say(body: dict) -> tuple[int, dict]:
+    """A typed turn, relayed to the pipeline's /say beside its /ptt (same
+    token). The pipeline answers at once; the reply lands in the transcript."""
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return 400, {"ok": False, "message": "nothing to say"}
+    url = VOICE_PTT_URL.replace("/ptt", "/say", 1) if VOICE_PTT_URL else ""
+    return _relay(url, {"text": text[:2000], "via": str(body.get("via") or "deck"),
+                        "speak": bool(body.get("speak"))}, "thinking")
+
+
+def _relay(url: str, payload: dict, done: str) -> tuple[int, dict]:
+    if not url:
         return 200, {"ok": False, "message": "no voice pipeline installed on Douglas yet"}
     req = urllib.request.Request(
-        VOICE_PTT_URL, method="POST",
-        data=json.dumps({"action": action, "via": str(body.get("via") or "deck")}).encode(),
+        url, method="POST", data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=3) as r:
@@ -290,7 +307,7 @@ def relay_ptt(body: dict) -> tuple[int, dict]:
         return 200, {"ok": False, "message": str(why or "the voice pipeline refused")}
     except (urllib.error.URLError, OSError, ValueError):
         return 200, {"ok": False, "message": "the voice pipeline did not answer"}
-    return 200, {"ok": ok, "message": action if ok else "the voice pipeline refused"}
+    return 200, {"ok": ok, "message": done if ok else "the voice pipeline refused"}
 
 
 def status() -> dict:
@@ -333,16 +350,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        if path != "/ptt":
+        if path not in ("/ptt", "/say"):
             return self._send(404, {"error": "not found"})
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
         try:
-            n = min(int(self.headers.get("Content-Length") or 0), 4096)
+            n = min(int(self.headers.get("Content-Length") or 0), 16384)
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}
-        code, out = relay_ptt(body if isinstance(body, dict) else {})
+        relay = relay_say if path == "/say" else relay_ptt
+        code, out = relay(body if isinstance(body, dict) else {})
         return self._send(code, out)
 
 

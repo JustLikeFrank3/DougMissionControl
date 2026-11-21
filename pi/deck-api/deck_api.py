@@ -15,6 +15,7 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/hook/greeting      Windows reports the greeting spoke (phase 6/7)
     GET  /api/douglas            Douglas's metrics, voice state and transcript
     POST /api/douglas/ptt        {"action":"start|stop|cancel"} push-to-talk
+    POST /api/douglas/say        {"text":"...","via":"deck|phone"} typed turn
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -1594,6 +1595,23 @@ def douglas_ptt(action: str) -> tuple[bool, str]:
     return bool(got.get("ok")), str(got.get("message") or "")
 
 
+def douglas_say(text: str, via: str) -> tuple[bool, str]:
+    """A typed turn for Douglas, from the panel or the phone. Answered
+    asynchronously: the reply arrives in /api/douglas's transcript."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        return False, "nothing to say"
+    if not DOUGLAS_AGENT_TOKEN:
+        return False, "DOUGLAS_AGENT_TOKEN unset in boot.env"
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/say"
+           f"?token={DOUGLAS_AGENT_TOKEN}")
+    got = _ws_json(url, {"text": text[:2000],
+                         "via": via if via in ("deck", "phone") else "deck"}, timeout=5)
+    if not isinstance(got, dict):
+        return False, "douglas-agent did not answer"
+    return bool(got.get("ok")), str(got.get("message") or "")
+
+
 def fire_abort() -> tuple[bool, str]:
     killed = subprocess.run(
         ["pkill", "-f", ORCHESTRATOR],
@@ -1766,6 +1784,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/launch":
             ok, msg = fire_launch()
+            return self._json(200 if ok else 502, {"ok": ok, "message": msg})
+
+        if path == "/api/douglas/say":
+            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"))
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/douglas/ptt":

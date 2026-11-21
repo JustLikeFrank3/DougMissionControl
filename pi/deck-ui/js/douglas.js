@@ -19,7 +19,7 @@ import { $, rows, post, getJSON } from './ui.js';
 import { fmtAgo } from './format.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
-var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
+var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '', asking = false;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -95,6 +95,11 @@ function paint(d) {
     ['dougvoice', !agent ? '—' : voice.satellite ? 'connected' : 'not connected'],
     ['last heard', agent && voice.last_turn ? fmtAgo(voice.last_turn) : '—'],
   ]);
+  var canAsk = agent && vstate !== 'absent' && vstate !== 'thinking' && vstate !== 'listening';
+  $('dgl-ask-go').disabled = !canAsk || asking;
+  $('dgl-ask-text').placeholder = !agent ? 'Douglas is unreachable'
+    : vstate === 'absent' ? 'no voice pipeline on Douglas'
+    : vstate === 'thinking' ? 'Douglas is thinking…' : 'Ask Douglas…';
   if (!agent) $('dgl-note').textContent = d.why || 'douglas-agent did not answer';
   else if ($('dgl-note').dataset.sticky !== '1') $('dgl-note').textContent = '';
 
@@ -224,6 +229,22 @@ export function wireDouglas() {
       return r;
     });
   }
+
+  // Typed turns: the reply lands in the conversation, not in this box.
+  $('dgl-ask').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var box = $('dgl-ask-text');
+    var text = box.value.trim();
+    if (!text || asking) return;
+    asking = true;
+    $('dgl-ask-go').disabled = true;
+    post('/api/douglas/say', { text: text, via: 'deck' }).then(function (r) {
+      asking = false;
+      if (r && r.ok) { box.value = ''; tick(); }
+      else note(r ? (r.message || 'Douglas refused') : 'deck-api did not answer', true);
+      $('dgl-ask-go').disabled = false;
+    });
+  });
 
   // Pointer events with capture: this panel's Chromium delivers pointer
   // events, not Touch Events, and capture keeps a thumb that drifts off the

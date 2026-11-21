@@ -196,7 +196,7 @@ function paintEvents(evs) {
 
 var VOICE_SUB = { idle: 'READY', listening: 'LISTENING…', thinking: 'THINKING…',
                   speaking: 'SPEAKING…' };
-var pressed = false, lastDgl = null;
+var pressed = false, lastDgl = null, asking = false;
 
 function paintDouglasHead(dgl) {
   var m = dgl.model || {};
@@ -229,6 +229,12 @@ function paintDouglas(d) {
   ptt.disabled = vstate === 'absent' && !pressed;
   $('dgl-ptt-s').textContent = !agent ? 'NO AGENT'
     : vstate === 'absent' ? 'NO VOICE PIPELINE' : VOICE_SUB[vstate];
+  // Typing needs the agent and a pipeline that is not mid-turn.
+  var canAsk = agent && vstate !== 'absent' && vstate !== 'thinking' && vstate !== 'listening';
+  $('dgl-ask-go').disabled = !canAsk || asking;
+  $('dgl-ask-text').placeholder = !agent ? 'Douglas is unreachable'
+    : vstate === 'absent' ? 'no voice pipeline on Douglas'
+    : vstate === 'thinking' ? 'Douglas is thinking…' : 'Ask Douglas…';
   var note = $('dgl-note');
   if (note.dataset.sticky !== '1') {
     note.className = 'note';
@@ -265,7 +271,7 @@ function paintDouglas(d) {
   // The last few turns only: the full conversation is Douglas's chat page.
   var log = $('dgl-log');
   log.innerHTML = '';
-  (agent ? (d.transcript || []).slice(-4) : []).forEach(function (t) {
+  (agent ? (d.transcript || []).slice(-6) : []).forEach(function (t) {
     var me = t.who === 'user';
     var div = document.createElement('div');
     div.className = 'turn ' + (me ? 'user' : 'douglas');
@@ -277,6 +283,34 @@ function paintDouglas(d) {
     log.appendChild(div);
   });
 }
+
+function dglNote(msg) {
+  var note = $('dgl-note');
+  note.className = 'note bad';
+  note.textContent = msg;
+  note.dataset.sticky = '1';
+  setTimeout(function () { note.dataset.sticky = ''; }, 5000);
+}
+
+$('dgl-ask').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var box = $('dgl-ask-text');
+  var text = box.value.trim();
+  if (!text || asking) return;
+  asking = true;
+  $('dgl-ask-go').disabled = true;
+  post('/api/douglas/say', { text: text, via: 'phone' }).then(function (r) {
+    asking = false;
+    if (r && r.ok) {
+      box.value = '';
+      box.blur();                    // drop the keyboard so the reply is visible
+      tickDouglas();                 // shows our line now; 'thinking' speeds the poll
+    } else {
+      dglNote(r ? (r.message || 'Douglas refused') : 'deck-api did not answer');
+    }
+    $('dgl-ask-go').disabled = false;
+  });
+});
 
 function pttSend(action) {
   post('/api/douglas/ptt', { action: action }).then(function (r) {

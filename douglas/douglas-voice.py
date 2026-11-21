@@ -12,6 +12,10 @@ audio is ignored unless push-to-talk says to listen, so the only way into
 the model is a deliberate press — DougVoice's own button or the deck's.
 
     POST /ptt   {"action": "start|stop|cancel", "via": "voice|deck|chat"}
+    POST /say   {"text": "...", "via": "deck|phone", "speak": false}
+                a typed turn: same conversation and transcript as a spoken
+                one; answered asynchronously (the reply lands in the
+                transcript), and spoken on DougVoice only when asked to
                 start  begin keeping the satellite's audio (state listening)
                 stop   end it and run the turn (thinking → speaking → idle)
                 cancel drop whatever is in flight and go idle
@@ -66,13 +70,14 @@ SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
 HISTORY_TURNS = int(E("VOICE_HISTORY_TURNS", "6"))       # exchanges kept
 HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "300"))  # forget after quiet
 MAX_LISTEN_S = float(E("VOICE_MAX_LISTEN_S", "20"))
+MAX_SAY_CHARS = int(E("VOICE_MAX_SAY_CHARS", "2000"))   # one typed turn
 MIN_LISTEN_S = float(E("VOICE_MIN_LISTEN_S", "0.3"))
 HEARTBEAT_S = float(E("VOICE_HEARTBEAT_S", "5"))
 VOICE_STATE_FILE = E("VOICE_STATE_FILE", "/run/douglas/voice.json")
 TRANSCRIPT_FILE = E("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 
 STATES = ("idle", "listening", "thinking", "speaking")
-VIAS = ("voice", "chat", "deck")
+VIAS = ("voice", "chat", "deck", "phone")
 
 
 def log(msg: str) -> None:
@@ -135,7 +140,13 @@ class Transcript:
         self.path = path
 
     def append(self, who: str, text: str, via: str) -> dict | None:
-        text = " ".join(str(text).split())
+        if who == "user":
+            text = " ".join(str(text).split())   # what was said: one line
+        else:
+            # Douglas's answers keep their paragraphs: a typed answer is read
+            # on a screen. (JSON escapes the \n; still one physical line.)
+            lines = [" ".join(ln.split()) for ln in str(text).strip().splitlines()]
+            text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
         if not text:
             return None
         rec = {"ts": time.time(), "who": "user" if who == "user" else "douglas",
@@ -227,6 +238,14 @@ def speakable(text: str) -> str:
     text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)   # unterminated
     text = MARKUP.sub(lambda m: m.group(1) or "", text)
     return " ".join(text.split())
+
+
+def readable(text: str) -> str:
+    """What the model wrote, for a screen: reasoning blocks removed, the
+    words and line breaks kept."""
+    text = THINK.sub("", text)
+    text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)
+    return text.strip()
 
 
 def llm(messages: list[dict]) -> str:
@@ -410,6 +429,24 @@ class Pipeline:
                 return True, "cancelled"
         return False, "action must be start, stop or cancel"
 
+    def say(self, text: str, via: str = "deck", speak: bool = False) -> tuple[bool, str]:
+        """A typed turn. Answered on its own thread so the request that
+        carried it returns at once; the reply arrives in the transcript."""
+        text = " ".join(str(text or "").split())[:MAX_SAY_CHARS]
+        if not text:
+            return False, "nothing to say"
+        via = via if via in VIAS else "deck"
+        with self._lock:
+            if self.state in ("listening", "thinking"):
+                return False, f"Douglas is busy ({self.state})"
+            self._turn += 1                          # a typed turn ends any speech
+            self._played.set()
+            turn = self._turn
+            self.st.update(state="thinking")
+        threading.Thread(target=self.run_text, args=(text, via, turn,
+                         speak and self.linked()), daemon=True).start()
+        return True, "thinking"
+
     def audio(self, data: dict, payload: bytes | None) -> None:
         """A microphone chunk from the satellite. Kept only while listening."""
         if not payload:
@@ -471,24 +508,45 @@ class Pipeline:
         self.send("transcript", {"text": heard})
         if not heard or not self._current(turn):
             return
-        self.tr.append("user", heard, via)
+        reply = self._exchange(heard, via, turn, speakable)
+        if reply is not None:
+            self._speak(reply, turn)
 
+    def run_text(self, text: str, via: str, turn: int, speak: bool) -> None:
+        try:
+            reply = self._exchange(text, via, turn, readable)
+            if reply is not None and speak:
+                self._speak(speakable(reply), turn)
+        except Exception as e:                   # noqa: BLE001 — never wedge
+            log(f"typed turn failed: {e}")
+            self.tr.append("douglas", f"(I could not answer: {str(e)[:120]})", via)
+        finally:
+            with self._lock:
+                if self._current(turn) and self.state != "listening":
+                    self.st.update(state="idle")
+
+    def _exchange(self, said: str, via: str, turn: int, clean) -> str | None:
+        """One user line in, one Douglas line out, both in the transcript and
+        the shared memory. None when a newer turn has superseded this one."""
+        self.tr.append("user", said, via)
         if time.time() - self.last_exchange > HISTORY_IDLE_S:
             self.history = []
         msgs = ([{"role": "system", "content": SYSTEM_PROMPT}] + self.history
-                + [{"role": "user", "content": heard}])
-        reply = speakable(self.llm(msgs))
+                + [{"role": "user", "content": said}])
+        reply = clean(self.llm(msgs))
         if not self._current(turn):
-            return
+            return None
         if not reply:
             reply = "Sorry, I lost my train of thought."
-        self.history = (self.history + [{"role": "user", "content": heard},
+        self.history = (self.history + [{"role": "user", "content": said},
                                         {"role": "assistant", "content": reply}]
                         )[-2 * HISTORY_TURNS:]
         self.last_exchange = time.time()
         self.tr.append("douglas", reply, via)
         self.st.update(last_turn=time.time())
+        return reply
 
+    def _speak(self, reply: str, turn: int) -> None:
         pcm, src = self.tts(reply)
         with self._lock:
             if not self._current(turn):
@@ -536,17 +594,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         u = urlparse(self.path)
-        if u.path != "/ptt":
+        if u.path not in ("/ptt", "/say"):
             return self._send(404, {"error": "not found"})
         if PTT_TOKEN and (parse_qs(u.query).get("token") or [""])[0] != PTT_TOKEN:
             return self._send(403, {"error": "forbidden"})
         try:
-            n = min(int(self.headers.get("Content-Length") or 0), 4096)
+            n = min(int(self.headers.get("Content-Length") or 0), 16384)
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = None
         if not isinstance(body, dict):
             return self._send(400, {"ok": False, "message": "JSON object expected"})
+        assert PIPE is not None
+        if u.path == "/say":
+            ok, msg = PIPE.say(str(body.get("text") or ""),
+                               str(body.get("via") or "deck"), bool(body.get("speak")))
+            return self._send(200 if ok else 409,
+                              {"ok": ok, "message": msg, "state": PIPE.state})
         action = str(body.get("action") or "")
         if action not in ("start", "stop", "cancel"):
             return self._send(400, {"ok": False,

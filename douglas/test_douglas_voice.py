@@ -242,6 +242,43 @@ pipe.link(False)
 check("satellite drop while listening = idle", on_disk()["state"], "idle")
 check("and satellite false", on_disk()["satellite"], False)
 
+print("-- typed turns --")
+SAID = []
+
+
+def typed_llm(messages):
+    SAID.append(messages)
+    return "<think>short answer</think>Line one.\n\n**Two** lines."
+
+
+before = len(lines())
+tpipe = voice.Pipeline(st, voice.Transcript(transcript_file), send=sender,
+                       snd_format=lambda: (16000, 2, 1),
+                       stt=fake_stt, llm=typed_llm, tts=fake_tts)
+tpipe.history = [{"role": "user", "content": "earlier"},
+                 {"role": "assistant", "content": "spoken reply"}]
+tpipe.last_exchange = time.time()
+SENT.clear()
+check("blank refused", tpipe.say("   ", "phone"), (False, "nothing to say"))
+check("say accepted", tpipe.say("What's  the\nplan?", "phone"), (True, "thinking"))
+check("back to idle", until(lambda: on_disk()["state"] == "idle"), True)
+new = lines()[before:]
+check("transcript: typed user then douglas, via phone",
+      [(t["who"], t["via"]) for t in new], [("user", "phone"), ("douglas", "phone")])
+check("typed text whitespace-normalised", new[0]["text"], "What's the plan?")
+check("screen reply keeps words and lines, drops reasoning",
+      new[1]["text"], "Line one.\n\n**Two** lines.")
+check("shares the spoken conversation's memory",
+      [m["content"] for m in SAID[0][1:3]], ["earlier", "spoken reply"])
+check("not spoken unless asked", [e for e in SENT if e.startswith("audio")], [])
+tpipe.st.update(state="thinking")
+check("refused while thinking", tpipe.say("again", "deck")[0], False)
+tpipe.st.update(state="idle")
+check("unknown via falls back to deck", (tpipe.say("hi", "fax"), until(
+    lambda: on_disk()["state"] == "idle"), lines()[-1]["via"])[2], "deck")
+check("agent relays /say beside /ptt",
+      agent.relay_say({"text": ""})[0], 400)
+
 print("-- helpers --")
 check("speakable drops an unterminated think", voice.speakable("Hi.<think>hmm"), "Hi.")
 check("speakable keeps link text", voice.speakable("see [the docs](http://x)"), "see the docs")
