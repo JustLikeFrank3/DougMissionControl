@@ -82,11 +82,30 @@ SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
 # True things about this household, in the owner's words (one line, in
 # /etc/douglas/voice.env). They are the only local knowledge Douglas has.
 FACTS = E("DOUGLAS_FACTS", "")
+# Longer instructions live in files: every *.md / *.txt in this directory is
+# read, in name order, on every turn, so editing one needs no restart. This
+# is where who the owner is, their rules and any notes belong - on Douglas,
+# not in this repository.
+INSTR_DIR = E("DOUGLAS_INSTRUCTIONS_DIR", "/etc/douglas/instructions.d")
+INSTR_MAX_CHARS = int(E("DOUGLAS_INSTRUCTIONS_MAX_CHARS", "14000"))
+OWNER = E("DOUGLAS_OWNER", "the owner")
+# The owner's writing voice, fetched from their own MCP server (the
+# jobContext `stories` tool, action `tone_profile`) and refreshed on a timer.
+# The token can do more than that on the server; this code only ever makes
+# that one read. Without MCP_URL and MCP_TOKEN nothing is fetched.
+MCP_URL = E("MCP_URL", "")
+MCP_TOKEN = E("MCP_TOKEN", "")
+TONE_FILE = E("TONE_FILE", "/var/lib/douglas/tone.md")
+TONE_REFRESH_S = float(E("TONE_REFRESH_S", "21600"))
+TONE_SAMPLES = int(E("TONE_SAMPLES", "5"))
+TONE_MAX_CHARS = int(E("TONE_MAX_CHARS", "3200"))
 STYLE = {
     True: ("Your reply will be read aloud through a small speaker: one to "
            "three short spoken sentences, with no markdown, lists, code or emoji."),
     False: ("Your reply will be read on a screen: plain text, a few short "
-            "sentences unless more is asked for, with no markdown or emoji."),
+            "sentences unless more is asked for, with no markdown, emoji or "
+            "em dashes. If you are asked to draft something, use only the "
+            "facts you were given: add no details to make it read better."),
 }
 SOURCES = {
     "voice": "DougVoice, the microphone-and-speaker puck",
@@ -264,16 +283,188 @@ def speakable(text: str) -> str:
     text = THINK.sub("", text)
     text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)   # unterminated
     text = MARKUP.sub(lambda m: m.group(1) or "", text)
-    return " ".join(text.split())
+    return " ".join(no_dashes(text).split())
+
+
+def read_instructions() -> str:
+    """Every instruction file, in name order, as one text. Read each turn:
+    they are a few kilobytes, and an edit should apply to the next reply."""
+    try:
+        names = sorted(n for n in os.listdir(INSTR_DIR)
+                       if n.endswith((".md", ".txt")) and not n.startswith("."))
+    except OSError:
+        return ""
+    out = []
+    for n in names:
+        try:
+            with open(os.path.join(INSTR_DIR, n), encoding="utf-8") as f:
+                t = f.read().strip()
+        except OSError:
+            continue
+        if t:
+            out.append(t)
+    text = "\n\n".join(out)
+    if len(text) > INSTR_MAX_CHARS:
+        log(f"instructions are {len(text)} chars; only the first {INSTR_MAX_CHARS} are used")
+        text = text[:INSTR_MAX_CHARS]
+    return text
+
+
+def mcp_call(tool: str, arguments: dict, timeout: float = 60) -> str:
+    """One tools/call against an MCP server over streamable HTTP, returning
+    the text of the result. Tries a plain stateless call first; a server that
+    insists on a session gets initialize + the call."""
+    def post(payload: dict, session: str | None = None):
+        h = {"Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream",
+             "Authorization": "Bearer " + MCP_TOKEN}
+        if session:
+            h["Mcp-Session-Id"] = session
+        req = urllib.request.Request(MCP_URL, data=json.dumps(payload).encode(), headers=h)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.headers.get("Mcp-Session-Id"), r.read(8_000_000).decode("utf-8", "replace")
+
+    def message(body: str) -> dict:
+        data = [ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")]
+        return json.loads(data[-1] if data else body)
+
+    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}}
+    try:
+        _, body = post(call)
+    except urllib.error.HTTPError as e:
+        if e.code not in (400, 404):
+            raise
+        sid, _ = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-03-26", "capabilities": {},
+            "clientInfo": {"name": "douglas-voice", "version": "1"}}})
+        try:
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
+        _, body = post(call, sid)
+    msg = message(body)
+    if "error" in msg:
+        raise RuntimeError(str(msg["error"])[:200])
+    res = msg.get("result") or {}
+    if res.get("isError"):
+        raise RuntimeError("the tool reported an error")
+    return "".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict))
+
+
+SAMPLE_HEAD = re.compile(r"^── Sample #?(\S+) \| (.+?)(?:\s+──)?\s*$", re.M)
+
+
+def tone_samples(text: str) -> list[tuple[str, str, str]]:
+    """(id, source, body) for each sample in a tone_profile dump."""
+    heads = list(SAMPLE_HEAD.finditer(text))
+    out = []
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        lines = text[m.end():end].strip().splitlines()
+        while lines and re.match(r"^(Logged|Context|Subject):", lines[0]):
+            lines.pop(0)
+        lines = [ln for ln in lines if not ln.startswith("More samples available")]
+        body = "\n".join(" ".join(ln.split()) for ln in lines).strip()
+        out.append((m.group(1), m.group(2).strip(), re.sub(r"\n{3,}", "\n\n", body)))
+    return out
+
+
+def pick_tone(text: str, n: int = 0, cap: int = 0) -> list[tuple[str, str]]:
+    """A few recent, distinct samples that fit the budget. Some servers
+    return every sample regardless of the limit asked for, oldest first, so
+    the choice is made here: highest id first, duplicates and scraps skipped."""
+    n, cap = n or TONE_SAMPLES, cap or TONE_MAX_CHARS
+
+    def newest_first(s):
+        try:
+            return -int(s[0])
+        except ValueError:
+            return 0
+
+    chosen, seen, kinds, total = [], set(), set(), 0
+    ordered = sorted(tone_samples(text), key=newest_first)
+    # Two passes: first one sample per kind of writing (a post, a cold
+    # message, a thank-you read differently), then fill with whatever is left.
+    for distinct in (True, False):
+        for _sid, source, body in ordered:
+            if len(chosen) >= n:
+                return chosen
+            kind = re.split(r"[_ ]", source, maxsplit=1)[0]
+            if len(body) < 120 or (distinct and kind in kinds):
+                continue
+            if len(body) > 1100:
+                body = body[:1100].rsplit(" ", 1)[0] + " ..."
+            sig = body[:80]
+            if sig in seen or total + len(body) > cap:
+                continue
+            seen.add(sig)
+            kinds.add(kind)
+            chosen.append((source, body))
+            total += len(body)
+    return chosen
+
+
+def refresh_tone() -> bool:
+    """Fetch the tone profile and cache the chosen samples. On any failure
+    the previous cache stays: yesterday's voice beats none."""
+    try:
+        picked = pick_tone(mcp_call("stories", {"action": "tone_profile", "limit": 40}))
+    except (urllib.error.URLError, OSError, ValueError, RuntimeError) as e:
+        log(f"tone profile not refreshed: {e}")
+        return False
+    if not picked:
+        log("tone profile not refreshed: no usable samples in the answer")
+        return False
+    text = "\n\n".join(f"[{source}]\n{body}" for source, body in picked)
+    tmp = f"{TONE_FILE}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(TONE_FILE) or ".", exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+        os.replace(tmp, TONE_FILE)
+    except OSError as e:
+        log(f"cannot write {TONE_FILE}: {e}")
+        return False
+    log(f"tone profile refreshed: {len(picked)} samples, {len(text)} chars")
+    return True
+
+
+def read_tone() -> str:
+    try:
+        with open(TONE_FILE, encoding="utf-8") as f:
+            return f.read().strip()[:TONE_MAX_CHARS + 400]
+    except OSError:
+        return ""
+
+
+def tone_loop() -> None:
+    while True:
+        ok = refresh_tone()
+        time.sleep(TONE_REFRESH_S if ok else min(600.0, TONE_REFRESH_S))
 
 
 def system_prompt(via: str, spoken: bool) -> str:
     """The instructions for one turn: who Douglas is, what he has been told
-    is true, the time and where the message came from - the only facts about
-    the present he has - and how the reply will be delivered."""
+    - instruction files, facts, the owner's writing voice - then the time and
+    where the message came from, the only facts about the present he has,
+    and how the reply will be delivered. The parts that change every minute
+    come last, so the model server can reuse its cache of everything before."""
     parts = [SYSTEM_PROMPT]
+    extra = read_instructions()
+    if extra:
+        parts.append(extra)
     if FACTS:
         parts.append("You have been told these things are true: " + FACTS)
+    tone = read_tone()
+    if tone:
+        parts.append(
+            f"How {OWNER} writes. These are samples of {OWNER}'s own messages and "
+            f"posts, from the tone profile on {OWNER}'s MCP server. Talk to {OWNER} "
+            "in the same plain, direct register, and when asked to draft something "
+            f"in {OWNER}'s voice, write the way these read. Never quote them back "
+            "or mention the people in them unless asked.\n\n" + tone)
     parts.append(time.strftime("It is %A %d %B %Y, %H:%M local time. ")
                  + "This message was sent from "
                  + SOURCES.get(via, "an unknown device") + ".")
@@ -281,12 +472,20 @@ def system_prompt(via: str, spoken: bool) -> str:
     return "\n\n".join(parts)
 
 
+def no_dashes(text: str) -> str:
+    """Em and en dashes out, whatever the model was told: a range of numbers
+    keeps a hyphen, anything else becomes a comma. Asking a model not to use
+    them works most of the time; this works every time."""
+    text = re.sub(r"(?<=\d)\s*[\u2013\u2014]\s*(?=\d)", "-", text)
+    return re.sub(r"\s*[\u2013\u2014]\s*", ", ", text)
+
+
 def readable(text: str) -> str:
     """What the model wrote, for a screen: reasoning blocks removed, the
     words and line breaks kept."""
     text = THINK.sub("", text)
     text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)
-    return text.strip()
+    return no_dashes(text).strip()
 
 
 def llm(messages: list[dict]) -> str:
@@ -679,6 +878,8 @@ def main() -> None:
             state.heartbeat()
 
     threading.Thread(target=beat, daemon=True).start()
+    if MCP_URL and MCP_TOKEN:
+        threading.Thread(target=tone_loop, daemon=True).start()
     threading.Thread(target=sat.run_forever, daemon=True).start()
     srv = ThreadingHTTPServer((PTT_HOST, PTT_PORT), Handler)
     log(f"PTT on {PTT_HOST}:{PTT_PORT}, satellite {SAT_HOST}:{SAT_PORT}, "

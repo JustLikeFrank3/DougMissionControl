@@ -293,6 +293,91 @@ check("unknown via falls back to deck", (tpipe.say("hi", "fax"), until(
 check("agent relays /say beside /ptt",
       agent.relay_say({"text": ""})[0], 400)
 
+print("-- instruction files and the tone profile --")
+idir = os.path.join(tmp, "instructions.d"); os.makedirs(idir)
+with open(os.path.join(idir, "20-rules.md"), "w") as f:
+    f.write("Never use em dashes.\n")
+with open(os.path.join(idir, "10-owner.md"), "w") as f:
+    f.write("The owner builds guitars.\n")
+with open(os.path.join(idir, "notes.bak"), "w") as f:
+    f.write("IGNORED\n")
+voice.INSTR_DIR = idir
+sp = voice.system_prompt("deck", False)
+check("instruction files are read in name order, other files ignored",
+      (sp.index("builds guitars") < sp.index("Never use em dashes"), "IGNORED" in sp), (True, False))
+check("the parts that change come after the instructions",
+      sp.index("Never use em dashes") < sp.index("local time"), True)
+voice.INSTR_MAX_CHARS = 10
+check("oversized instructions are cut, not fatal", "builds gui" not in voice.read_instructions(), True)
+voice.INSTR_MAX_CHARS = 14000
+voice.INSTR_DIR = os.path.join(tmp, "missing")
+check("no instructions directory is fine", voice.read_instructions(), "")
+
+DUMP = "═══ TONE PROFILE (5 samples) ═══\n" + "".join(
+    f"\n── Sample #{i} | {src} ──\n{meta}{body}\n" for i, src, meta, body in [
+        (1, "thank-you", "", "Old sample. " + "It goes on for a while so that it counts. " * 5),
+        (2, "linkedin", "Logged: 2026-01-01\nContext: a post\n", "Newer post. " + "Plain words, short sentences... like this. " * 5),
+        (3, "linkedin", "", "Newer post. " + "Plain words, short sentences... like this. " * 5),   # duplicate of #2
+        (4, "outreach_x", "Subject: hi\n", "ok"),                                                  # a scrap
+        (5, "outreach_y", "", "Newest note. " + "Direct, a bit dry, no filler at all in it. " * 40),  # long: cut
+    ]) + "\nMore samples available: use offset=5\n"
+MCP = {"mode": "stateless", "auth": [], "calls": []}
+
+
+class FakeMcp(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):  # noqa: N802
+        req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        MCP["auth"].append(self.headers.get("Authorization"))
+        MCP["calls"].append((req.get("method"), self.headers.get("Mcp-Session-Id")))
+        if MCP["mode"] == "down":
+            self.send_response(500); self.end_headers(); return
+        if MCP["mode"] == "session" and req.get("method") == "tools/call" and not self.headers.get("Mcp-Session-Id"):
+            self.send_response(400); self.end_headers(); return
+        if req.get("method") == "notifications/initialized":
+            self.send_response(202); self.end_headers(); return
+        if req.get("method") == "initialize":
+            res = {"protocolVersion": "2025-03-26", "serverInfo": {"name": "fake"}}
+        else:
+            res = {"content": [{"type": "text", "text": DUMP}], "isError": False}
+        body = ("event: message\ndata: " + json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": res}) + "\n\n").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        if req.get("method") == "initialize":
+            self.send_header("Mcp-Session-Id", "s-1")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+
+
+ms = HTTPServer(("127.0.0.1", 0), FakeMcp)
+threading.Thread(target=ms.serve_forever, daemon=True).start()
+voice.MCP_URL = f"http://127.0.0.1:{ms.server_address[1]}/mcp"; voice.MCP_TOKEN = "k3y"
+voice.TONE_FILE = os.path.join(tmp, "tone.md"); voice.TONE_MAX_CHARS = 1500; voice.TONE_SAMPLES = 3
+check("refresh succeeds", voice.refresh_tone(), True)
+check("sent the bearer token", MCP["auth"][-1], "Bearer k3y")
+tone = voice.read_tone()
+check("newest first, the duplicate and the scrap dropped",
+      [ln for ln in tone.splitlines() if ln.startswith("[")], ["[outreach_y]", "[linkedin]"])
+check("metadata lines and the paging footer are not samples",
+      any(w in tone for w in ("Logged:", "Context:", "Subject:", "More samples")), False)
+check("a long sample is cut and the budget is kept", ("..." in tone, len(tone) <= 1500 + 60), (True, True))
+check("cache file is private", oct(os.stat(voice.TONE_FILE).st_mode & 0o777), "0o600")
+voice.OWNER = "Sam"
+sp = voice.system_prompt("phone", False)
+check("the prompt carries the voice, named, before the time line",
+      ("How Sam writes" in sp, sp.index("Newest note.") < sp.index("local time")), (True, True))
+voice.OWNER = "the owner"
+MCP["mode"] = "session"; MCP["calls"].clear()
+check("a server that wants a session gets one", voice.refresh_tone(), True)
+check("initialize, initialized, then the call with the session id",
+      MCP["calls"][1:], [("initialize", None), ("notifications/initialized", "s-1"), ("tools/call", "s-1")])
+MCP["mode"] = "down"
+check("a failed refresh keeps the old cache", (voice.refresh_tone(), voice.read_tone() == tone), (False, True))
+ms.shutdown()
+voice.MCP_URL = voice.MCP_TOKEN = ""; voice.TONE_FILE = os.path.join(tmp, "none.md")
+
 print("-- helpers --")
 check("speakable drops an unterminated think", voice.speakable("Hi.<think>hmm"), "Hi.")
 check("speakable keeps link text", voice.speakable("see [the docs](http://x)"), "see the docs")
@@ -302,6 +387,11 @@ check("resample 22050 → 16000 keeps duration",
 check("mono → stereo doubles", len(voice.convert(mono, (22050, 2, 1), (22050, 2, 2))),
       len(mono) * 2)
 check("same format untouched", voice.convert(mono, (22050, 2, 1), (22050, 2, 1)), mono)
+
+check("em dashes become commas, number ranges keep a hyphen",
+      voice.readable("It works\u2014finally. Open 9\u20135, or 2022 \u2013 2025 \u2014 roughly."),
+      "It works, finally. Open 9-5, or 2022-2025, roughly.")
+check("spoken text loses them too", voice.speakable("Done \u2014 **all** of it."), "Done, all of it.")
 
 print("-- wyoming framing --")
 a, b = socket.socketpair()
