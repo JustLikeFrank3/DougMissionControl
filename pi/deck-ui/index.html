@@ -535,6 +535,10 @@
         <div class="dgl-convo">
           <div class="lbl">CONVERSATION</div>
           <div class="dgl-log" id="dgl-log"></div>
+          <!-- The panel has no keyboard, so asking opens one of its own. -->
+          <button class="dgl-askbar" id="dgl-askbar">
+            <span>ASK DOUGLAS</span><small id="dgl-askbar-s">tap to type</small>
+          </button>
         </div>
 
         <div class="dgl-sys">
@@ -542,6 +546,9 @@
           <div class="dgl-meters" id="dgl-meters"></div>
           <div class="h-rows" id="dgl-sys-rows"></div>
         </div>
+
+        <!-- On-screen keyboard (js/keyboard.js), over the whole surface. -->
+        <div class="kbd" id="kbd" hidden></div>
       </section>
 
       <section class="surface body-sim" data-name="sim">

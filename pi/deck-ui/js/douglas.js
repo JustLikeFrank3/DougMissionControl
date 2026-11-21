@@ -16,6 +16,7 @@
    0 %, because an idle Douglas and a missing one are different facts. */
 
 import { $, rows, post, getJSON } from './ui.js';
+import { openKeyboard, closeKeyboard, keyboardOpen } from './keyboard.js';
 import { fmtAgo } from './format.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
@@ -49,6 +50,7 @@ export function paintDouglasTile(dgl) {
 /* ── surface poll ─────────────────────────────────────────────────────── */
 
 export function douglasPoll(on) {
+  if (!on && keyboardOpen()) closeKeyboard();     // leaving the surface
   var want = !on ? 0 : pressed || isBusy(last) ? POLL_FAST_MS : POLL_MS;
   if (want === timerMs) return;
   if (timer) { clearInterval(timer); timer = null; }
@@ -95,6 +97,12 @@ function paint(d) {
     ['dougvoice', !agent ? '—' : voice.satellite ? 'connected' : 'not connected'],
     ['last heard', agent && voice.last_turn ? fmtAgo(voice.last_turn) : '—'],
   ]);
+  // Asking needs the agent and a pipeline that is not mid-turn.
+  var canAsk = agent && vstate !== 'absent' && vstate !== 'thinking' && vstate !== 'listening';
+  $('dgl-askbar').disabled = !canAsk;
+  $('dgl-askbar-s').textContent = !agent ? 'Douglas is unreachable'
+    : vstate === 'absent' ? 'no voice pipeline on Douglas'
+    : vstate === 'thinking' ? 'Douglas is thinking…' : 'tap to type';
   if (!agent) $('dgl-note').textContent = d.why || 'douglas-agent did not answer';
   else if ($('dgl-note').dataset.sticky !== '1') $('dgl-note').textContent = '';
 
@@ -224,6 +232,18 @@ export function wireDouglas() {
       return r;
     });
   }
+
+  // The panel has no keyboard: the ASK bar opens one. The reply lands in
+  // the conversation like every reply; the keyboard only carries the words.
+  $('dgl-askbar').addEventListener('click', function () {
+    if ($('dgl-askbar').disabled) return;
+    openKeyboard('ASK DOUGLAS', function (text) {
+      return post('/api/douglas/say', { text: text, via: 'deck' }).then(function (r) {
+        if (r && r.ok) { tick(); return null; }
+        return r ? (r.message || 'Douglas refused') : 'deck-api did not answer';
+      });
+    });
+  });
 
   // Pointer events with capture: this panel's Chromium delivers pointer
   // events, not Touch Events, and capture keeps a thumb that drifts off the

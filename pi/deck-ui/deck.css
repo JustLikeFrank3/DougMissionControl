@@ -1091,6 +1091,46 @@ html, body {
 .dgl-empty { margin: auto; color: var(--mut); font-size: 16px; text-align: center;
   max-width: 560px; line-height: 1.5; }
 
+/* ASK bar: a big tap target that opens the on-screen keyboard. */
+.dgl-askbar { flex: none; display: flex; align-items: baseline; justify-content: space-between;
+  padding: 16px 20px; background: var(--pan); border: 1px solid var(--acc); color: var(--acc);
+  font-family: inherit; cursor: pointer; }
+.dgl-askbar span { font-size: 18px; letter-spacing: .18em; }
+.dgl-askbar small { font-size: 13px; letter-spacing: .1em; color: var(--mut); }
+.dgl-askbar:disabled { border-color: var(--ln); color: var(--mut); opacity: .55; cursor: default; }
+
+/* The keyboard covers the DOUGLAS surface: what you are typing on top,
+   keys centred below at a size a thumb can hit at arm's length. */
+.kbd { position: absolute; inset: 0; z-index: 5; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 14px 40px 16px; }
+.kbd-head { width: 1640px; display: flex; justify-content: space-between; align-items: baseline; }
+.kbd-title { font-size: 15px; letter-spacing: .2em; color: var(--acc); }
+.kbd-hint { font-size: 14px; color: var(--mut); }
+.kbd-hint.bad { color: var(--rd); }
+.kbd-text { width: 1640px; height: 72px; padding: 0 18px; display: flex; align-items: center;
+  justify-content: flex-end; overflow: hidden; white-space: pre; font-size: 28px;
+  background: var(--pan); border: 1px solid var(--ln); }
+.kbd-text::after { content: ""; width: 3px; height: 34px; margin-left: 2px; background: var(--acc);
+  animation: kbd-caret 1s steps(1) infinite; }
+.kbd-text.empty::before { content: "type your question for Douglas"; color: var(--mut);
+  margin-right: auto; }
+@keyframes kbd-caret { 50% { opacity: 0; } }
+.kbd-keys { display: flex; flex-direction: column; gap: 9px; }
+.kbd-row { display: flex; justify-content: center; gap: 9px; }
+.kbd-key { width: 140px; height: 80px; background: var(--pan); border: 1px solid var(--ln);
+  color: var(--fg); font-family: inherit; font-size: 28px; cursor: pointer;
+  touch-action: none; user-select: none; }
+.kbd-key.tapped { background: #22142a; border-color: var(--acc); }
+.kbd-bksp, .kbd-shift { color: var(--cy); }
+.kbd-shift.on { background: #10303a; border-color: var(--cy); }
+.kbd-space { width: 900px; font-size: 18px; letter-spacing: .2em; color: var(--mut); }
+.kbd-close { width: 300px; font-size: 18px; letter-spacing: .18em; color: var(--mut); }
+.kbd-send { width: 300px; font-size: 20px; letter-spacing: .2em; color: var(--acc);
+  border-color: var(--acc); }
+.kbd-send:disabled { opacity: .35; border-color: var(--ln); }
+@media (prefers-reduced-motion: reduce) { .kbd-text::after { animation: none; } }
+
 .dgl-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .dgl-m { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
 .dgl-m .k { font-size: 13px; letter-spacing: .14em; color: var(--mut); }
