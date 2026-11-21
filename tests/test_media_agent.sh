@@ -358,6 +358,51 @@ check("audio() answers the sim agent's shape",
       sorted(snap), ["active", "bands", "peak", "reason"])
 check("and 64 bands even before capture starts", len(snap["bands"]), 64)
 
+# ── speech: /speak plays PCM on the default output, and says when it cannot ──
+import os, stat, subprocess, tempfile
+stub = tempfile.mkdtemp()
+def tool(name, body):
+    path = os.path.join(stub, name)
+    with open(path, "w") as f:
+        f.write("#!/bin/sh\n" + body + "\n")
+    os.chmod(path, 0o755)
+got = os.path.join(stub, "played.raw")
+tool("pactl", 'case "$1" in get-default-sink) cat "%s/sink";; get-sink-mute) cat "%s/mute";; esac' % (stub, stub))
+tool("paplay", 'echo "$@" > "%s/args"; cat > "%s"' % (stub, got))
+os.environ["PATH"] = stub + os.pathsep + os.environ["PATH"]
+open(os.path.join(stub, "sink"), "w").write("fake_sink\n")
+open(os.path.join(stub, "mute"), "w").write("Mute: no\n")
+check("a sound server with an unmuted output is available",
+      ma.speak_status(), {"available": True, "sink": "fake_sink"})
+pcm = bytes(range(256)) * 172                      # ~1 s of 22.05 kHz mono
+res = ma.speak_play(pcm, 22050, 1)
+check("speech is played to the end", (res["played"], res["seconds"]), (True, 1.0))
+check("exactly the bytes sent reach the player", open(got, "rb").read() == pcm, True)
+check("with the format it was told", "--rate=22050 --channels=1" in open(os.path.join(stub, "args")).read(), True)
+open(os.path.join(stub, "mute"), "w").write("Mute: yes\n")
+check("a muted output is not available, and says why",
+      ma.speak_play(pcm, 22050, 1), {"played": False, "reason": "the default output is muted"})
+open(os.path.join(stub, "sink"), "w").write("")
+check("no sound server is not available", ma.speak_status()["available"], False)
+open(os.path.join(stub, "sink"), "w").write("fake_sink\n")
+open(os.path.join(stub, "mute"), "w").write("Mute: no\n")
+tool("paplay", "exec sleep 30")                    # an utterance that will not end by itself
+import threading as _th
+out = {}
+t = _th.Thread(target=lambda: out.update(ma.speak_play(b"\x00" * 4096, 22050, 1)))
+t.start()
+for _ in range(100):
+    if ma._speak_proc is not None:
+        break
+    time.sleep(0.02)
+check("stop cuts a running utterance", ma.speak_stop(), {"stopped": True})
+t.join(5)
+check("and the play call reports it was stopped", (out.get("played"), out.get("stopped")), (False, True))
+check("stop with nothing playing is a no-op", ma.speak_stop(), {"stopped": False})
+check("tailnet and LAN clients are allowed, the internet is not",
+      [ma.is_lan(a) for a in ("192.168.68.61", "100.64.196.84", "127.0.0.1", "8.8.8.8", "nonsense")],
+      [True, True, True, False, False])
+
 if failures:
     print("FAIL: media-agent ddcutil parsing", file=sys.stderr)
     for f in failures:

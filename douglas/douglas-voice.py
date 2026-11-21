@@ -45,6 +45,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -69,16 +70,25 @@ LLM_TIMEOUT_S = float(E("LLM_TIMEOUT_S", "120"))
 # no instruction to admit it, inventing an answer is what a language model does.
 SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
     "You are Douglas, an AI assistant that runs on a computer in this home. "
-    "All you know about the present is what this message states and what "
-    "has been said in this conversation. You have no eyes, sensors, "
-    "calendar or internet, you cannot see or control any device, and you "
-    "remember nothing from before this conversation. Never invent facts "
-    "about the house, the people or animals in it, where anyone is, or "
-    "what is happening. If you do not know, say so in a few words and, "
-    "when it helps, say what you would need in order to know. "
-    "Talk like a capable colleague with a dry sense of humour, not a help "
-    "desk: no apologies, no flattery, no offers of further help, and do "
-    "not repeat the question back."))
+    "You are quick, warm and wry: good company, not a help desk. "
+    "People talk to you in two ways, and they get different handling. "
+    "Banter: jokes, sarcasm, teasing and rhetorical questions are not "
+    "requests for information. Answer in kind, briefly, with some wit of "
+    "your own. Never explain the joke, take it literally, or ask what was "
+    "meant. "
+    "Real questions: general knowledge (science, history, geography, "
+    "language, code, how things work) you answer from what you know, as "
+    "any well-read person would. What you lack is anything live or local. "
+    "You have no eyes, sensors, calendar or internet, you cannot see or "
+    "control any device, and you remember nothing from before this "
+    "conversation. So about the present moment, this home and whoever is "
+    "in it, you know only what this message states and what has been said "
+    "in this conversation. Never invent facts about the house, the people "
+    "or animals in it, where anyone is, or what is happening. If you do "
+    "not know, say so in a few words, lightly, and if it helps say what "
+    "you would need in order to know. "
+    "Either way: no apologies, no flattery, do not repeat the question "
+    "back, and never end by offering more help or asking what is next."))
 # True things about this household, in the owner's words (one line, in
 # /etc/douglas/voice.env). They are the only local knowledge Douglas has.
 FACTS = E("DOUGLAS_FACTS", "")
@@ -95,6 +105,14 @@ OWNER = E("DOUGLAS_OWNER", "the owner")
 # that one read. Without MCP_URL and MCP_TOKEN nothing is fetched.
 MCP_URL = E("MCP_URL", "")
 MCP_TOKEN = E("MCP_TOKEN", "")
+# Where to speak. Douglas's own speaker is the satellite's 1 W driver. When
+# SPEAKER_URL names a machine with real speakers (the workstation's media
+# agent: http://host:9110/speak?token=...) and that machine says it can play
+# sound right now, the reply plays there instead; otherwise the satellite.
+# The URL carries a token, so it is never logged.
+SPEAKER_URL = E("SPEAKER_URL", "")
+SPEAKER_PROBE_S = float(E("SPEAKER_PROBE_S", "1.5"))
+SPEAKER_RETRY_S = float(E("SPEAKER_RETRY_S", "20"))
 TONE_FILE = E("TONE_FILE", "/var/lib/douglas/tone.md")
 TONE_REFRESH_S = float(E("TONE_REFRESH_S", "21600"))
 TONE_SAMPLES = int(E("TONE_SAMPLES", "5"))
@@ -439,10 +457,74 @@ def read_tone() -> str:
         return ""
 
 
+def warm() -> None:
+    """Have the model server read the instructions once, so that the first
+    real turn does not pay for them - a quarter of a minute on a big model.
+    The server keeps what it has read; only the last lines change per turn."""
+    body = json.dumps({"model": LLM_MODEL, "max_tokens": 1, "stream": False, "messages": [
+        {"role": "system", "content": system_prompt("voice", True)},
+        {"role": "user", "content": "."}]}).encode()
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            f"{LLM_URL}/v1/chat/completions", data=body,
+            headers={"Content-Type": "application/json"}), timeout=LLM_TIMEOUT_S).close()
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log(f"warm-up skipped: {e}")
+
+
 def tone_loop() -> None:
     while True:
         ok = refresh_tone()
+        warm()                            # the instructions may have changed
         time.sleep(TONE_REFRESH_S if ok else min(600.0, TONE_REFRESH_S))
+
+
+class Speaker:
+    """A machine with real speakers that plays Douglas's voice on request."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self._down_until = 0.0
+
+    def _u(self, tail: str = "", **params) -> str:
+        u = urllib.parse.urlsplit(self.url)
+        q = urllib.parse.parse_qsl(u.query) + [(k, str(v)) for k, v in params.items()]
+        return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path + tail,
+                                        urllib.parse.urlencode(q), ""))
+
+    def ready(self) -> bool:
+        """Is it up, with sound, right now? A no is remembered for a few
+        seconds so a machine that is off costs one short wait, not one per
+        sentence."""
+        if time.time() < self._down_until:
+            return False
+        try:
+            with urllib.request.urlopen(self._u(), timeout=SPEAKER_PROBE_S) as r:
+                ok = bool(json.loads(r.read(4096)).get("available"))
+        except (urllib.error.URLError, OSError, ValueError):
+            ok = False
+        if not ok:
+            self._down_until = time.time() + SPEAKER_RETRY_S
+        return ok
+
+    def play(self, pcm: bytes, fmt: tuple[int, int, int]) -> bool:
+        """Play and wait for the end. False if it did not play to the end."""
+        seconds = len(pcm) / max(fmt[0] * fmt[1] * fmt[2], 1)
+        req = urllib.request.Request(
+            self._u(rate=fmt[0], width=fmt[1], channels=fmt[2]), data=pcm,
+            headers={"Content-Type": "application/octet-stream"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=seconds + 15) as r:
+                return bool(json.loads(r.read(4096)).get("played"))
+        except (urllib.error.URLError, OSError, ValueError):
+            return False
+
+    def stop(self) -> None:
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                self._u("/stop"), data=b"", method="POST"), timeout=3).close()
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
 
 
 def system_prompt(via: str, spoken: bool) -> str:
@@ -467,7 +549,9 @@ def system_prompt(via: str, spoken: bool) -> str:
             "or mention the people in them unless asked.\n\n" + tone)
     parts.append(time.strftime("It is %A %d %B %Y, %H:%M local time. ")
                  + "This message was sent from "
-                 + SOURCES.get(via, "an unknown device") + ".")
+                 + SOURCES.get(via, "an unknown device")
+                 + ". That device is the only thing you know about where the "
+                   "person is right now.")
     parts.append(STYLE[bool(spoken)])
     return "\n\n".join(parts)
 
@@ -621,9 +705,11 @@ class Pipeline:
 
     def __init__(self, state: StateFile, transcript: Transcript, *, send,
                  snd_format=lambda: (22050, 2, 1), stt=stt, llm=llm, tts=tts,
-                 linked=lambda: True) -> None:
+                 linked=lambda: True, speaker=None) -> None:
         self.st, self.tr = state, transcript
         self.send, self.snd_format, self.linked = send, snd_format, linked
+        self.speaker = speaker          # real speakers elsewhere, when they are up
+        self._remote = False            # an utterance is playing there now
         self.stt, self.llm, self.tts = stt, llm, tts
         self.history: list[dict] = []
         self.last_exchange = 0.0
@@ -651,6 +737,7 @@ class Pipeline:
                     return False, "Douglas is still thinking"
                 self._turn += 1                      # barge in over speech
                 self._played.set()
+                self._hush()
                 self._audio = bytearray()
                 self._via = via
                 self._listen_started = time.time()
@@ -664,6 +751,7 @@ class Pipeline:
             if action == "cancel":
                 self._turn += 1
                 self._played.set()
+                self._hush()
                 self._audio = bytearray()
                 self.st.update(state="idle")
                 return True, "cancelled"
@@ -681,6 +769,7 @@ class Pipeline:
                 return False, f"Douglas is busy ({self.state})"
             self._turn += 1                          # a typed turn ends any speech
             self._played.set()
+            self._hush()
             turn = self._turn
             self.st.update(state="thinking")
         threading.Thread(target=self.run_text, args=(text, via, turn,
@@ -786,6 +875,12 @@ class Pipeline:
         self.st.update(last_turn=time.time())
         return reply
 
+    def _hush(self) -> None:
+        """Cut short an utterance playing on the remote speaker. Called with
+        the lock held, so the request goes out on its own thread."""
+        if self._remote and self.speaker is not None:
+            threading.Thread(target=self.speaker.stop, daemon=True).start()
+
     def _speak(self, reply: str, turn: int) -> None:
         pcm, src = self.tts(reply)
         with self._lock:
@@ -793,6 +888,15 @@ class Pipeline:
                 return
             self.st.update(state="speaking")
             self._played.clear()
+        if self.speaker is not None and self.speaker.ready():
+            self._remote = True
+            try:
+                played = self.speaker.play(pcm, src)
+            finally:
+                self._remote = False
+            if played or not self._current(turn):
+                return                  # heard there, or cut short on purpose
+            log("the remote speaker did not play it - using the satellite")
         dst = self.snd_format()
         pcm = convert(pcm, src, dst)
         a = {"rate": dst[0], "width": dst[1], "channels": dst[2]}
@@ -868,7 +972,8 @@ def main() -> None:
     PIPE = Pipeline(state, Transcript(TRANSCRIPT_FILE),
                     send=lambda *a: sat.send(*a) if sat else False,
                     snd_format=lambda: sat.snd_format if sat else (22050, 2, 1),
-                    linked=lambda: bool(sat and sat.connected))
+                    linked=lambda: bool(sat and sat.connected),
+                    speaker=Speaker(SPEAKER_URL) if SPEAKER_URL else None)
     sat = Satellite(SAT_HOST, SAT_PORT, PIPE.satellite_event, PIPE.link)
     state.heartbeat()
 
@@ -880,10 +985,13 @@ def main() -> None:
     threading.Thread(target=beat, daemon=True).start()
     if MCP_URL and MCP_TOKEN:
         threading.Thread(target=tone_loop, daemon=True).start()
+    else:
+        threading.Thread(target=warm, daemon=True).start()
     threading.Thread(target=sat.run_forever, daemon=True).start()
     srv = ThreadingHTTPServer((PTT_HOST, PTT_PORT), Handler)
     log(f"PTT on {PTT_HOST}:{PTT_PORT}, satellite {SAT_HOST}:{SAT_PORT}, "
-        f"stt :{STT_PORT}, tts :{TTS_PORT}, model {LLM_URL}")
+        f"stt :{STT_PORT}, tts :{TTS_PORT}, model {LLM_URL}, remote speaker "
+        + (urllib.parse.urlsplit(SPEAKER_URL).netloc if SPEAKER_URL else "none"))
     srv.serve_forever()
 
 

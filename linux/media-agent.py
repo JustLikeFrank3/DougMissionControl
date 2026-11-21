@@ -13,11 +13,16 @@ speaking the standard); monitor switching drives DDC/CI via ddcutil.
     POST /media/command?token=  {"action": "play_pause"|"next"|"prev"}
     GET  /monitor?token=     -> {"monitors": [...]} — drives SCREENS
     POST /monitor?token=     {"input": "hdmi1", "index": n}  (index < 0 = all)
+    GET  /speak?token=       -> {"available": bool, ...} — can speech play here now
+    POST /speak?token=&rate=&channels=&width=   body: raw PCM; plays it on the
+                             default output and answers when it has finished
+    POST /speak/stop?token=  cut the current utterance short
 
 Token: first line of /etc/dualboot/media-agent.token, owned by the desktop
 user at 0600 — this runs as that user, so root-owned would not be readable.
-Same guard rules as every other agent in this repo: wrong token 403, RFC1918
-only.
+Same guard rules as every other agent in this repo: wrong token 403, private
+addresses only - RFC1918, plus the tailnet's 100.64.0.0/10, because Douglas
+reaches this machine by its Tailscale name.
 
 Installed by linux/setup.sh as a systemd USER unit
 (flightsim-media-agent.service), which is forced rather than chosen: playerctl
@@ -119,6 +124,19 @@ def art_bytes() -> bytes | None:
     return None   # http art urls are the player's business, not ours
 
 
+# Tailscale hands out 100.64.0.0/10 (carrier-grade NAT space). Python does not
+# call that range private, but on this fleet it is the private overlay network.
+_TAILNET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_lan(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return ip.is_private or ip in _TAILNET
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "media-agent/0.1"
 
@@ -126,10 +144,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _lan(self) -> bool:
-        try:
-            return ipaddress.ip_address(self.client_address[0]).is_private
-        except ValueError:
-            return False
+        return is_lan(self.client_address[0])
 
     def _authed(self, q: dict) -> bool:
         t = token()
@@ -176,6 +191,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(art)
             return
+        if url.path == "/speak":
+            return self._json(200, speak_status())
         self._json(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
@@ -205,6 +222,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"sent": False, "reason": "unknown action"})
             ok = playerctl(action) is not None
             return self._json(200, {"sent": ok})
+        if url.path == "/speak":
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                rate = int((q.get("rate") or ["22050"])[0])
+                channels = int((q.get("channels") or ["1"])[0])
+                width = int((q.get("width") or ["2"])[0])
+                if not (0 < n <= SPEAK_MAX_BYTES and 8000 <= rate <= 192000
+                        and channels in (1, 2) and width == 2):
+                    raise ValueError
+                pcm = self.rfile.read(n)
+            except (ValueError, OSError):
+                return self._json(400, {"played": False, "reason": "bad request"})
+            return self._json(200, speak_play(pcm, rate, channels))
+        if url.path == "/speak/stop":
+            return self._json(200, speak_stop())
         self._json(404, {"error": "not found"})
 
 
@@ -826,6 +858,83 @@ def audio() -> dict:
                 "peak": round(_audio_peak, 4),
                 "bands": [round(v, 4) for v in _audio_bands],
                 "reason": _audio_why or None}
+
+
+# ── speech: Douglas's voice through this machine's speakers ───────────────
+# Douglas's own speaker is a 1 W puck. When this desktop is up and its output
+# is not muted, the voice pipeline sends each utterance here instead, as raw
+# PCM, and it plays on the default sink like any other sound. "Available" is
+# checked per utterance and answered honestly - a logged-out session or a
+# muted output says no, and Douglas falls back to his own speaker rather
+# than talk into a void.
+SPEAK_MAX_BYTES = 32 * 1024 * 1024
+_speak_lock = threading.Lock()
+_speak_proc: subprocess.Popen | None = None
+
+
+def _pulse(args: list[str], timeout: float = 3) -> str | None:
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def speak_status() -> dict:
+    sink = _pulse(["pactl", "get-default-sink"])
+    if not sink:
+        return {"available": False, "reason": "no sound server in this session"}
+    mute = _pulse(["pactl", "get-sink-mute", "@DEFAULT_SINK@"]) or ""
+    if mute.lower().endswith("yes"):
+        return {"available": False, "reason": "the default output is muted", "sink": sink}
+    return {"available": True, "sink": sink}
+
+
+def speak_stop() -> dict:
+    with _speak_lock:
+        proc = _speak_proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        return {"stopped": True}
+    return {"stopped": False}
+
+
+def speak_play(pcm: bytes, rate: int, channels: int) -> dict:
+    """Play 16-bit PCM on the default output; returns when it has finished,
+    so the caller knows when Douglas has stopped talking."""
+    global _speak_proc
+    st = speak_status()
+    if not st["available"]:
+        return {"played": False, "reason": st["reason"]}
+    speak_stop()                          # a new utterance replaces the old
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    try:
+        proc = subprocess.Popen(
+            ["paplay", "--raw", "--format=s16le", f"--rate={rate}",
+             f"--channels={channels}", "--client-name=Douglas",
+             "--stream-name=Douglas speaking"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=env)
+    except OSError:
+        return {"played": False, "reason": "paplay is not installed (pulseaudio-utils)"}
+    with _speak_lock:
+        _speak_proc = proc
+    try:
+        proc.stdin.write(pcm)
+        proc.stdin.close()
+    except OSError:
+        pass                              # stopped mid-utterance
+    rc = proc.wait()
+    with _speak_lock:
+        if _speak_proc is proc:
+            _speak_proc = None
+    if rc == 0:
+        return {"played": True, "seconds": round(len(pcm) / (rate * channels * 2), 2)}
+    return {"played": False, "stopped": rc < 0,
+            "reason": "stopped" if rc < 0 else f"paplay exited {rc}"}
 
 
 def main() -> int:

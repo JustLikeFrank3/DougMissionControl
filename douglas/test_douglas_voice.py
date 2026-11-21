@@ -160,6 +160,7 @@ check("system prompt names Douglas", "Douglas" in SEEN["messages"][0]["content"]
 SYS = SEEN["messages"][0]["content"]
 check("prompt forbids inventing facts about the house", "Never invent facts" in SYS, True)
 check("prompt admits he has no sensors", "no eyes, sensors" in SYS, True)
+check("prompt separates banter from real questions", ("Banter:" in SYS, "Real questions:" in SYS), (True, True))
 check("prompt says where the message came from", "Doug Mission Control touchscreen" in SYS, True)
 check("prompt carries today's date", time.strftime("%A %d %B %Y") in SYS, True)
 check("a voice turn is told it will be read aloud", "read aloud" in SYS, True)
@@ -292,6 +293,63 @@ check("unknown via falls back to deck", (tpipe.say("hi", "fax"), until(
     lambda: on_disk()["state"] == "idle"), lines()[-1]["via"])[2], "deck")
 check("agent relays /say beside /ptt",
       agent.relay_say({"text": ""})[0], 400)
+
+print("-- real speakers elsewhere, when they are up --")
+
+
+class FakeSpeaker:
+    def __init__(self):
+        self.up, self.works, self.block = True, True, None
+        self.played, self.stops = [], 0
+
+    def ready(self):
+        return self.up
+
+    def play(self, pcm, fmt):
+        self.played.append((len(pcm), fmt))
+        if self.block is not None:
+            self.block.wait(5)
+            return False                       # it was cut short
+        return self.works
+
+    def stop(self):
+        self.stops += 1
+        if self.block is not None:
+            self.block.set()
+
+
+spk = FakeSpeaker()
+spipe = voice.Pipeline(st, voice.Transcript(transcript_file), send=sender,
+                       snd_format=lambda: (16000, 2, 1),
+                       stt=fake_stt, llm=typed_llm, tts=fake_tts, speaker=spk)
+pipe = spipe                                   # sender() reports 'played' to this one
+
+
+def spoken(text):
+    SENT.clear()
+    ok = spipe.say(text, "deck", speak=True)[0]
+    return ok and until(lambda: on_disk()["state"] == "idle")
+
+
+check("a spoken reply goes to the remote speaker when it is up", spoken("hello"), True)
+check("as Piper made it, without resampling", spk.played[-1], (4410, (22050, 2, 1)))
+check("and the satellite stays silent", [e for e in SENT if e.startswith("audio")], [])
+spk.up = False
+check("with the speaker down the satellite speaks", spoken("hello again"), True)
+check("audio went to the satellite instead",
+      [e for e in SENT if e in ("audio-start", "audio-stop")], ["audio-start", "audio-stop"])
+spk.up, spk.works, n = True, False, len(spk.played)
+check("a speaker that fails to play falls back to the satellite", spoken("third time"), True)
+check("it was tried first, then the satellite used",
+      (len(spk.played) - n, "audio-start" in SENT), (1, True))
+spk.works, spk.block = True, threading.Event()
+SENT.clear()
+spipe.say("a long answer", "deck", speak=True)
+check("speaking on the remote speaker", until(lambda: spipe._remote), True)
+check("a cancel hushes it", (spipe.ptt("cancel")[0], until(lambda: spk.stops == 1)), (True, True))
+check("and does not replay it on the satellite",
+      (until(lambda: not spipe._remote), "audio-start" in SENT), (True, False))
+spk.block = None
 
 print("-- instruction files and the tone profile --")
 idir = os.path.join(tmp, "instructions.d"); os.makedirs(idir)
