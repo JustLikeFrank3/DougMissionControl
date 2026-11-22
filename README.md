@@ -286,16 +286,19 @@ add a question or not, and he answers about what is in it. The photo is
 scaled to 1280 px on the phone before it is sent. Same SSE frame, same endpoints, same
 rules as the panel.
 
-A phone's link to node1 is not a wire: on the tailnet it can drop to a relay
-or stall while the phone changes access point. So every request from the page
-has a time limit, and the line under the ask box always says why SEND is
-unavailable: a question on its way (with the seconds counted), Douglas
-thinking or listening, node1 slow to answer or not answering at all. A
-question that gets no answer keeps its words and its photo for another try.
+A phone's link to node1 is not a wire: on the tailnet it can drop to a relay,
+or go quiet for a minute or two at a time. So every request from the page has
+a time limit, and SEND is never greyed out: a question that cannot go yet
+waits, and goes by itself on the first poll that shows node1 is back and
+Douglas is free. The line under the ask box says what it is waiting for and
+counts the time, and the button reads STOP while a question is on its way.
+Each question carries an id, so a copy that arrived with only its reply lost
+is not asked twice. The page has to stay open for a waiting question to go.
 On node1, `journalctl -u deck-api` has one line for each question (its size
 and outcome, never its words) and one for a request that did not arrive
-whole, and `journalctl -u tailscaled` shows whether the phone was on a direct
-path or a relay at the time.
+whole; `journalctl -u tailscaled` shows whether the phone was on a direct
+path or a relay at the time, and `tailscale debug peer-endpoint-changes
+<device>` has the detail.
 
 A phone is not loopback, so it needs `DECK_TOKEN`: run
 `sudo ./pi/mobile-link.sh` on node1 and open the link it prints (a QR code too

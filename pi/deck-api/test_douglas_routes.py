@@ -13,8 +13,9 @@ def check(label, got, want):
     if not ok: fails.append(label)
 
 # Douglas is not here: the two calls that would reach him are stood in for.
+real_say = d.douglas_say
 said = []
-def fake_say(text, via, image=None):
+def fake_say(text, via, image=None, ask_id=None):
     said.append((text, via, image))
     return (False, "douglas-agent did not\nanswer") if text == "nobody home" else (True, "thinking")
 d.douglas_say = fake_say
@@ -109,6 +110,58 @@ finally:
 log = journal.getvalue()
 check("is one line in the journal, not a traceback",
       (log.count("\n"), "Traceback" in log), (1, False))
+
+print("-- the same question sent twice, as a phone does when the reply was lost --")
+import time
+d.DOUGLAS_AGENT_TOKEN = "agent-token"
+reached, answer = [], {"got": {"ok": True, "message": "thinking"}, "wait": 0.0}
+def fake_agent(url, payload=None, timeout=3):
+    reached.append(payload)
+    time.sleep(answer["wait"])
+    return answer["got"]
+d._ws_json = fake_agent
+check("the first copy goes to Douglas", real_say("is it raining", "phone", None, "q-00000001"), (True, "thinking"))
+check("the second is acknowledged", real_say("is it raining", "phone", None, "q-00000001"), (True, "already sent"))
+check("and Douglas was asked once", len(reached), 1)
+check("another question still goes", (real_say("and tomorrow", "phone", None, "q-00000002"), len(reached)),
+      ((True, "thinking"), 2))
+
+answer["got"] = None
+check("a copy Douglas never took", real_say("anyone", "phone", None, "q-00000003"),
+      (False, "douglas-agent did not answer"))
+answer["got"] = {"ok": True, "message": "thinking"}
+check("is sent again, not written off as done", (real_say("anyone", "phone", None, "q-00000003"), len(reached)),
+      ((True, "thinking"), 4))
+
+answer["wait"] = 0.4
+before, outcomes = len(reached), []
+pair = [threading.Thread(target=lambda: outcomes.append(real_say("two at once", "phone", "A" * 64, "q-00000004")))
+        for _ in range(2)]
+[t.start() for t in pair]; [t.join() for t in pair]
+answer["wait"] = 0.0
+check("two copies arriving together reach him once", (len(reached) - before, sorted(outcomes)),
+      (1, [(True, "already sent"), (True, "thinking")]))
+
+before = len(reached)
+real_say("no id", "deck"); real_say("no id", "deck")
+real_say("bad id", "deck", None, "x"); real_say("bad id", "deck", None, "x")
+check("without a proper id every copy is sent", len(reached) - before, 4)
+
+d._said["q-ancient01"] = time.time() - d.SAID_KEEP_S - 5
+real_say("tidy up", "phone", None, "q-00000005")
+check("old ids are forgotten", "q-ancient01" in d._said, False)
+
+d.douglas_say = real_say
+code, out, log = post("/api/douglas/say", {"text": "is it raining", "via": "phone", "id": "q-00000001"})
+check("over the wire a repeat is a success", (code, out["ok"], out["message"]), (200, True, "already sent"))
+check("and the journal says it was a repeat", log.strip(),
+      "http: /api/douglas/say from 127.0.0.1: 13 chars again: Douglas already has it in 0.0 s")
+answer["got"] = None
+code, out, log = post("/api/douglas/say", {"text": "hello", "via": "phone", "id": "q-00000006"})
+check("Douglas not answering is marked worth another try", (code, out["ok"], out["retry"]), (502, False, True))
+code, out, log = post("/api/douglas/say", {"text": "", "via": "phone", "id": "q-00000007"})
+check("an empty question is not", (code, out["retry"]), (502, False))
+d.douglas_say = fake_say
 
 server.shutdown()
 print()

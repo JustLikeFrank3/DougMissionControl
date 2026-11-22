@@ -227,8 +227,9 @@ var lastDgl = null;              // the frame on screen; null when node1 gave no
 var polled = false;              // has a poll come back yet, with a frame or without?
 var misses = 0;                  // polls in a row that got no answer
 var late = false;                // a poll has been out for seconds: the link is slow
-var asking = false;              // 'photo' or 'text' while a question is on its way
-var askedAt = 0, askTimer = 0;
+var ask = null;                  // the question on its way: { body, kind, since, flying, last }
+var askTimer = 0;
+var eyes = false;                // has Douglas said he can see? kept through a lost link
 var shot = null;                 // { b64, url }: the photo going with the next question
 
 function paintDouglasHead(dgl) {
@@ -252,11 +253,23 @@ function paintDouglasHead(dgl) {
 function gb(b) { return b == null ? null : b / 1073741824; }
 function num(v, dp) { return v == null || !isFinite(v) ? null : Number(v).toFixed(dp); }
 
-// The ask row and the talk button: what can be done right now and, when the
-// answer is nothing, why. A greyed button that does not say why reads as a
-// page that has hung, so every reason SEND is unavailable is put into words
-// on the line under it - which stays readable when the box has text in it
-// and its placeholder cannot be seen.
+function clock(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2);
+}
+
+// Can a question go to Douglas this very moment? Before the first poll is
+// back nothing is known, so it is worth a try.
+function ready() {
+  var d = lastDgl || {}, st = (d.voice || {}).state;
+  return !polled || (!!d.agent && !misses && !late && (st === 'idle' || st === 'speaking'));
+}
+
+// The ask row and the talk button: what can be done right now and, when
+// something is in the way, what. SEND is never greyed out: a question that
+// cannot go yet waits for the moment it can, and the line under the box says
+// what it is waiting for. That line stays readable when the box has text in
+// it and its placeholder cannot be seen.
 function paintAsk() {
   var d = lastDgl || {};
   var agent = !!d.agent, voice = d.voice || {};
@@ -267,28 +280,51 @@ function paintAsk() {
     ptt.disabled = vstate === 'absent' && !pressed;
     $('dgl-ptt-s').textContent = !lastDgl ? 'NO LINK' : !agent ? 'NO AGENT'
       : vstate === 'absent' ? 'NO VOICE PIPELINE' : VOICE_SUB[vstate];
-    // The camera is offered only when he can actually see.
-    $('dgl-cam').hidden = !(agent && voice.eyes);
+    // The camera is offered once he has said he can see, and stays through a
+    // lost link: a photo can be taken now and go when node1 is back.
+    if (agent) eyes = !!voice.eyes;
+    $('dgl-cam').hidden = !eyes;
   }
-  // Typing needs node1, the agent, and a pipeline that is not mid-turn.
-  // Before the first poll is back nothing is known, and nothing is claimed.
+  // What stands between a question and Douglas, if anything. Before the
+  // first poll is back nothing is known, and nothing is claimed.
+  var link = polled && (!lastDgl || misses || late);
   var why = !polled ? ''
     : !lastDgl ? 'node1 is not answering'
     : !agent ? 'Douglas is unreachable'
     : vstate === 'absent' ? 'no voice pipeline on Douglas'
     : vstate === 'thinking' ? 'Douglas is thinking…'
     : vstate === 'listening' ? 'Douglas is listening…' : '';
-  var sending = asking === 'photo' ? 'Sending the photo…' : 'Sending…';
-  $('dgl-ask-go').disabled = !!asking || !!why;
-  $('dgl-ask-text').placeholder = asking ? sending
+  var box = $('dgl-ask-text'), go = $('dgl-ask-go');
+  var sending = ask && ask.kind === 'photo' ? 'Sending the photo…' : 'Sending…';
+  // While a question is on its way the button stops it, and what is going
+  // cannot be edited from under it.
+  go.textContent = ask ? 'STOP' : 'SEND';
+  box.disabled = !!ask;
+  $('dgl-cam').disabled = !!ask;
+  $('dgl-shot-x').hidden = !!ask;
+  box.placeholder = ask ? (ask.flying ? sending : 'Waiting to send…')
     : why || (shot ? 'Ask about the photo…' : 'Ask Douglas…');
   var note = $('dgl-note');
   if (note.dataset.sticky === '1') return;      // a failure is still being read
-  var secs = Math.round((Date.now() - askedAt) / 1000);
   note.className = 'note';
-  note.textContent = asking ? sending + (secs >= 3 ? ' ' + secs + ' s' : '')
-    : !agent && d.why ? 'Douglas is unreachable: ' + d.why
-    : why || (misses || late ? 'node1 is slow to answer' : '');
+  if (ask && ask.flying) {
+    var secs = Math.round((Date.now() - ask.last) / 1000);
+    note.textContent = sending + (secs >= 3 ? ' ' + secs + ' s' : '');
+  } else if (ask) {
+    var waited = clock(Date.now() - ask.since);
+    note.textContent = vstate === 'thinking' || vstate === 'listening'
+      ? 'Douglas is busy. Your question goes next. ' + waited
+      : link ? 'No answer from node1 yet. Your question will go by itself when the link ' +
+               'is back: keep this page open. ' + waited
+      : why ? why + '. Your question will go by itself when that clears: keep this page ' +
+              'open. ' + waited
+      : sending;
+  } else {
+    note.textContent = !lastDgl && polled
+        ? 'node1 is not answering. SEND still works: your question waits until the link is back.'
+      : !agent && d.why ? 'Douglas is unreachable: ' + d.why
+      : why || (misses || late ? 'node1 is slow to answer' : '');
+  }
 }
 
 function paintDouglas(d) {
@@ -349,6 +385,7 @@ function gotDouglas(d) {
   misses = d ? 0 : misses + 1;
   if (d || misses >= 3 || !lastDgl) paintDouglas(d);
   else paintAsk();
+  trySend();                                   // a question may have been waiting for this
   repace();
 }
 
@@ -416,39 +453,89 @@ $('dgl-photo').addEventListener('change', function () {
   }).catch(function () { dglNote('could not open that photo'); });
 });
 
-$('dgl-ask').addEventListener('submit', function (e) {
-  e.preventDefault();
-  var box = $('dgl-ask-text');
-  var text = box.value.trim();
-  if ((!text && !shot) || asking) return;     // a photo alone asks "what is this?"
-  var body = { text: text, via: 'phone' };
-  if (shot) body.image = shot.b64;
-  asking = shot ? 'photo' : 'text';
-  askedAt = Date.now();
-  clearTimeout(noteTimer);
-  $('dgl-note').dataset.sticky = '';          // a new try: the last failure has been read
-  // The line under the box counts the seconds while this is out. A photo over
-  // a slow link takes a while, and a button that only goes grey looks hung.
-  askTimer = setInterval(paintAsk, 1000);
-  paintAsk();
+// ── a question on its way ───────────────────────────────────────────────
+// The link from a phone to node1 comes and goes: a minute or two at a time
+// when the phone changes access point, which is exactly when someone has
+// walked off to photograph something. So "no answer" is not the end of a
+// question. It waits, and goes by itself on the first poll that says node1
+// is back and Douglas is free. It carries an id, so a copy that did arrive,
+// with only its reply lost on the way back, is not asked twice.
+
+var ASK_GIVE_UP_MS = 5 * 60 * 1000;
+
+function newId() {
+  var a = new Uint8Array(12), s = '';
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(a);
+  else for (var i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * 256);
+  for (var j = 0; j < a.length; j++) s += ('0' + a[j].toString(16)).slice(-2);
+  return 'q-' + s;
+}
+
+function endAsk() {
+  clearInterval(askTimer);
+  ask = null;
+}
+
+function trySend() {
+  if (!ask || ask.flying) return;
+  var now = Date.now();
+  if (now - ask.since > ASK_GIVE_UP_MS) {
+    endAsk();
+    dglNote('That could not be sent in five minutes. Your words and photo are still here: ' +
+            'press SEND to try again.', 12000);
+    paintAsk();
+    return;
+  }
+  if (!ready() || now - ask.last < 2500) return;
+  var mine = ask;
+  mine.flying = true;
+  mine.last = now;
   // A photo gets longer: it is a few hundred kilobytes to push through
   // whatever link the phone has, and deck-api then gives Douglas twenty
   // seconds to take it.
-  post('/api/douglas/say', body, shot ? 45000 : 12000).then(function (r) {
-    asking = false;
-    clearInterval(askTimer);
+  post('/api/douglas/say', mine.body, mine.kind === 'photo' ? 45000 : 12000).then(function (r) {
+    if (ask !== mine) return;                  // stopped while it was out
+    mine.flying = false;
     if (r && r.ok) {
-      box.value = '';
+      endAsk();
+      $('dgl-ask-text').value = '';
       clearShot();
-      box.blur();                    // drop the keyboard so the reply is visible
-    } else {
-      // Nothing is thrown away: the words and the photo stay for another try.
-      dglNote(r ? (r.message || 'Douglas refused')
-        : 'No answer from node1: the link from this phone is slow or down. Try again.', 8000);
+      $('dgl-ask-text').blur();                // drop the keyboard so the reply is visible
+    } else if (r && !r.retry) {
+      // Douglas or the deck said no, and asking again will not change that.
+      // Nothing is thrown away: the words and the photo stay in place.
+      endAsk();
+      dglNote(r.message || 'Douglas refused', 8000);
     }
+    // Anything else is the link, or Douglas gone for a moment: the question
+    // stays where it is and goes again when a poll says it can.
     paintAsk();
-    tickDouglas(true);               // shows our line now; 'thinking' speeds the poll
+    tickDouglas(true);                         // shows our line now; 'thinking' speeds the poll
   });
+  paintAsk();
+}
+
+$('dgl-ask').addEventListener('submit', function (e) {
+  e.preventDefault();
+  if (ask) {                                   // the button reads STOP
+    var out = ask.flying;
+    endAsk();
+    if (out) dglNote('Stopped. If it had already reached Douglas, his answer will still appear.', 6000);
+    paintAsk();
+    return;
+  }
+  var text = $('dgl-ask-text').value.trim();
+  if (!text && !shot) return;                  // a photo alone asks "what is this?"
+  var body = { text: text, via: 'phone', id: newId() };
+  if (shot) body.image = shot.b64;
+  clearTimeout(noteTimer);
+  $('dgl-note').dataset.sticky = '';           // a new try: the last failure has been read
+  ask = { body: body, kind: shot ? 'photo' : 'text', since: Date.now(), flying: false, last: 0 };
+  // Once a second: count the seconds on the line under the box, and see
+  // whether the question can go yet.
+  askTimer = setInterval(function () { trySend(); paintAsk(); }, 1000);
+  trySend();
+  paintAsk();
 });
 
 function pttSend(action) {
@@ -564,7 +651,8 @@ function tickNp() { poll('np', '/api/media', paintNp); }
 
 function busy() {
   var st = lastDgl && lastDgl.voice && lastDgl.voice.state;
-  return pressed || st === 'listening' || st === 'thinking' || st === 'speaking';
+  // A question waiting for the link is the best reason there is to look often.
+  return pressed || !!ask || st === 'listening' || st === 'thinking' || st === 'speaking';
 }
 function repace() { if (!document.hidden) every('dgl', busy() ? 700 : 3000, tickDouglas); }
 

@@ -1597,10 +1597,23 @@ def douglas_ptt(action: str) -> tuple[bool, str]:
     return bool(got.get("ok")), str(got.get("message") or "")
 
 
-def douglas_say(text: str, via: str, image: object = None) -> tuple[bool, str]:
+# A phone on a poor link sends a question again when the first copy got no
+# answer, and sometimes that copy had arrived and only the reply was lost. So
+# the page gives each question an id, and one Douglas has already taken is
+# acknowledged again without being asked twice.
+SAID_KEEP_S = 900
+SAID_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
+_said: dict[str, float] = {}                    # id -> when Douglas took it
+_saying: dict[str, tuple[threading.Lock, float]] = {}
+_said_guard = threading.Lock()
+
+
+def douglas_say(text: str, via: str, image: object = None,
+                ask_id: object = None) -> tuple[bool, str]:
     """A typed turn for Douglas, from the panel or the phone, with or without
     a picture (base64, as the phone page sends it). Answered asynchronously:
-    the reply arrives in /api/douglas's transcript."""
+    the reply arrives in /api/douglas's transcript. With an id, the same
+    question sent twice reaches Douglas once."""
     text = " ".join(str(text or "").split())
     image = image if isinstance(image, str) else ""
     if not text and not image:
@@ -1614,10 +1627,31 @@ def douglas_say(text: str, via: str, image: object = None) -> tuple[bool, str]:
     payload = {"text": text[:2000], "via": via if via in ("deck", "phone") else "deck"}
     if image:
         payload["image"] = image
-    got = _ws_json(url, payload, timeout=20 if image else 5)
-    if not isinstance(got, dict):
-        return False, "douglas-agent did not answer"
-    return bool(got.get("ok")), str(got.get("message") or "")
+
+    def send() -> tuple[bool, str]:
+        got = _ws_json(url, payload, timeout=20 if image else 5)
+        if not isinstance(got, dict):
+            return False, "douglas-agent did not answer"
+        return bool(got.get("ok")), str(got.get("message") or "")
+
+    if not (isinstance(ask_id, str) and SAID_ID.fullmatch(ask_id)):
+        return send()
+    now = time.time()
+    with _said_guard:
+        for old in [k for k, when in _said.items() if now - when > SAID_KEEP_S]:
+            del _said[old]
+        for old in [k for k, (_, when) in _saying.items() if now - when > SAID_KEEP_S]:
+            del _saying[old]
+        lock = _saying.setdefault(ask_id, (threading.Lock(), now))[0]
+    # A second copy that arrives while the first is still with Douglas waits
+    # here, then finds the first one's outcome rather than racing it.
+    with lock:
+        if ask_id in _said:
+            return True, "already sent"
+        ok, msg = send()
+        if ok:
+            _said[ask_id] = time.time()
+        return ok, msg
 
 
 def fire_abort() -> tuple[bool, str]:
@@ -1800,7 +1834,9 @@ class Handler(BaseHTTPRequestHandler):
         # The greeting's phase callback authenticates itself with the
         # boot-agent token in its body — it has never held DECK_TOKEN, so it
         # cannot pass the blanket gate below and must be routed first.
-        cut_short = {"ok": False, "message": "the request did not arrive whole"}
+        # `retry` tells a caller the failure is the kind that passes: sending
+        # the same thing again is worth doing.
+        cut_short = {"ok": False, "retry": True, "message": "the request did not arrive whole"}
         if url.path == "/api/phase":
             body = self._body()
             if body is None:
@@ -1834,16 +1870,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/douglas/say":
             image = body.get("image")
             began = time.monotonic()
-            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"), image)
+            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"), image,
+                                  body.get("id"))
             # Sizes and the outcome, not the words. Whether a phone's photo
             # arrived whole, and how long Douglas took to accept it, is what
             # answers "the button went grey and nothing happened".
             kb = len(image) * 3 // 4096 if isinstance(image, str) else 0
             self._note(f"{len(str(body.get('text') or ''))} chars"
                        + (f" and a {kb} KB picture" if kb else "")
-                       + (" accepted" if ok else f" refused ({msg})")
+                       + (" accepted" if ok and msg != "already sent"
+                          else " again: Douglas already has it" if ok else f" refused ({msg})")
                        + f" in {time.monotonic() - began:.1f} s")
-            return self._json(200 if ok else 502, {"ok": ok, "message": msg})
+            # Douglas not answering is the one refusal that passes by itself.
+            retry = not ok and msg == "douglas-agent did not answer"
+            return self._json(200 if ok else 502, {"ok": ok, "message": msg, "retry": retry})
 
         if path == "/api/douglas/ptt":
             action = str(body.get("action") or "")
