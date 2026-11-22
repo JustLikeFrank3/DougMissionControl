@@ -162,9 +162,17 @@ SYS = SEEN["messages"][0]["content"]
 check("prompt forbids inventing facts about the house", "Never invent facts" in SYS, True)
 check("prompt admits he has no sensors", "no cameras or sensors" in SYS, True)
 check("prompt separates banter from real questions", ("Banter:" in SYS, "Real questions:" in SYS), (True, True))
-check("prompt says where the message came from", "Doug Mission Control touchscreen" in SYS, True)
-check("prompt carries today's date", time.strftime("%A %d %B %Y") in SYS, True)
-check("a voice turn is told it will be read aloud", "read aloud" in SYS, True)
+NOTE = SEEN["messages"][-1]["content"]
+check("the message says where it came from", "Doug Mission Control touchscreen" in NOTE, True)
+check("and carries today's date", time.strftime("%A %d %B %Y") in NOTE, True)
+check("a voice turn is told it will be read aloud", "read aloud" in NOTE, True)
+check("all of that follows the person's words, in brackets",
+      (NOTE.startswith("What time is it?\n\n[It is "), NOTE.endswith("]")), (True, True))
+check("and none of it is in the instructions, which never change and so stay read",
+      [w in SYS for w in (time.strftime("%A %d %B %Y"), "local time", "touchscreen", "read aloud")], [False] * 4)
+check("which say what the brackets are", "ends with a note in square brackets" in SYS, True)
+check("the instructions are the same text for any device, spoken or typed",
+      SYS == voice.system_prompt(), True)
 check("reasoning and markdown not spoken", SEEN["tts"], "It is ten past nine.")
 check("transcript: user then douglas, via deck",
       [(t["who"], t["text"], t["via"]) for t in lines()],
@@ -174,6 +182,8 @@ check("satellite saw the turn in order",
       [e for e in SENT if e != "audio-chunk"],
       ["voice-started", "voice-stopped", "transcript", "audio-start", "audio-stop"])
 check("history carried to the next turn", len(pipe.history), 2)
+check("without the note: the conversation keeps what was said, not when",
+      pipe.history[0], {"role": "user", "content": "What time is it?"})
 check("the state file says how long, how loud and how many words were heard",
       {k: on_disk()["heard"][k] for k in ("seconds", "level_db", "words")},
       {"seconds": 2.0, "level_db": -90.3, "words": 4})
@@ -284,12 +294,12 @@ check("shares the spoken conversation's memory",
       [m["content"] for m in SAID[0][1:3]], ["earlier", "spoken reply"])
 check("not spoken unless asked", [e for e in SENT if e.startswith("audio")], [])
 check("a typed turn is told it will be read on a screen",
-      ("read on a screen" in SAID[0][0]["content"], "read aloud" in SAID[0][0]["content"]), (True, False))
-check("a typed turn names the phone as its source", "page on a phone" in SAID[0][0]["content"], True)
+      ("read on a screen" in SAID[0][-1]["content"], "read aloud" in SAID[0][-1]["content"]), (True, False))
+check("a typed turn names the phone as its source", "page on a phone" in SAID[0][-1]["content"], True)
 voice.FACTS = "The cat is called Bob."
 check("household facts are passed on verbatim",
-      "told these things are true: The cat is called Bob." in voice.system_prompt("chat", False), True)
-check("an unknown source is not guessed at", "an unknown device" in voice.system_prompt("fax", True), True)
+      "told these things are true: The cat is called Bob." in voice.system_prompt(), True)
+check("an unknown source is not guessed at", "an unknown device" in voice.turn_note("fax", True), True)
 voice.FACTS = ""
 tpipe.st.update(state="thinking")
 check("refused while thinking", tpipe.say("again", "deck")[0], False)
@@ -443,10 +453,10 @@ loop = lambda msgs, tools=None: ({"tool_calls": [{"id": "x", "function": {"name"
 check("a model that never stops asking is cut off", voice.llm([{"role": "user", "content": "q"}], loop), "Enough.")
 voice.TOOLS_ON = False
 check("with tools off the prompt says he cannot look things up",
-      ("no internet access" in voice.system_prompt("chat", False), voice.llm([{"role": "user", "content": "q"}], fake_ask)),
+      ("no internet access" in voice.system_prompt(), voice.llm([{"role": "user", "content": "q"}], fake_ask)),
       (True, "Canberra."))
 voice.TOOLS_ON = True
-sp = voice.system_prompt("chat", False)
+sp = voice.system_prompt()
 check("with tools on it says what he can reach, and where home is",
       ("look things up on the internet" in sp, "Home is Springfield, Illinois" in sp), (True, True))
 check("current things must be looked up, not recalled or embroidered",
@@ -483,8 +493,9 @@ check("a picture with no words is accepted", ppipe.say("", "phone", image=JPEG),
 until(lambda: ppipe.state == "idle" and len(lines()) >= before + 2)
 check("the eyes are asked, with the question", SAW, [(len(JPEG), "What is this?")])
 check("the model gets what was seen along with the words",
-      SHOWN[-1][-1]["content"], "What is this?\n\n[A picture came with this message. What you see in it: "
-      "A tabby cat asleep on a laptop keyboard.]")
+      SHOWN[-1][-1]["content"].startswith(
+          "What is this?\n\n[A picture came with this message. What you see in it: "
+          "A tabby cat asleep on a laptop keyboard.]\n\n[It is "), True)
 check("he is told he can see, and how", "You can see pictures that are sent to you." in SHOWN[-1][0]["content"], True)
 check("the transcript marks the picture and keeps the reply", [(t["who"], t["text"]) for t in lines()[-2:]],
       [("user", "[picture] What is this?"), ("douglas", "That cat has claimed your laptop.")])
@@ -508,7 +519,7 @@ before = len(lines())
 bpipe.say("and this?", "phone", image=PNG)
 until(lambda: bpipe.state == "idle" and len(lines()) >= before + 2)
 check("eyes down: the turn still runs, and he is told he could not look",
-      SHOWN[-1][-1]["content"].endswith("you could not look at it: your eyes are not working right now.]"), True)
+      "you could not look at it: your eyes are not working right now.]\n\n[It is " in SHOWN[-1][-1]["content"], True)
 voice.SEEN["image"] = b""
 check("no picture, nothing to look at", voice.tool_look("x"), "No picture has been sent in this conversation.")
 EYE = {}
@@ -613,11 +624,10 @@ with open(os.path.join(idir, "10-owner.md"), "w") as f:
 with open(os.path.join(idir, "notes.bak"), "w") as f:
     f.write("IGNORED\n")
 voice.INSTR_DIR = idir
-sp = voice.system_prompt("deck", False)
+sp = voice.system_prompt()
 check("instruction files are read in name order, other files ignored",
       (sp.index("builds guitars") < sp.index("Never use em dashes"), "IGNORED" in sp), (True, False))
-check("the parts that change come after the instructions",
-      sp.index("Never use em dashes") < sp.index("local time"), True)
+check("the parts that change are not in them at all", "local time" in sp, False)
 voice.INSTR_MAX_CHARS = 10
 check("oversized instructions are cut, not fatal", "builds gui" not in voice.read_instructions(), True)
 voice.INSTR_MAX_CHARS = 14000
@@ -676,9 +686,8 @@ check("metadata lines and the paging footer are not samples",
 check("a long sample is cut and the budget is kept", ("..." in tone, len(tone) <= 1500 + 60), (True, True))
 check("cache file is private", oct(os.stat(voice.TONE_FILE).st_mode & 0o777), "0o600")
 voice.OWNER = "Sam"
-sp = voice.system_prompt("phone", False)
-check("the prompt carries the voice, named, before the time line",
-      ("How Sam writes" in sp, sp.index("Newest note.") < sp.index("local time")), (True, True))
+sp = voice.system_prompt()
+check("the prompt carries the voice, named", ("How Sam writes" in sp, "Newest note." in sp), (True, True))
 voice.OWNER = "the owner"
 MCP["mode"] = "session"; MCP["calls"].clear()
 check("a server that wants a session gets one", voice.refresh_tone(), True)
@@ -1086,7 +1095,7 @@ check("and says when it threw a stock word away", "' You.' out of a quiet room i
       or "'You.' out of a quiet room is not speech - ignored" in log, True)
 check("but never the words of a real question", "raining" in log, False)
 
-print("-- the job search records: read at once, changed only on a yes --")
+print("-- the owner's records: read at once, changed only on a yes --")
 DASH = " \u2014 "
 
 
@@ -1212,8 +1221,9 @@ def sent():
 voice.TOOLS_ON = True
 voice.CONVO.update(private=False, pending=None)
 check("with no server named he has no such tool",
-      (voice.jc_on(), "jobcontext" in voice.TOOLS, "job search records" in voice.system_prompt("phone", False)),
-      (False, False, False))
+      (voice.jc_on(), "jobcontext" in voice.TOOLS, "jobContext server" in voice.system_prompt(),
+       "jobcontext tool" in voice.turn_note("phone", False)),
+      (False, False, False, False))
 voice.JOBCONTEXT_TOKEN = "jc-k3y"
 voice.JOBCONTEXT_URL = "http://jobs.example.org/mcp"
 check("a key is not sent in the clear to another machine", voice.jc_on(), False)
@@ -1267,15 +1277,19 @@ check("the tool is offered, with a short description",
       (len(spec["description"]) < 250, spec["parameters"]["properties"]["area"]["enum"] == list(A),
        spec["parameters"]["required"]), (True, True, ["area", "action"]))
 voice.OWNER = "Sam"
-sp = voice.system_prompt("phone", False)
+sp = voice.system_prompt()
 voice.OWNER = "the owner"
 check("the prompt says whose records they are and that a change needs a yes",
-      ("Sam's job search records" in sp, "saves it only if they then say yes" in sp,
+      ("Sam's own records on their jobContext server" in sp, "saves it only if they then say yes" in sp,
        "Nothing can be deleted from here" in sp), (True, True, True))
-check("the list of actions is in the instructions, before the lines that change every minute",
+check("the list of actions is in the instructions, and the rules for using it come after the list",
       (" update*(company, role, status; optional next_steps, contact, notes) Create/update a tracked application" in sp,
-       " status Current tracked pipeline snapshot" in sp, sp.index("briefing Speakable") < sp.index("local time")),
-      (True, True, True))
+       " status Current tracked pipeline snapshot" in sp,
+       sp.index("briefing Speakable") < sp.index("How to use Sam's records")), (True, True, True))
+check("their gist goes with every message, where it is read last",
+      "has to come from the jobcontext tool, called in this turn" in voice.turn_note("phone", False), True)
+check("he is told that what is listed is all he can reach",
+      "asked about anything else that may be on it, say you have no access to it" in sp, True)
 check("and leaves out what can never be done",
       [w in sp for w in ("\n delete", "\n remove_board", "\n setup")], [False] * 3)
 check("a write is starred and a read is not", (" checkin*(mood, energy" in sp, " log(optional days)" in sp), (True, True))
@@ -1317,7 +1331,7 @@ long = voice.run_tool("jobcontext", {"area": "applications", "action": "status"}
 whole = len(JOB_ANSWERS[("applications", "status")].strip())
 check("a long answer is cut to what the model can hold", (whole > 12000, len(long) < voice.JC_RESULT_MAX + 600), (True, True))
 check("and says at its top that it is only the beginning, and of how much",
-      (f"[Only the beginning is below: the first 6,000 of {whole:,} characters." in long[:200],
+      (f"[Only the beginning is below: the first {voice.JC_RESULT_MAX:,} of {whole:,} characters." in long[:200],
        "Do not count, total or sum up from this as if it were everything" in long, "Acme" in long), (True, True, False))
 got = voice.run_tool("jobcontext", {"area": "applications", "action": "status", "find": "acme"})
 check("asked to find one thing in it, he gets the entry that mentions it, wherever it was",
@@ -1609,8 +1623,8 @@ n = len(sent())
 check("so a yes after it saves nothing", (typed("yes"), len(sent())), ("Noted.", n))
 
 for mode, want in (("error", "It was not saved. The server said: it fell over"),
-                   ("locked", "It was not saved: the job search server refused it (HTTP 401)."),
-                   ("down", "I cannot tell whether that was saved: the job search server reported a fault. "
+                   ("locked", "It was not saved: the jobContext server refused it (HTTP 401)."),
+                   ("down", "I cannot tell whether that was saved: the jobContext server reported a fault. "
                             "Ask me to check before trying again.")):
     typed("I applied to Acme, log it")
     JOBS["mode"] = mode
@@ -1619,7 +1633,7 @@ for mode, want in (("error", "It was not saved. The server said: it fell over"),
 typed("I applied to Acme, log it")
 JOBS["mode"], voice.JOBCONTEXT_TIMEOUT_S = "slow", 0.3
 check("one that gets no answer in time is not called saved or unsaved",
-      typed("yes"), "I cannot tell whether that was saved: the job search server did not answer in time. "
+      typed("yes"), "I cannot tell whether that was saved: the jobContext server did not answer in time. "
                     "Ask me to check before trying again.")
 JOBS["mode"], voice.JOBCONTEXT_TIMEOUT_S = "ok", 45.0
 time.sleep(1.0)                                    # let the slow answer finish
@@ -1627,7 +1641,7 @@ typed("I applied to Acme, log it")
 JOBS["mode"] = "elsewhere"
 n = len(JOBS["thief"])
 check("and a redirect is not followed with the change either",
-      (typed("yes").startswith("It was not saved: the job search server refused it (HTTP 302)"), len(JOBS["thief"])), (True, n))
+      (typed("yes").startswith("It was not saved: the jobContext server refused it (HTTP 302)"), len(JOBS["thief"])), (True, n))
 JOBS["mode"] = "ok"
 
 typed("Tell me my briefing")
@@ -1651,7 +1665,7 @@ check("a question about the records answered from thin air is put to the model a
       (got.startswith("From the records:"), "Pat Lee" in got, sent(), MODEL["asks"] - asks),
       (True, False, [("applications", {"action": "status"})], 3))
 check("the journal says it happened",
-      "what may be a question about the job search was answered without looking: asked again" in jlog.getvalue(), True)
+      "what may be a question about the owner's records was answered without looking: asked again" in jlog.getvalue(), True)
 MODEL["script"] = lambda text: ({"content": "", "tool_calls": [call("applications", "status", {}, "c9")]}
                                 if "you answered it without looking anything up" in text
                                 else {"content": "Initech is in the final round."})
@@ -1679,7 +1693,7 @@ check("and a question that is not about the records is asked once",
       (typed("What is the capital of Peru?"), MODEL["asks"] - asks), ("Lima, since 1535.", 1))
 check("what reads as a question about the records",
       [voice.about_records(q) for q in (
-          "What is the status of my Acme application?", "Did the recruiter call back?", "any interviews this week",
+          "What is the status of my Acme application?", "Did the recruiter call back?", "Which stories mention Initech?",
           "Tell me about my pipeline.", "When is my follow-up with Initech due?")], [True] * 5)
 check("once they have been read, any question may be one, a remark still is not",
       [voice.about_records(q, True) for q in ("And what about Initech?", "Is it raining?", "Good, thanks.")],
@@ -1708,7 +1722,8 @@ def greedy(msgs, tools=None):
 
 voice.llm([{"role": "user", "content": "everything"}], greedy)
 check("a turn's lookups share one budget, so the model's memory is not overrun",
-      (sum(big["last"]) <= voice.TURN_RESULTS_MAX + 3 * 100, big["last"][0] > 6000, big["last"][2] < 200), (True, True, True))
+      (sum(big["last"]) <= voice.TURN_RESULTS_MAX + 3 * 100, big["last"][0] > voice.JC_RESULT_MAX,
+       big["last"][2] < 1500), (True, True, True))
 sys.stderr = real_err
 log = jlog.getvalue()
 check("the journal follows a change from held to sent, by name",
@@ -1718,6 +1733,34 @@ check("the journal follows a change from held to sent, by name",
       [True] * 6)
 check("and holds none of what was in it", any(w in log for w in ("Acme", "Senior Engineer", "Sam Reed", "meetup")), False)
 jp.forget()
+real_err, sys.stderr = sys.stderr, io.StringIO()
+voice.JOBCONTEXT_AREAS = ("stories",)
+check("told which areas he may reach, he is given those and no others",
+      (voice.jc_refresh(), list(voice.JC["areas"]),
+       [t for t in voice.TOOL_SPECS if t["function"]["name"] == "jobcontext"][0]["function"]["parameters"]["properties"]["area"]["enum"]),
+      (True, ["stories"], ["stories"]))
+sp = voice.system_prompt()
+check("the rest is not in his instructions",
+      (" log*(story, tags; optional people, title) Log a personal story/anecdote" in sp,
+       [w in sp for w in ("applications (", "tracked application", "insights briefing", "job_search")]),
+      (True, [False] * 4))
+n = len(sent())
+check("and cannot be called",
+      (voice.run_tool("jobcontext", {"area": "applications", "action": "status"}).endswith(
+          "There is no area called 'applications'. The areas: stories."), len(sent())), (True, n))
+voice.run_tool("jobcontext", {"area": "stories", "action": "tone_profile", "args": {"limit": 3}})
+check("what he may reach still works", sent()[-1], ("stories", {"action": "tone_profile", "limit": 3}))
+check("only the words of those areas mark a question as one about the records",
+      [voice.about_records(q) for q in ("Which story is about Initech?", "What is the status of my Acme application?",
+                                        "Did the recruiter call back?")], [True, False, False])
+jp.forget()
+voice.JOBCONTEXT_AREAS = ("storys", "tone")
+check("areas the server does not have leave things as they were, and the journal says which it has",
+      (voice.jc_refresh(), list(voice.JC["areas"]),
+       "none of JOBCONTEXT_AREAS (storys, tone) is among its areas (applications, job_search, people, stories, "
+       "wellbeing, insights, certification, workspace)" in sys.stderr.getvalue()), (False, ["stories"], True))
+voice.JOBCONTEXT_AREAS = ()
+sys.stderr = real_err
 js.shutdown()
 voice.JOBCONTEXT_URL = voice.JOBCONTEXT_TOKEN = ""
 voice.JC.update(areas={}, catalogue="")

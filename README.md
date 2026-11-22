@@ -565,7 +565,7 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's job search records, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -601,13 +601,18 @@ instructions. Lookups are the one thing that leaves the house: the words of
 the question go to the service asked. `DOUGLAS_TOOLS=0` turns them off, and he
 then says he has no internet.
 
-**The owner's job search.** With `JOBCONTEXT_URL` and `JOBCONTEXT_TOKEN` set,
+**The owner's own records.** With `JOBCONTEXT_URL` and `JOBCONTEXT_TOKEN` set,
 he has one more tool: the owner's records on their own jobContext server (an
-MCP server: applications, interviews, contacts, saved documents, stories,
-check-ins). The pipeline asks the server what it offers at start and puts
-that list into his instructions. The key it is given can do anything its
-owner can, so what he may do with it is decided by the pipeline, not by the
-model:
+MCP server: the stories they have told about themselves and samples of how
+they write, and, for someone looking for work, a whole job search:
+applications, interviews, contacts, documents). `JOBCONTEXT_AREAS` names the
+parts he may reach, `stories` for the stories and writing samples alone:
+that is context about the person he talks to, and a job search is not
+something everyone wants a house assistant bringing up. The pipeline asks the
+server what it offers at start and puts the areas he may reach into his
+instructions; the others he is not told about and cannot call. The key it is
+given can do anything its owner can, so what he may do with it is decided by
+the pipeline, not by the model:
 
 - An action on the pipeline's own list of reads (`JC_READS`) is carried out
   when he asks for it.
@@ -625,19 +630,20 @@ model:
   names as a removal), and a web address is never put forward by voice,
   where it cannot be checked.
 - Some of the server's answers run to a hundred pages (the list of every
-  application), and the model reads a few. Handed the first of them unmarked,
-  it counted what it could see and called that the total. So a long answer
-  comes back either as the entries that mention what he asked to `find` (a
-  company, a name), or as its beginning under a notice that it is only the
-  beginning and is not to be counted or summed up as the whole.
-- He is told to look before he answers anything about the job search, and
-  the pipeline checks, because told is not enough: in testing he answered a
+  application, or every contact), and the model reads a few. Handed the first
+  of them unmarked, it counted what it could see and called that the total.
+  So a long answer comes back either as the entries that mention what he
+  asked to `find` (a name, a word), or as its beginning under a notice that
+  it is only the beginning and is not to be counted or summed up as the
+  whole.
+- He is told to look before he answers anything about the records, and the
+  pipeline checks, because told is not enough: in testing he answered a
   second question about an application from thin air, interviewer's name and
-  all. A question that uses the words of a job search, or any question once
-  the records are part of the conversation, that he answers without a single
-  lookup is put to him again with an instruction to look. If he still does
-  not, and the answer names names or numbers, it goes out ending "I did not
-  look that up in your records."
+  all. A question that uses the words of an area he can reach, or any
+  question once the records are part of the conversation, that he answers
+  without a single lookup is put to him again with an instruction to look.
+  If he still does not, and the answer names names or numbers, it goes out
+  ending "I did not look that up in your records."
 - Once the records have been read in a conversation, `read_page` is off until
   the conversation ends (five quiet minutes, or "new conversation"). The
   records are private, and some of what is in them, a job advert or a
@@ -649,6 +655,17 @@ The journal names each action and its arguments, never their values. What he
 reads out of the records does end up in his replies, so in the transcript,
 on the panel and out of the speaker: `JOBCONTEXT_VIA=phone` keeps the records
 to the phone page.
+
+**Why his instructions never change.** A turn used to begin with six seconds
+of nothing. The model server keeps what it has already read and starts again
+at the first word that differs, and the instructions ended with the time of
+day; in the model's chat template the tools follow the instructions, so every
+turn in a new minute read the tools and the whole conversation again, about a
+thousand tokens. Now the instructions are the same text on every turn, for
+every device, spoken or typed, and what belongs to one turn (the time, the
+device, how the reply will be delivered) closes the person's own message in
+square brackets. The same pair of questions a minute apart went from 6.8
+seconds each to 2.6.
 
 **How he sounds.** Piper, the voice he started with, is quick and clear and
 sounds like a machine reading. He speaks with Kokoro instead: a small neural
@@ -848,7 +865,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the job search records against a stand-in server: what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
@@ -973,8 +990,9 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   connection and a device-id file without it, nothing with it). The units for Whisper, Piper, Open WebUI and
   the Kokoro voice all set it, and `douglas-tts`, which needs no network at
   all, is also limited to loopback by systemd (`IPAddressDeny=any`).
-- Douglas's key to the owner's job search records is a whole one: the server
-  has no read-only kind. It lives in `/etc/douglas/voice.env` (root:douglas,
+- Douglas's key to the owner's jobContext records is a whole one: the server
+  has no narrower kind, so which parts he reaches (`JOBCONTEXT_AREAS`) is the
+  pipeline's doing. It lives in `/etc/douglas/voice.env` (root:douglas,
   640), is sent only over HTTPS and never to a redirect, and is used under
   the pipeline's rules, not the model's: reads on request, changes only after
   a read-back and a yes, no deletes. Revoking the key on the server ends all

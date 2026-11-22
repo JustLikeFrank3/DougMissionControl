@@ -309,14 +309,18 @@ LLM_MAX_TOKENS=400
 # His eyes: the vision model llama-eyes serves (see eyes.env). Unset, he
 # cannot be shown a picture and says so.
 #EYES_URL=http://127.0.0.1:8082
-# The owner's job search records, on their own jobContext server. He reads
-# them when asked. A change is read back by the pipeline and sent only after
-# a yes, and nothing can be deleted. The key is a whole one (the server has
-# no narrower kind), which is why this file is root:douglas 640 and why the
-# address must be https. JOBCONTEXT_VIA=phone keeps the records to the phone
-# page, off the microphone anyone in the room can press.
+# The owner's own records, on their jobContext server. JOBCONTEXT_AREAS
+# names the parts he may reach: "stories" is the owner's stories and writing
+# samples and nothing else; unset, he reaches all of it, a job search
+# included. He reads them when asked. A change is read back by the pipeline
+# and sent only after a yes, and nothing can be deleted. The key is a whole
+# one (the server has no narrower kind), which is why this file is
+# root:douglas 640 and why the address must be https. JOBCONTEXT_VIA=phone
+# keeps the records to the phone page, off the microphone anyone in the room
+# can press.
 #JOBCONTEXT_URL=https://jobcontext.example/mcp
 #JOBCONTEXT_TOKEN=
+#JOBCONTEXT_AREAS=stories
 #JOBCONTEXT_VIA=phone
 #DOUGLAS_SYSTEM_PROMPT=You are Douglas, ...
 VOICE_MAX_LISTEN_S=20
