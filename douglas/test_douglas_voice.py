@@ -1087,7 +1087,7 @@ check("and says when it threw a stock word away", "' You.' out of a quiet room i
 check("but never the words of a real question", "raining" in log, False)
 
 print("-- the job search records: read at once, changed only on a yes --")
-DASH = " — "
+DASH = " \u2014 "
 
 
 def job_tool(name, about, actions, props):
@@ -1141,11 +1141,18 @@ JOBS = {"mode": "ok", "calls": [], "auth": [], "thief": []}
 JOB_ANSWERS = {
     ("insights", "briefing"): "Two interviews this week: Acme on Tuesday, Initech on Thursday.",
     ("insights", "session_context"): "MASTER RESUME " + "x" * 9000,
-    ("applications", "status"): "PIPELINE\nAcme — Senior Engineer [applied]",
-    ("applications", "update"): "✓ Updated: Acme — Senior Engineer (applied)\nNext: follow up in a week.",
-    ("applications", "decide"): "✗ No queued job found for Acme — Senior Engineer.",
+    # A hundred and twenty applications, as the real server lists them: an
+    # entry each, blank lines between. Acme is the 90th, far past what fits,
+    # and one entry has Initech deep in a very long line of notes.
+    ("applications", "status"): "=== JOB HUNT STATUS ===\nLast updated: 2026-11-22 09:00\n\n" + "\n\n".join(
+        f"\u25a0 {'Acme' if n == 90 else f'Company{n}'} \u2014 Engineer {n}\n  Status:       applied\n"
+        f"  Notes:        {'word ' * (400 if n == 100 else 12)}"
+        f"{'then a call with Initech about the offer, ' if n == 100 else ''}{'more ' * (60 if n == 100 else 2)}"
+        for n in range(1, 121)),
+    ("applications", "update"): "\u2713 Updated: Acme \u2014 Senior Engineer (applied)\nNext: follow up in a week.",
+    ("applications", "decide"): "\u2717 No queued job found for Acme \u2014 Senior Engineer.",
     ("wellbeing", "checkin"): "Check-in saved (2026-11-22, energy 7/10, mood: 6).\nKeep going.",
-    ("people", "log"): "✓ Person logged (#12): Sam Reed — recruiter at Acme",
+    ("people", "log"): "\u2713 Person logged (#12): Sam Reed \u2014 recruiter at Acme",
     ("job_search", "web"): "1. Staff Engineer at Acme",
 }
 
@@ -1154,7 +1161,7 @@ class FakeJobs(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def do_GET(self):  # noqa: N802 — where a followed redirect would land
+    def do_GET(self):  # noqa: N802 \u2014 where a followed redirect would land
         JOBS["thief"].append(self.headers.get("Authorization"))
         self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
 
@@ -1306,8 +1313,33 @@ check("a delete is refused in words and never sent",
 check("a change asked for outside a turn goes nowhere",
       ("cannot be put forward from here" in voice.run_tool("jobcontext", {
           "area": "wellbeing", "action": "checkin", "args": {"mood": 6, "energy": 7}}), len(sent())), (True, n))
-long = voice.run_tool("jobcontext", {"area": "insights", "action": "session_context"})
-check("a long answer is cut to what the model can hold", len(long) < voice.JC_RESULT_MAX + 120, True)
+long = voice.run_tool("jobcontext", {"area": "applications", "action": "status"})
+whole = len(JOB_ANSWERS[("applications", "status")].strip())
+check("a long answer is cut to what the model can hold", (whole > 12000, len(long) < voice.JC_RESULT_MAX + 600), (True, True))
+check("and says at its top that it is only the beginning, and of how much",
+      (f"[Only the beginning is below: the first 6,000 of {whole:,} characters." in long[:200],
+       "Do not count, total or sum up from this as if it were everything" in long, "Acme" in long), (True, True, False))
+got = voice.run_tool("jobcontext", {"area": "applications", "action": "status", "find": "acme"})
+check("asked to find one thing in it, he gets the entry that mentions it, wherever it was",
+      ("is the one entry in it mentioning 'acme'" in got, "\u25a0 Acme \u2014 Engineer 90\n  Status:       applied" in got,
+       "Company1 " in got, len(got) < 900), (True, True, False, True))
+got = voice.run_tool("jobcontext", {"area": "applications", "action": "status", "args": {"find": "Initech"}})
+check("a mention deep in a long line comes back with the words around it, the rest cut",
+      ("call with Initech about the offer" in got, " ..." in got, len(got) < 1200), (True, True, True))
+got = voice.run_tool("jobcontext", {"area": "applications", "action": "status", "find": "Engineer"})
+check("too many entries to hand over: the first that fit, and how many there were",
+      ("are the first" in got and "of the 120 entries in it mentioning 'Engineer'" in got,
+       "Narrow find to see the others." in got, len(got) < voice.JC_RESULT_MAX + 600), (True, True, True))
+check("something that is not in it is said to be not in it",
+      "'Zzyzx' is not mentioned anywhere in the answer, all " in voice.run_tool(
+          "jobcontext", {"area": "applications", "action": "status", "find": "Zzyzx"}), True)
+check("a short answer comes whole, find or no find",
+      "Two interviews this week: Acme on Tuesday, Initech on Thursday." in voice.run_tool(
+          "jobcontext", {"area": "insights", "action": "briefing", "find": "Thursday"}), True)
+n = len(sent())
+check("the bundle of everything is not fetched at all",
+      ("far more than you can read" in voice.run_tool("jobcontext", {"area": "insights", "action": "session_context"}),
+       len(sent())), (True, n))
 sys.stderr = real_err
 log = journal.getvalue()
 check("the journal names the action and its arguments", "jobcontext people.get read (name)" in log, True)
@@ -1439,8 +1471,8 @@ got = typed("What's the weather like on Mars?")
 check("so does talking about something else, and he says so",
       (got, sent(), voice.CONVO["pending"]), ("That change was not saved. Noted.", [], None))
 check("the model is told it was dropped",
-      MODEL["said"][-1].endswith("[The person did not say yes to the change you put forward, so it was "
-                                 "dropped and nothing was saved.]"), True)
+      "[The person did not say yes to the change you put forward, so it was dropped and nothing was saved.]"
+      in MODEL["said"][-1], True)
 typed("I applied to Acme, log it")
 check("a yes with strings attached is not a yes",
       (typed("yes but make it interviewing").startswith("That change was not saved."), sent()), (True, []))
@@ -1608,6 +1640,61 @@ check("the records can be kept to the phone",
        typed("Tell me my briefing", "phone").startswith("From the records: Two interviews")), (True, True))
 voice.JOBCONTEXT_VIA = ()
 
+jp.forget()
+JOBS["calls"].clear()
+MODEL["script"] = lambda text: ({"content": "", "tool_calls": [call("applications", "status", {}, "c9")]}
+                                if "you answered it without looking anything up" in text
+                                else {"content": "You interviewed at Acme on June 2 with Pat Lee."})
+asks = MODEL["asks"]
+got = typed("What is the status of my Acme application?")
+check("a question about the records answered from thin air is put to the model again, and then he looks",
+      (got.startswith("From the records:"), "Pat Lee" in got, sent(), MODEL["asks"] - asks),
+      (True, False, [("applications", {"action": "status"})], 3))
+check("the journal says it happened",
+      "what may be a question about the job search was answered without looking: asked again" in jlog.getvalue(), True)
+MODEL["script"] = lambda text: ({"content": "", "tool_calls": [call("applications", "status", {}, "c9")]}
+                                if "you answered it without looking anything up" in text
+                                else {"content": "Initech is in the final round."})
+n = len(sent())
+got = typed("And what about Initech?")
+check("so is a follow-up with no such word in it, once the records are part of the conversation",
+      (got.startswith("From the records:"), len(sent()) - n), (True, 1))
+MODEL["script"] = lambda text: ({"content": "GENERAL: Lima, since 1535."}
+                                if "you answered it without looking anything up" in text
+                                else {"content": "Lima, since 1535."})
+check("a question in that conversation that he says has nothing to do with them goes out as it is",
+      typed("What is the capital of Peru?"), "Lima, since 1535.")
+jp.forget()
+MODEL["script"] = lambda text: {"content": "You interviewed at Acme on June 2 with Pat Lee."}
+got = typed("What is the status of my Acme application?")
+check("if he still will not look, what he says goes out marked as not looked up",
+      got, "You interviewed at Acme on June 2 with Pat Lee. I did not look that up in your records.")
+jp.forget()
+MODEL["script"] = lambda text: {"content": "Open with something you built, then stop."}
+check("an answer with no names or numbers in it is left alone",
+      typed("How should a cover letter start?"), "Open with something you built, then stop.")
+asks = MODEL["asks"]
+MODEL["script"] = lambda text: {"content": "Lima, since 1535."}
+check("and a question that is not about the records is asked once",
+      (typed("What is the capital of Peru?"), MODEL["asks"] - asks), ("Lima, since 1535.", 1))
+check("what reads as a question about the records",
+      [voice.about_records(q) for q in (
+          "What is the status of my Acme application?", "Did the recruiter call back?", "any interviews this week",
+          "Tell me about my pipeline.", "When is my follow-up with Initech due?")], [True] * 5)
+check("once they have been read, any question may be one, a remark still is not",
+      [voice.about_records(q, True) for q in ("And what about Initech?", "Is it raining?", "Good, thanks.")],
+      [True, True, False])
+check("and what does not",
+      [voice.about_records(q) for q in (
+          "What is the capital of Peru?", "I have an interview tomorrow, wish me luck.", "Applied maths was never my thing.",
+          "Is it raining?", "")], [False] * 5)
+check("names and numbers are what an invented answer is made of",
+      [voice.names_things(r) for r in (
+          "You interviewed at Acme.", "It closed on the 4th.", "Nothing in the records about that.",
+          "I have not looked. Ask me again.", "Open with something you built, then stop.")],
+      [True, True, False, False, False])
+MODEL["script"] = script
+
 big = {"n": 0}
 
 
@@ -1616,12 +1703,12 @@ def greedy(msgs, tools=None):
     if msgs[-1]["role"] == "tool":
         big["last"] = [len(m["content"]) for m in msgs if m["role"] == "tool"]
         return {"content": "Done."}
-    return {"content": "", "tool_calls": [call("insights", "session_context", {}, f"c{i}") for i in range(3)]}
+    return {"content": "", "tool_calls": [call("applications", "status", {}, f"c{i}") for i in range(3)]}
 
 
 voice.llm([{"role": "user", "content": "everything"}], greedy)
 check("a turn's lookups share one budget, so the model's memory is not overrun",
-      (sum(big["last"]) <= voice.TURN_RESULTS_MAX + 3 * 45, big["last"][2] < 2500), (True, True))
+      (sum(big["last"]) <= voice.TURN_RESULTS_MAX + 3 * 100, big["last"][0] > 6000, big["last"][2] < 200), (True, True, True))
 sys.stderr = real_err
 log = jlog.getvalue()
 check("the journal follows a change from held to sent, by name",
@@ -1635,6 +1722,11 @@ js.shutdown()
 voice.JOBCONTEXT_URL = voice.JOBCONTEXT_TOKEN = ""
 voice.JC.update(areas={}, catalogue="")
 voice.offer_tools()
+MODEL["script"] = lambda text: {"content": "You interviewed at Acme on June 2 with Pat Lee."}
+asks = MODEL["asks"]
+check("with no records to look in, nobody is asked twice",
+      (typed("What is the status of my Acme application?"), MODEL["asks"] - asks),
+      ("You interviewed at Acme on June 2 with Pat Lee.", 1))
 check("with the server gone from the settings the tool goes too",
       ("jobcontext" in voice.TOOLS, [t["function"]["name"] for t in voice.TOOL_SPECS].count("jobcontext")), (False, 0))
 

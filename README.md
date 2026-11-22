@@ -624,6 +624,20 @@ model:
 - Deleting is never offered (nor is anything a later version of the server
   names as a removal), and a web address is never put forward by voice,
   where it cannot be checked.
+- Some of the server's answers run to a hundred pages (the list of every
+  application), and the model reads a few. Handed the first of them unmarked,
+  it counted what it could see and called that the total. So a long answer
+  comes back either as the entries that mention what he asked to `find` (a
+  company, a name), or as its beginning under a notice that it is only the
+  beginning and is not to be counted or summed up as the whole.
+- He is told to look before he answers anything about the job search, and
+  the pipeline checks, because told is not enough: in testing he answered a
+  second question about an application from thin air, interviewer's name and
+  all. A question that uses the words of a job search, or any question once
+  the records are part of the conversation, that he answers without a single
+  lookup is put to him again with an instruction to look. If he still does
+  not, and the answer names names or numbers, it goes out ending "I did not
+  look that up in your records."
 - Once the records have been read in a conversation, `read_page` is off until
   the conversation ends (five quiet minutes, or "new conversation"). The
   records are private, and some of what is in them, a job advert or a
@@ -834,7 +848,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the job search records against a stand-in server: what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, and that the journal holds no values |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the job search records against a stand-in server: what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
