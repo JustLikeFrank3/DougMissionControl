@@ -111,6 +111,20 @@ log = journal.getvalue()
 check("is one line in the journal, not a traceback",
       (log.count("\n"), "Traceback" in log), (1, False))
 
+print("-- a caller that leaves between requests --")
+journal, real = io.StringIO(), sys.stderr
+sys.stderr = journal
+try:
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(b"GET /api/state HTTP/1.1\r\nHost: x\r\n\r\n")
+    s.recv(65536)                              # one request answered, the connection kept
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.close()                                  # and reset while it waits for the next
+    time.sleep(0.5)
+finally:
+    sys.stderr = real
+check("leaves nothing in the journal", journal.getvalue(), "")
+
 print("-- the same question sent twice, as a phone does when the reply was lost --")
 import time
 d.DOUGLAS_AGENT_TOKEN = "agent-token"

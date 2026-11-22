@@ -1685,6 +1685,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: A003 - quieter journal
         pass
 
+    def handle(self):
+        # A phone that goes to sleep resets the connections it was keeping
+        # open between requests. That is how a visit ends, not an error, and
+        # a traceback for each one buries the journal lines that matter.
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
     # -- helpers ------------------------------------------------------------
 
     def _authorised(self, query: dict) -> bool:
