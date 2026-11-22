@@ -126,6 +126,9 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .ask button:disabled, .ask input:disabled { opacity: .4; }
 .ask .cam { display: flex; align-items: center; padding: 0 12px; border-color: var(--ln);
             color: var(--cy); }
+/* The line under the ask box. Always there, so text arriving in it never
+   moves the talk button; pulled in so the empty line costs little. */
+#dgl-note { display: block; min-height: 16px; line-height: 16px; margin: -5px 0; }
 /* The photo waiting to go with the next question. */
 .shot { display: flex; align-items: center; gap: 10px; padding: 6px;
         border: 1px solid var(--cy); background: #0f151e; }

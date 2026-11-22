@@ -1661,22 +1661,53 @@ class Handler(BaseHTTPRequestHandler):
         return (query.get("token") or [""])[0] == DECK_TOKEN
 
     def _send(self, code: int, body: bytes, ctype: str) -> None:
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The other end left before the answer: a phone that went to
+            # sleep, a tab that closed. Nobody is there to tell, and a
+            # twenty-line traceback in the journal for each one buries the
+            # lines that matter.
+            self.close_connection = True
 
     def _json(self, code: int, obj) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
 
-    def _body(self) -> dict:
+    def _note(self, what: str) -> None:
+        """One journal line about a request: who, which route, what happened.
+        Never the query (it carries the token) and never what was said."""
+        print(f"http: {urlparse(self.path).path} from {self.client_address[0]}: "
+              f"{' '.join(what.split())[:200]}", file=sys.stderr, flush=True)
+
+    def _body(self) -> dict | None:
+        """The request's JSON body: {} when there is none or it is not a JSON
+        object, None when it did not arrive whole.
+
+        A phone on a poor link can lose the connection part-way through a
+        photo. Half a request is not a request: it is never acted on, and the
+        journal says so, because otherwise it only looks empty and there is
+        nothing to show for it."""
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            return json.loads(self.rfile.read(n) or b"{}")
-        except (ValueError, OSError):
+            raw = self.rfile.read(n)
+        except OSError as e:
+            self._note(f"body did not arrive ({type(e).__name__})")
+            return None
+        except ValueError:
             return {}
+        if len(raw) < n:
+            self._note(f"body cut short, {len(raw)} of {n} bytes")
+            return None
+        try:
+            got = json.loads(raw or b"{}")
+        except ValueError:
+            return {}
+        return got if isinstance(got, dict) else {}
 
     # -- routes -------------------------------------------------------------
 
@@ -1769,14 +1800,20 @@ class Handler(BaseHTTPRequestHandler):
         # The greeting's phase callback authenticates itself with the
         # boot-agent token in its body — it has never held DECK_TOKEN, so it
         # cannot pass the blanket gate below and must be routed first.
+        cut_short = {"ok": False, "message": "the request did not arrive whole"}
         if url.path == "/api/phase":
-            code, out = greeting_phase(self._body())
+            body = self._body()
+            if body is None:
+                return self._json(400, cut_short)
+            code, out = greeting_phase(body)
             return self._json(code, out)
 
         if not self._authorised(query):
             return self._json(403, {"error": "forbidden"})
 
         body = self._body()
+        if body is None:
+            return self._json(400, cut_short)
         path = url.path
 
         if path == "/api/boot":
@@ -1795,12 +1832,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/douglas/say":
-            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"),
-                                  body.get("image"))
+            image = body.get("image")
+            began = time.monotonic()
+            ok, msg = douglas_say(body.get("text"), str(body.get("via") or "deck"), image)
+            # Sizes and the outcome, not the words. Whether a phone's photo
+            # arrived whole, and how long Douglas took to accept it, is what
+            # answers "the button went grey and nothing happened".
+            kb = len(image) * 3 // 4096 if isinstance(image, str) else 0
+            self._note(f"{len(str(body.get('text') or ''))} chars"
+                       + (f" and a {kb} KB picture" if kb else "")
+                       + (" accepted" if ok else f" refused ({msg})")
+                       + f" in {time.monotonic() - began:.1f} s")
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/douglas/ptt":
-            ok, msg = douglas_ptt(str(body.get("action") or ""))
+            action = str(body.get("action") or "")
+            ok, msg = douglas_ptt(action)
+            self._note(f"{action[:12] or 'no action'}" + ("" if ok else f" refused ({msg})"))
             return self._json(200 if ok else 502, {"ok": ok, "message": msg})
 
         if path == "/api/sim/command":

@@ -284,7 +284,20 @@ to its own chat page), now playing, the fleet and the event log. When Douglas
 has a vision model the ask box grows a camera button: take or pick a photo,
 add a question or not, and he answers about what is in it. The photo is
 scaled to 1280 px on the phone before it is sent. Same SSE frame, same endpoints, same
-rules as the panel. A phone is not loopback, so it needs `DECK_TOKEN`: run
+rules as the panel.
+
+A phone's link to node1 is not a wire: on the tailnet it can drop to a relay
+or stall while the phone changes access point. So every request from the page
+has a time limit, and the line under the ask box always says why SEND is
+unavailable: a question on its way (with the seconds counted), Douglas
+thinking or listening, node1 slow to answer or not answering at all. A
+question that gets no answer keeps its words and its photo for another try.
+On node1, `journalctl -u deck-api` has one line for each question (its size
+and outcome, never its words) and one for a request that did not arrive
+whole, and `journalctl -u tailscaled` shows whether the phone was on a direct
+path or a relay at the time.
+
+A phone is not loopback, so it needs `DECK_TOKEN`: run
 `sudo ./pi/mobile-link.sh` on node1 and open the link it prints (a QR code too
 when `qrencode` is installed). The page keeps the token in that browser and
 strips it from the address bar; "Add to Home Screen" makes it a full-screen app.

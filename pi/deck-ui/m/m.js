@@ -34,21 +34,36 @@ function api(path) {
   return path + (path.indexOf('?') < 0 ? '?' : '&') + 'token=' + encodeURIComponent(token);
 }
 
-function getJSON(path) {
-  return fetch(api(path), { cache: 'no-store' }).then(function (r) {
+// A phone's link to node1 is not a wire. Over the tailnet it can drop to a
+// relay, or stall while the phone moves between access points, and fetch()
+// on its own waits about a minute before it admits anything is wrong. So
+// every request has a deadline, and one that misses it comes back as null,
+// "no answer", exactly as a refused connection does.
+function request(path, opts, ms) {
+  var ctl = window.AbortController ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function () { ctl.abort(); }, ms) : 0;
+  if (ctl) opts.signal = ctl.signal;
+  function done(v) { clearTimeout(timer); return v; }
+  return fetch(api(path), opts).then(function (r) {
     if (r.status === 403) { showGate(); return null; }
     return r.json();
-  }).catch(function () { return null; });
+  }).then(done, function () { return done(null); });
 }
 
-function post(path, body) {
-  return fetch(api(path), {
+// Reads answer within a few seconds or not at all: deck-api's own slowest
+// read gives up after three.
+function getJSON(path) {
+  return request(path, { cache: 'no-store' }, 8000);
+}
+
+// The default outlasts deck-api's slowest command (a shutdown waits up to
+// twenty seconds for the workstation), so a deadline here never cuts short
+// something that is still going to happen.
+function post(path, body, ms) {
+  return request(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
-  }).then(function (r) {
-    if (r.status === 403) { showGate(); return null; }
-    return r.json();
-  }).catch(function () { return null; });
+  }, ms || 30000);
 }
 
 function showGate() {
@@ -70,7 +85,7 @@ $('gate-form').addEventListener('submit', function (e) {
 
 // ── stream ───────────────────────────────────────────────────────────────
 
-var es = null, state = null;
+var es = null, state = null, retry = 0;
 
 function setConn(text, cls) {
   var c = $('conn');
@@ -79,11 +94,19 @@ function setConn(text, cls) {
 }
 
 function connect() {
+  clearTimeout(retry);
   if (es) es.close();
   // A probe first: EventSource cannot see a 403, it just retries forever,
   // which would read as "reconnecting" to a phone that is simply not allowed.
   getJSON('/api/state').then(function (s) {
-    if (!s) { if ($('gate').hidden) setConn('node1 unreachable', 'dead'); return; }
+    if (!s) {
+      // No answer is not a verdict: keep trying while the page is being looked at.
+      if ($('gate').hidden) {
+        setConn('node1 unreachable', 'dead');
+        if (!document.hidden) retry = setTimeout(connect, 5000);
+      }
+      return;
+    }
     render(s);
     es = new EventSource(api('/api/events'));
     es.onopen = function () { setConn('live', 'live'); };
@@ -97,8 +120,11 @@ function connect() {
 // A phone sleeps the page; the stream dies under it. Reconnect on return
 // rather than showing a frame from an hour ago as if it were live.
 document.addEventListener('visibilitychange', function () {
-  if (document.hidden) { if (es) { es.close(); es = null; } pollAll(false); }
-  else { connect(); pollAll(true); }
+  if (document.hidden) {
+    clearTimeout(retry);
+    if (es) { es.close(); es = null; }
+    pollAll(false);
+  } else { connect(); pollAll(true); }
 });
 
 // ── render (SSE frame) ───────────────────────────────────────────────────
@@ -196,7 +222,13 @@ function paintEvents(evs) {
 
 var VOICE_SUB = { idle: 'READY', listening: 'LISTENING…', thinking: 'THINKING…',
                   speaking: 'SPEAKING…' };
-var pressed = false, lastDgl = null, asking = false;
+var pressed = false;
+var lastDgl = null;              // the frame on screen; null when node1 gave none
+var polled = false;              // has a poll come back yet, with a frame or without?
+var misses = 0;                  // polls in a row that got no answer
+var late = false;                // a poll has been out for seconds: the link is slow
+var asking = false;              // 'photo' or 'text' while a question is on its way
+var askedAt = 0, askTimer = 0;
 var shot = null;                 // { b64, url }: the photo going with the next question
 
 function paintDouglasHead(dgl) {
@@ -220,30 +252,50 @@ function paintDouglasHead(dgl) {
 function gb(b) { return b == null ? null : b / 1073741824; }
 function num(v, dp) { return v == null || !isFinite(v) ? null : Number(v).toFixed(dp); }
 
-function paintDouglas(d) {
-  lastDgl = d;
-  d = d || {};
+// The ask row and the talk button: what can be done right now and, when the
+// answer is nothing, why. A greyed button that does not say why reads as a
+// page that has hung, so every reason SEND is unavailable is put into words
+// on the line under it - which stays readable when the box has text in it
+// and its placeholder cannot be seen.
+function paintAsk() {
+  var d = lastDgl || {};
   var agent = !!d.agent, voice = d.voice || {};
   var vstate = agent && VOICE_SUB[voice.state] ? voice.state : 'absent';
-  var ptt = $('dgl-ptt');
-  ptt.dataset.state = vstate;
-  ptt.disabled = vstate === 'absent' && !pressed;
-  $('dgl-ptt-s').textContent = !agent ? 'NO AGENT'
-    : vstate === 'absent' ? 'NO VOICE PIPELINE' : VOICE_SUB[vstate];
-  // Typing needs the agent and a pipeline that is not mid-turn.
-  var canAsk = agent && vstate !== 'absent' && vstate !== 'thinking' && vstate !== 'listening';
-  $('dgl-ask-go').disabled = !canAsk || asking;
-  $('dgl-ask-text').placeholder = !agent ? 'Douglas is unreachable'
-    : vstate === 'absent' ? 'no voice pipeline on Douglas'
-    : vstate === 'thinking' ? (shot ? 'Douglas is looking…' : 'Douglas is thinking…')
-    : shot ? 'Ask about the photo…' : 'Ask Douglas…';
-  // The camera is offered only when he can actually see.
-  $('dgl-cam').hidden = !(agent && voice.eyes);
-  var note = $('dgl-note');
-  if (note.dataset.sticky !== '1') {
-    note.className = 'note';
-    note.textContent = agent ? '' : (d.why || '');
+  if (polled) {
+    var ptt = $('dgl-ptt');
+    ptt.dataset.state = vstate;
+    ptt.disabled = vstate === 'absent' && !pressed;
+    $('dgl-ptt-s').textContent = !lastDgl ? 'NO LINK' : !agent ? 'NO AGENT'
+      : vstate === 'absent' ? 'NO VOICE PIPELINE' : VOICE_SUB[vstate];
+    // The camera is offered only when he can actually see.
+    $('dgl-cam').hidden = !(agent && voice.eyes);
   }
+  // Typing needs node1, the agent, and a pipeline that is not mid-turn.
+  // Before the first poll is back nothing is known, and nothing is claimed.
+  var why = !polled ? ''
+    : !lastDgl ? 'node1 is not answering'
+    : !agent ? 'Douglas is unreachable'
+    : vstate === 'absent' ? 'no voice pipeline on Douglas'
+    : vstate === 'thinking' ? 'Douglas is thinking…'
+    : vstate === 'listening' ? 'Douglas is listening…' : '';
+  var sending = asking === 'photo' ? 'Sending the photo…' : 'Sending…';
+  $('dgl-ask-go').disabled = !!asking || !!why;
+  $('dgl-ask-text').placeholder = asking ? sending
+    : why || (shot ? 'Ask about the photo…' : 'Ask Douglas…');
+  var note = $('dgl-note');
+  if (note.dataset.sticky === '1') return;      // a failure is still being read
+  var secs = Math.round((Date.now() - askedAt) / 1000);
+  note.className = 'note';
+  note.textContent = asking ? sending + (secs >= 3 ? ' ' + secs + ' s' : '')
+    : !agent && d.why ? 'Douglas is unreachable: ' + d.why
+    : why || (misses || late ? 'node1 is slow to answer' : '');
+}
+
+function paintDouglas(d) {
+  lastDgl = d || null;
+  paintAsk();
+  d = d || {};
+  var agent = !!d.agent;
 
   var host = d.host || {}, gpu = d.gpu || {}, llm = d.llm || {};
   var gUsed = (gpu.vram_used_bytes || 0) + (gpu.gtt_used_bytes || 0);
@@ -288,12 +340,28 @@ function paintDouglas(d) {
   });
 }
 
-function dglNote(msg) {
+// One missed poll is the link, not Douglas: the frame on screen stays through
+// it, with a word that node1 is slow. Three in a row and that frame is too
+// old to stand behind.
+function gotDouglas(d) {
+  polled = true;
+  late = false;
+  misses = d ? 0 : misses + 1;
+  if (d || misses >= 3 || !lastDgl) paintDouglas(d);
+  else paintAsk();
+  repace();
+}
+
+// A failure the person has to see: red, and held for a few seconds so the
+// next poll does not wipe it before it has been read.
+var noteTimer = 0;
+function dglNote(msg, ms) {
   var note = $('dgl-note');
   note.className = 'note bad';
   note.textContent = msg;
   note.dataset.sticky = '1';
-  setTimeout(function () { note.dataset.sticky = ''; }, 5000);
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(function () { note.dataset.sticky = ''; paintAsk(); }, ms || 5000);
 }
 
 // ── a photo for Douglas ─────────────────────────────────────────────────
@@ -326,7 +394,7 @@ function clearShot() {
   shot = null;
   $('dgl-shot').hidden = true;
   $('dgl-photo').value = '';
-  if (lastDgl) paintDouglas(lastDgl);          // the placeholder follows
+  paintAsk();                                  // the placeholder follows
 }
 
 $('dgl-cam').addEventListener('click', function () { $('dgl-photo').click(); });
@@ -341,7 +409,7 @@ $('dgl-photo').addEventListener('change', function () {
       shot = { b64: String(rd.result).split(',')[1], url: URL.createObjectURL(blob) };
       $('dgl-shot-img').src = shot.url;
       $('dgl-shot').hidden = false;
-      if (lastDgl) paintDouglas(lastDgl);
+      paintAsk();
     };
     rd.onerror = function () { dglNote('could not read that photo'); };
     rd.readAsDataURL(blob);
@@ -353,32 +421,39 @@ $('dgl-ask').addEventListener('submit', function (e) {
   var box = $('dgl-ask-text');
   var text = box.value.trim();
   if ((!text && !shot) || asking) return;     // a photo alone asks "what is this?"
-  asking = true;
-  $('dgl-ask-go').disabled = true;
   var body = { text: text, via: 'phone' };
   if (shot) body.image = shot.b64;
-  post('/api/douglas/say', body).then(function (r) {
+  asking = shot ? 'photo' : 'text';
+  askedAt = Date.now();
+  clearTimeout(noteTimer);
+  $('dgl-note').dataset.sticky = '';          // a new try: the last failure has been read
+  // The line under the box counts the seconds while this is out. A photo over
+  // a slow link takes a while, and a button that only goes grey looks hung.
+  askTimer = setInterval(paintAsk, 1000);
+  paintAsk();
+  // A photo gets longer: it is a few hundred kilobytes to push through
+  // whatever link the phone has, and deck-api then gives Douglas twenty
+  // seconds to take it.
+  post('/api/douglas/say', body, shot ? 45000 : 12000).then(function (r) {
     asking = false;
+    clearInterval(askTimer);
     if (r && r.ok) {
       box.value = '';
       clearShot();
       box.blur();                    // drop the keyboard so the reply is visible
-      tickDouglas();                 // shows our line now; 'thinking' speeds the poll
     } else {
-      dglNote(r ? (r.message || 'Douglas refused') : 'deck-api did not answer');
+      // Nothing is thrown away: the words and the photo stay for another try.
+      dglNote(r ? (r.message || 'Douglas refused')
+        : 'No answer from node1: the link from this phone is slow or down. Try again.', 8000);
     }
-    $('dgl-ask-go').disabled = false;
+    paintAsk();
+    tickDouglas(true);               // shows our line now; 'thinking' speeds the poll
   });
 });
 
 function pttSend(action) {
-  post('/api/douglas/ptt', { action: action }).then(function (r) {
-    if (r && r.ok) return;
-    var note = $('dgl-note');
-    note.className = 'note bad';
-    note.textContent = r ? (r.message || 'Douglas refused') : 'deck-api did not answer';
-    note.dataset.sticky = '1';
-    setTimeout(function () { note.dataset.sticky = ''; }, 5000);
+  post('/api/douglas/ptt', { action: action }, 8000).then(function (r) {
+    if (!(r && r.ok)) dglNote(r ? (r.message || 'Douglas refused') : 'No answer from node1');
   });
 }
 
@@ -454,8 +529,38 @@ function every(name, ms, fn) {
   fn();
   timers[name] = { ms: ms, id: setInterval(fn, ms) };
 }
-function tickDouglas() { getJSON('/api/douglas').then(function (d) { paintDouglas(d); repace(); }); }
-function tickNp() { getJSON('/api/media').then(paintNp); }
+
+// One request per poll at a time. /api/media can take seconds when the
+// workstation is slow to answer, and a slow link stretches everything; fired
+// every three seconds regardless, those calls pile up on the handful of
+// connections a phone opens to node1, and the one request that matters, a
+// question for Douglas, queues behind them. `fresh` asks for an answer
+// fetched after this moment, so a poll already under way is followed by one
+// more.
+var flying = {}, again = {}, epoch = 0;
+function poll(name, path, paint, fresh) {
+  if (flying[name]) {
+    if (fresh) again[name] = true;
+    return Date.now() - flying[name];           // how long that one has been out
+  }
+  var mine = epoch;
+  flying[name] = Date.now();
+  getJSON(path).then(function (d) {
+    if (mine !== epoch) return;                 // the page slept meanwhile: stale
+    flying[name] = 0;
+    paint(d);
+    if (again[name]) { again[name] = false; poll(name, path, paint); }
+  });
+  return 0;
+}
+function tickDouglas(fresh) {
+  var out = poll('dgl', '/api/douglas', gotDouglas, fresh === true);
+  // Douglas's status normally takes a tenth of a second. Still waiting on it
+  // seconds later is a slow link, and worth saying before a deadline makes it
+  // official.
+  if (out >= 2500 && !late) { late = true; paintAsk(); }
+}
+function tickNp() { poll('np', '/api/media', paintNp); }
 
 function busy() {
   var st = lastDgl && lastDgl.voice && lastDgl.voice.state;
@@ -467,6 +572,12 @@ function pollAll(on) {
   if (!on) {
     Object.keys(timers).forEach(function (k) { clearInterval(timers[k].id); });
     timers = {};
+    // Whatever is in flight belongs to a page about to sleep. Its answer, if
+    // one ever comes, must not be painted over a fresher one, nor hold up the
+    // first poll when the page wakes.
+    epoch++;
+    flying = {};
+    again = {};
     return;
   }
   every('dgl', 3000, tickDouglas);

@@ -90,11 +90,15 @@
                maxlength="2000" placeholder="Ask Douglas…">
         <button type="submit" id="dgl-ask-go">SEND</button>
       </form>
+      <!-- Why SEND is unavailable, how a send is going, or what went wrong:
+           directly under the box, where it is still on screen with the
+           keyboard up. The line keeps its height when empty, so the talk
+           button below does not jump under a thumb. -->
+      <div class="note" id="dgl-note" role="status"></div>
       <button class="ptt" id="dgl-ptt" data-state="absent">
         <span>HOLD TO TALK</span><small id="dgl-ptt-s">—</small>
       </button>
       <a class="wide link" id="dgl-chat" hidden target="_blank" rel="noopener">OPEN CHAT</a>
-      <div class="note" id="dgl-note"></div>
     </section>
 
     <!-- Now playing, from whichever OS is up. -->
