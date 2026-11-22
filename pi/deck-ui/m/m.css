@@ -145,6 +145,7 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 }
 .ptt span { font-size: 20px; letter-spacing: .2em; }
 .ptt small { font-size: 12px; letter-spacing: .12em; color: var(--mut); }
+.ptt .where { font-style: normal; font-size: 10px; letter-spacing: .1em; color: var(--mut); }
 .ptt.pressed { border-color: var(--acc); }
 .ptt:disabled { opacity: .35; }
 .ptt[data-state="idle"] small { color: var(--gr); }

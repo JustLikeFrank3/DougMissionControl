@@ -386,10 +386,19 @@ function paintAsk() {
               'open. ' + waited
       : sending;
   } else {
+    // What DougVoice made of the last press, while it is still news. A
+    // press that gets no answer is otherwise indistinguishable from a
+    // Douglas who has stopped working.
+    var heard = voice.heard, deaf = '';
+    if (heard && heard.words === 0 && d.ts - heard.ts < 20) {
+      deaf = 'DougVoice heard nothing in ' + heard.seconds + ' s' +
+        (heard.level_db < -45 ? ': the room around it was quiet' : '') +
+        '. It listens through its own microphone, not this phone\'s.';
+    }
     note.textContent = !lastDgl && polled
         ? 'node1 is not answering. SEND still works: your question waits until the link is back.'
       : !agent && d.why ? 'Douglas is unreachable: ' + d.why
-      : why || (misses || late ? 'node1 is slow to answer' : '');
+      : why || deaf || (misses || late ? 'node1 is slow to answer' : '');
   }
 }
 

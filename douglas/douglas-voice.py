@@ -53,6 +53,7 @@ import email.utils
 import html
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -183,6 +184,12 @@ HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "300"))  # forget after quiet
 MAX_LISTEN_S = float(E("VOICE_MAX_LISTEN_S", "20"))
 MAX_SAY_CHARS = int(E("VOICE_MAX_SAY_CHARS", "2000"))   # one typed turn
 MIN_LISTEN_S = float(E("VOICE_MIN_LISTEN_S", "0.3"))
+# Whisper, handed a quiet room, does not say "nothing": it says "you", or
+# thanks someone for watching. A transcript that is only one of those, from
+# audio quieter than this (dB below full scale), is taken as nothing heard.
+QUIET_DB = float(E("VOICE_QUIET_DB", "-45"))
+NOT_SPEECH = {"you", "thank you", "thanks", "thank you for watching", "thanks for watching",
+              "bye", "bye bye", "so", "okay", "oh", "hmm", "uh"}
 HEARTBEAT_S = float(E("VOICE_HEARTBEAT_S", "5"))
 VOICE_STATE_FILE = E("VOICE_STATE_FILE", "/run/douglas/voice.json")
 TRANSCRIPT_FILE = E("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
@@ -207,11 +214,12 @@ class StateFile:
         self.satellite = False
         self.last_turn: float | None = None
         self.eyes = False               # a vision model is configured
+        self.heard: dict | None = None  # the last time it listened: how long, how loud, how many words
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict:
         return {"state": self.state, "satellite": self.satellite, "eyes": self.eyes,
-                "ts": time.time(), "last_turn": self.last_turn}
+                "ts": time.time(), "last_turn": self.last_turn, "heard": self.heard}
 
     def update(self, **kw) -> None:
         """Change any of state / satellite / last_turn; writes if anything
@@ -310,6 +318,21 @@ def read_event(f) -> tuple[str, dict, bytes | None] | None:
         if len(payload) < n:
             return None
     return str(head.get("type")), data, payload
+
+
+def loudness(pcm: bytes, width: int) -> float:
+    """How loud 16-bit PCM is, in dB below full scale: 0 is as loud as it
+    gets, about -60 is a quiet room, -96 is no signal at all. A level, not a
+    measurement: a sample of the samples is plenty."""
+    if width != 2 or len(pcm) < 2:
+        return -96.0
+    a = array.array("h")
+    a.frombytes(pcm[:len(pcm) // 2 * 2])
+    if sys.byteorder == "big":
+        a.byteswap()
+    part = a[::max(1, len(a) // 20000)]
+    rms = math.sqrt(sum(x * x for x in part) / len(part))
+    return max(-96.0, round(20 * math.log10(max(rms, 0.5) / 32768.0), 1))
 
 
 def fmt_of(d: dict) -> tuple[int, int, int]:
@@ -1227,6 +1250,10 @@ class Pipeline:
                     return False, f"not listening ({self.state})"
                 return True, self._finish_listening()
             if action == "cancel":
+                if self.state == "listening" and self._audio:
+                    rate, width, channels = self._fmt
+                    log(f"listening cancelled after {len(self._audio) / (rate * width * channels):.1f} s "
+                        f"at {loudness(bytes(self._audio), width):.0f} dB")
                 self._turn += 1
                 self._played.set()
                 self._hush()
@@ -1319,7 +1346,21 @@ class Pipeline:
                     self.st.update(state="idle")
 
     def _run_turn(self, audio: bytes, fmt, via: str, turn: int) -> None:
+        rate, width, channels = fmt
+        secs, level = len(audio) / (rate * width * channels), loudness(audio, width)
         heard = self.stt(audio, fmt)
+        said = " ".join(re.sub(r"[^\w' ]+", " ", heard.lower()).split())
+        if level < QUIET_DB and said in NOT_SPEECH:
+            log(f"{heard.strip()!r} out of a quiet room is not speech - ignored")
+            heard = ""
+        # How long, how loud, how many words: never the words themselves.
+        # It is what tells "nobody was near the microphone" from "it could
+        # not make out what was said" when a press gets no answer.
+        words = len(heard.split())
+        log(f"heard {secs:.1f} s at {level:.0f} dB via {via}: "
+            + (f"{words} word{'s' if words != 1 else ''}" if words else "nothing recognised"))
+        self.st.update(heard={"ts": time.time(), "seconds": round(secs, 1),
+                              "level_db": level, "words": words})
         self.send("transcript", {"text": heard})
         if not heard or not self._current(turn):
             return

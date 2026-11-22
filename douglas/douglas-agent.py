@@ -240,10 +240,14 @@ def voice_state() -> dict:
         return {"state": "absent", "satellite": False}
     if time.time() - float(v.get("ts") or 0) > VOICE_STALE_S:
         return {"state": "absent", "satellite": False}
+    heard = v.get("heard")
     return {"state": str(v.get("state") or "absent"),
             "satellite": bool(v.get("satellite")),
             "eyes": bool(v.get("eyes")),          # he can be sent a picture
-            "last_turn": v.get("last_turn")}
+            "last_turn": v.get("last_turn"),
+            # The last time he listened: how long, how loud, how many words.
+            # What lets a panel say "heard nothing" instead of saying nothing.
+            "heard": heard if isinstance(heard, dict) else None}
 
 
 def transcript() -> list[dict]:

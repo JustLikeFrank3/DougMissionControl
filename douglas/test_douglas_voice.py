@@ -174,6 +174,10 @@ check("satellite saw the turn in order",
       [e for e in SENT if e != "audio-chunk"],
       ["voice-started", "voice-stopped", "transcript", "audio-start", "audio-stop"])
 check("history carried to the next turn", len(pipe.history), 2)
+check("the state file says how long, how loud and how many words were heard",
+      {k: on_disk()["heard"][k] for k in ("seconds", "level_db", "words")},
+      {"seconds": 2.0, "level_db": -90.3, "words": 4})
+check("and the agent passes that on", agent.voice_state()["heard"]["words"], 4)
 
 print("-- states along the way --")
 GATE = threading.Event()
@@ -925,6 +929,82 @@ check("the agent tells the deck whether he can see",
       (agent.voice_state()["eyes"], voice.PIPE.st.update(eyes=True), agent.voice_state()["eyes"]),
       (False, None, True))
 voice.EYES_URL = ""
+
+print("-- what a quiet room sounds like to Whisper --")
+import array
+check("no signal at all", voice.loudness(b"\x00\x00" * 4000, 2), -96.0)
+check("half of full scale", voice.loudness(array.array("h", [16384, -16384] * 2000).tobytes(), 2), -6.0)
+check("full scale", voice.loudness(array.array("h", [32767, -32767] * 2000).tobytes(), 2) == 0.0, True)
+check("not 16-bit: no opinion", voice.loudness(b"\x01\x02\x03", 1), -96.0)
+qdir = tempfile.mkdtemp()
+q_state, q_lines = os.path.join(qdir, "voice.json"), os.path.join(qdir, "transcript.jsonl")
+QSENT = []
+
+
+def q_sender(*a):
+    QSENT.append(a)
+    if a[0] == "audio-stop":
+        threading.Timer(0.05, quiet.satellite_event, ("played", {}, None)).start()
+    return True
+
+
+quiet = voice.Pipeline(voice.StateFile(q_state), voice.Transcript(q_lines), send=q_sender,
+                       snd_format=lambda: (16000, 2, 1), stt=lambda audio, fmt: " You.",
+                       llm=lambda messages: "Me.", tts=fake_tts)
+
+
+def q_heard():
+    try:
+        with open(q_state, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def q_turns():
+    try:
+        with open(q_lines, encoding="utf-8") as f:
+            return [json.loads(x)["text"] for x in f if x.strip()]
+    except OSError:
+        return []
+
+
+def press(pipe, sound):
+    pipe.ptt("start", "phone")
+    pipe.satellite_event("audio-chunk", FMT, sound)
+    pipe.satellite_event("audio-chunk", FMT, sound)
+    pipe.ptt("stop", "phone")
+
+
+journal, real_err = io.StringIO(), sys.stderr
+sys.stderr = journal
+press(quiet, SECOND)
+until(lambda: (q_heard().get("heard") or {}).get("words") == 0 and q_heard().get("state") == "idle")
+check("'you' out of a quiet room is not a question", (q_turns(), q_heard()["heard"]["words"]), ([], 0))
+check("and the satellite is told nothing was said",
+      [a[1] for a in QSENT if a[0] == "transcript"], [{"text": ""}])
+LOUD = array.array("h", [9000, -9000] * 8000).tobytes()        # a second of something audible
+press(quiet, LOUD)
+until(lambda: len(q_turns()) == 2 and q_heard().get("state") == "idle")
+check("the same word said out loud is", q_turns(), ["You.", "Me."])
+check("and its level is on record", (q_heard()["heard"]["level_db"], q_heard()["heard"]["words"]), (-11.2, 1))
+quiet.stt = lambda audio, fmt: "Is it raining?"
+press(quiet, SECOND)
+until(lambda: len(q_turns()) == 4)
+check("a real question is kept however quietly it came", q_turns()[2], "Is it raining?")
+quiet.ptt("start", "phone")
+quiet.satellite_event("audio-chunk", FMT, SECOND)
+quiet.ptt("cancel", "phone")
+sys.stderr = real_err
+log = journal.getvalue()
+check("the journal has the length and level of each listen",
+      "douglas-voice: heard 2.0 s at -90 dB via phone: nothing recognised" in log
+      and "douglas-voice: heard 2.0 s at -11 dB via phone: 1 word" in log
+      and "douglas-voice: heard 2.0 s at -90 dB via phone: 3 words" in log, True)
+check("and of one that was cancelled", "listening cancelled after 1.0 s at -90 dB" in log, True)
+check("and says when it threw a stock word away", "' You.' out of a quiet room is not speech - ignored" in log
+      or "'You.' out of a quiet room is not speech - ignored" in log, True)
+check("but never the words of a real question", "raining" in log, False)
 
 hs.shutdown()
 ls.shutdown()
