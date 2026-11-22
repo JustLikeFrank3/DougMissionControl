@@ -204,6 +204,37 @@ finally:
 check("and the journal names who it was passed on for", journal.getvalue().strip(),
       "http: /api/douglas/ptt from 100.64.0.9: start")
 
+print("-- a refused request does not spoil the next one on the same connection --")
+import http.client
+conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+conn.request("POST", "/api/douglas/say", body=json.dumps({"text": "let me in"}),
+             headers={"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9"})
+r = conn.getresponse()
+first = (r.status, r.getheader("Connection"))
+r.read()
+try:
+    conn.request("GET", "/api/state?token=deck-token", headers={"X-Forwarded-For": "100.64.0.9"})
+    second = conn.getresponse().status
+except (http.client.HTTPException, OSError) as e:
+    second = type(e).__name__
+conn.close()
+check("the refusal reads its body out of the way", first, (403, None))
+check("so the next request on that connection starts clean", second, 200)
+conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+conn.request("POST", "/api/douglas/hear", body=json.dumps({"audio": "A" * 700_000}),
+             headers={"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9"})
+r = conn.getresponse()
+check("a refused recording is heard out too, and told no", (r.status, r.getheader("Connection")), (403, None))
+r.read()
+conn.close()
+s2 = socket.create_connection(("127.0.0.1", port), timeout=5)
+s2.sendall(b"POST /api/douglas/say HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 100.64.0.9\r\n"
+           b"Content-Length: 50000000\r\n\r\n{")
+reply = s2.recv(4096)
+s2.close()
+check("a body too big to be worth reading ends the connection instead",
+      (reply.split(b"\r\n")[0], b"Connection: close" in reply), (b"HTTP/1.1 403 Forbidden", True))
+
 print("-- a turn recorded on the phone --")
 heard, answer["got"], answer["wait"] = [], {"ok": True, "message": "thinking"}, 0.0
 d._ws_json = lambda url, payload=None, timeout=3: (heard.append((url.split("?")[0].rsplit("/", 1)[-1], payload, timeout)), answer["got"])[1]

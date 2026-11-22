@@ -1798,6 +1798,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
@@ -1809,6 +1811,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, obj) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _drop_body(self, most: int = 2_000_000) -> None:
+        """Read and discard a request body nobody is going to use."""
+        try:
+            left = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            left = -1
+        if not 0 <= left <= most:
+            self.close_connection = True
+            return
+        try:
+            while left > 0:
+                chunk = self.rfile.read(min(left, 65536))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:
+            pass
+        if left:
+            self.close_connection = True
 
     def _note(self, what: str) -> None:
         """One journal line about a request: who, which route, what happened.
@@ -1952,6 +1974,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(code, out)
 
         if not self._authorised(query):
+            # Refused, and its body has to go somewhere first. Left unread on
+            # a connection that is kept open - and a proxy in front keeps its
+            # connections, and shares them between callers - it would be
+            # taken for the start of the next request. A body of ordinary
+            # size is read and dropped, so the caller hears its 403; anything
+            # bigger, or cut short, ends the connection instead.
+            self._drop_body()
             return self._json(403, {"error": "forbidden"})
 
         body = self._body()
