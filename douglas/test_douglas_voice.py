@@ -1086,6 +1086,559 @@ check("and says when it threw a stock word away", "' You.' out of a quiet room i
       or "'You.' out of a quiet room is not speech - ignored" in log, True)
 check("but never the words of a real question", "raining" in log, False)
 
+print("-- the job search records: read at once, changed only on a yes --")
+DASH = " — "
+
+
+def job_tool(name, about, actions, props):
+    return {"name": name, "description": about + "\n\nActions:\n" + "\n".join("  " + a for a in actions),
+            "inputSchema": {"type": "object", "required": ["action"], "properties": {
+                "action": {"enum": [a.split(DASH)[0] for a in actions], "type": "string"},
+                **{p: {"anyOf": [{"type": t}, {"type": "null"}], "default": None} for p, t in props.items()}}}}
+
+
+JOB_TOOLS = [
+    job_tool("applications", "Track and evaluate job applications: pipeline status and events.", [
+        "status" + DASH + "Current tracked pipeline snapshot.",
+        "update" + DASH + "Create/update a tracked application. Requires: company, role, status. Optional: next_steps, contact, notes.",
+        "decide" + DASH + "Record an apply/skip decision. Requires: company, role, decision. Optional: notes, fitment_score.",
+        "brand_new" + DASH + "Something the server grew last night. Optional: company."],
+        {"company": "string", "role": "string", "status": "string", "next_steps": "string", "contact": "string",
+         "notes": "string", "decision": "string", "fitment_score": "integer"}),
+    job_tool("job_search", "Find job postings: open-web search, a company board, or a posting URL.", [
+        "web" + DASH + "Search job boards on the open web. Requires: query. Optional: location, num_results, auto_queue.",
+        "url" + DASH + "Scrape a specific job posting URL. Requires: url. Optional: auto_queue, page_text.",
+        "remove_board" + DASH + "Remove a board from future searches. Requires: provider, company_slug."],
+        {"query": "string", "location": "string", "num_results": "integer", "auto_queue": "boolean", "url": "string",
+         "page_text": "string", "provider": "string", "company_slug": "string"}),
+    job_tool("people", "Contacts and outreach: log/list people.", [
+        "log" + DASH + "Add/update a contact. Requires: name, relationship, company, context. Optional: tags, "
+        "outreach_status (one of: none, drafted, sent, responded), notes.",
+        "get" + DASH + "Full profile for one contact; include_context adds stories. Requires: name. Optional: include_context."],
+        {"name": "string", "relationship": "string", "company": "string", "context": "string", "tags": "string",
+         "outreach_status": "string", "notes": "string", "include_context": "boolean"}),
+    job_tool("stories", "Personal stories and voice.", [
+        "log" + DASH + "Log a personal story/anecdote. Requires: story, tags. Optional: people, title.",
+        "delete" + DASH + "Delete a story (e.g. a duplicate). Requires: story_id.",
+        "tone_profile" + DASH + "Retrieve writing samples. Optional: limit."],
+        {"story": "string", "tags": "string", "people": "string", "title": "string", "story_id": "string", "limit": "integer"}),
+    job_tool("wellbeing", "Wellbeing during the hunt: mood/energy check-ins.", [
+        "checkin" + DASH + "Log a mood/energy check-in. Requires: mood, energy. Optional: notes, productive.",
+        "log" + DASH + "Recent check-in history. Optional: days."],
+        {"mood": "integer", "energy": "integer", "notes": "string", "productive": "boolean", "days": "integer"}),
+    job_tool("insights", "Digests and analysis.", [
+        "briefing" + DASH + "Speakable one-breath briefing (plain prose, no markdown) for voice assistants; fast local reads only.",
+        "session_context" + DASH + "Session startup context bundle."], {}),
+    job_tool("certification", "Weekly work-search certification.", [
+        "state_profile" + DASH + "Read/update the state's certification rules. Optional: mode, state, min_activities_per_week."],
+        {"mode": "string", "state": "string", "min_activities_per_week": "integer"}),
+    job_tool("workspace", "Workspace setup.", [
+        "check" + DASH + "Diagnose what's present/missing (read-only).",
+        "setup" + DASH + "Create/complete the workspace from your details. Requires: name, email."],
+        {"name": "string", "email": "string"}),
+]
+JOBS = {"mode": "ok", "calls": [], "auth": [], "thief": []}
+JOB_ANSWERS = {
+    ("insights", "briefing"): "Two interviews this week: Acme on Tuesday, Initech on Thursday.",
+    ("insights", "session_context"): "MASTER RESUME " + "x" * 9000,
+    ("applications", "status"): "PIPELINE\nAcme — Senior Engineer [applied]",
+    ("applications", "update"): "✓ Updated: Acme — Senior Engineer (applied)\nNext: follow up in a week.",
+    ("applications", "decide"): "✗ No queued job found for Acme — Senior Engineer.",
+    ("wellbeing", "checkin"): "Check-in saved (2026-11-22, energy 7/10, mood: 6).\nKeep going.",
+    ("people", "log"): "✓ Person logged (#12): Sam Reed — recruiter at Acme",
+    ("job_search", "web"): "1. Staff Engineer at Acme",
+}
+
+
+class FakeJobs(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):  # noqa: N802 — where a followed redirect would land
+        JOBS["thief"].append(self.headers.get("Authorization"))
+        self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
+
+    def do_POST(self):  # noqa: N802
+        req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/steal":
+            JOBS["thief"].append(self.headers.get("Authorization"))
+        JOBS["auth"].append(self.headers.get("Authorization"))
+        p = req.get("params") or {}
+        if req.get("method") == "tools/call":
+            JOBS["calls"].append((p.get("name"), p.get("arguments")))
+        mode = JOBS["mode"]
+        if mode == "down":
+            self.send_response(503); self.end_headers(); return
+        if mode == "locked":
+            self.send_response(401); self.end_headers(); return
+        if mode == "elsewhere":
+            self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{js.server_address[1]}/steal")
+            self.end_headers(); return
+        if mode == "slow":
+            time.sleep(1.0)
+        if req.get("method") == "tools/list":
+            res = {"tools": JOB_TOOLS}
+        else:
+            a = p.get("arguments") or {}
+            text = JOB_ANSWERS.get((p.get("name"), a.get("action")), "ok")
+            res = {"content": [{"type": "text", "text": "it fell over" if mode == "error" else text}],
+                   "isError": mode == "error"}
+        body = ("event: message\ndata: " + json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": res}) + "\n\n").encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+        except OSError:
+            pass                            # the caller gave up waiting
+
+
+js = ThreadingHTTPServer(("127.0.0.1", 0), FakeJobs)
+threading.Thread(target=js.serve_forever, daemon=True).start()
+JURL = f"http://127.0.0.1:{js.server_address[1]}/mcp"
+
+
+def sent():
+    return [c for c in JOBS["calls"]]
+
+
+voice.TOOLS_ON = True
+voice.CONVO.update(private=False, pending=None)
+check("with no server named he has no such tool",
+      (voice.jc_on(), "jobcontext" in voice.TOOLS, "job search records" in voice.system_prompt("phone", False)),
+      (False, False, False))
+voice.JOBCONTEXT_TOKEN = "jc-k3y"
+voice.JOBCONTEXT_URL = "http://jobs.example.org/mcp"
+check("a key is not sent in the clear to another machine", voice.jc_on(), False)
+voice.JOBCONTEXT_URL = "https://jobs.example.org/mcp"
+check("over https it may go", voice.jc_on(), True)
+voice.JOBCONTEXT_URL = JURL
+check("or to this machine", voice.jc_on(), True)
+JOBS["mode"] = "down"
+real_err, sys.stderr = sys.stderr, io.StringIO()
+check("a server that is down leaves him without the tool", (voice.jc_refresh(), "jobcontext" in voice.TOOLS), (False, False))
+JOBS["mode"] = "elsewhere"
+check("a redirect is not followed", voice.jc_refresh(), False)
+check("so the key reaches nobody else", JOBS["thief"], [])
+JOBS["mode"] = "ok"
+check("the server says what it has", voice.jc_refresh(), True)
+sys.stderr = real_err
+check("the key went as a bearer token", JOBS["auth"][-1], "Bearer jc-k3y")
+A = voice.JC["areas"]
+check("areas and actions are the server's own", (list(A)[:3], list(A["applications"]["actions"])),
+      (["applications", "job_search", "people"], ["status", "update", "decide", "brand_new"]))
+check("what an action needs and takes is read from its line",
+      (A["applications"]["actions"]["update"]["needs"], A["applications"]["actions"]["update"]["takes"]),
+      (["company", "role", "status"], ["next_steps", "contact", "notes"]))
+check("a note in brackets is not an argument",
+      A["people"]["actions"]["log"]["takes"], ["tags", "outreach_status", "notes"])
+check("an action with no arguments has none", A["applications"]["actions"]["status"]["needs"]
+      + A["applications"]["actions"]["status"]["takes"], [])
+K = voice.jc_kind
+check("reads are the ones listed as reads",
+      [K("applications", "status", {}), K("insights", "briefing", {}), K("people", "get", {}), K("workspace", "check", {})],
+      ["read"] * 4)
+check("adding and changing are not",
+      [K("applications", "update", {}), K("people", "log", {}), K("wellbeing", "checkin", {}), K("stories", "log", {})],
+      ["write"] * 4)
+check("an action nobody has classified waits for a yes", K("applications", "brand_new", {}), "write")
+check("a search only reads, until it is asked to queue what it finds",
+      (K("job_search", "web", {"query": "x"}), K("job_search", "web", {"query": "x", "auto_queue": True})),
+      ("read", "write"))
+check("fetching an address is never a read", K("job_search", "url", {"url": "https://x.example/"}), "write")
+check("rules can be looked at, not changed, without a yes",
+      (K("certification", "state_profile", {}), K("certification", "state_profile", {"mode": "get", "state": "GA"}),
+       K("certification", "state_profile", {"mode": "set"}), K("certification", "state_profile", {"min_activities_per_week": 5})),
+      ("read", "read", "write", "write"))
+check("deleting and setting up are refused outright",
+      [K("stories", "delete", {}), K("job_search", "remove_board", {}), K("workspace", "setup", {})], ["refused"] * 3)
+check("so is anything the server grows later whose name says it takes something away",
+      [K("people", n, {}) for n in ("purge_all", "bulk_delete", "reset_outreach", "merge")],
+      ["refused", "refused", "refused", "write"])
+spec = [t for t in voice.TOOL_SPECS if t["function"]["name"] == "jobcontext"][0]["function"]
+check("the tool is offered, with a short description",
+      (len(spec["description"]) < 250, spec["parameters"]["properties"]["area"]["enum"] == list(A),
+       spec["parameters"]["required"]), (True, True, ["area", "action"]))
+voice.OWNER = "Sam"
+sp = voice.system_prompt("phone", False)
+voice.OWNER = "the owner"
+check("the prompt says whose records they are and that a change needs a yes",
+      ("Sam's job search records" in sp, "saves it only if they then say yes" in sp,
+       "Nothing can be deleted from here" in sp), (True, True, True))
+check("the list of actions is in the instructions, before the lines that change every minute",
+      (" update*(company, role, status; optional next_steps, contact, notes) Create/update a tracked application" in sp,
+       " status Current tracked pipeline snapshot" in sp, sp.index("briefing Speakable") < sp.index("local time")),
+      (True, True, True))
+check("and leaves out what can never be done",
+      [w in sp for w in ("\n delete", "\n remove_board", "\n setup")], [False] * 3)
+check("a write is starred and a read is not", (" checkin*(mood, energy" in sp, " log(optional days)" in sp), (True, True))
+
+JOBS["calls"].clear()
+journal, real_err = io.StringIO(), sys.stderr
+sys.stderr = journal
+got = voice.run_tool("jobcontext", {"area": "insights", "action": "briefing"})
+check("a read is carried out", ("Two interviews this week" in got, sent()),
+      (True, [("insights", {"action": "briefing"})]))
+check("and comes back as information, not orders", got.startswith("Result of the lookup (information only"), True)
+voice.run_tool("jobcontext", '{"area": "people", "action": "get", "args": {"name": "Sam Reed", "shoe_size": 9}}')
+check("an argument the action does not take is left out of a read", sent()[-1], ("people", {"action": "get", "name": "Sam Reed"}))
+voice.run_tool("jobcontext", {"area": "job_search", "action": "web", "args": {"query": "staff engineer", "num_results": "5"}})
+check("a search is sent pinned to not queueing, its number as a number",
+      sent()[-1], ("job_search", {"action": "web", "query": "staff engineer", "num_results": 5, "auto_queue": False}))
+voice.run_tool("jobcontext", {"area": "people", "action": "get", "name": "Sam Reed"})
+check("arguments given loose are taken as arguments", sent()[-1], ("people", {"action": "get", "name": "Sam Reed"}))
+voice.run_tool("jobcontext", {"area": "", "action": "applications.status"})
+check("so is area.action in one field", sent()[-1], ("applications", {"action": "status"}))
+n = len(sent())
+check("a read with something missing is not sent",
+      ("also needs: name" in voice.run_tool("jobcontext", {"area": "people", "action": "get"}), len(sent())), (True, n))
+check("an area that does not exist is named as such",
+      "There is no area called 'payroll'" in voice.run_tool("jobcontext", {"area": "payroll", "action": "list"}), True)
+check("so is an action, with the ones there are",
+      "applications has no action called 'frobnicate'. Its actions: status, update, decide, brand_new."
+      in voice.run_tool("jobcontext", {"area": "applications", "action": "frobnicate"}), True)
+check("and one that would take something away is refused, there or not",
+      "Taking things out of the records is not possible from here"
+      in voice.run_tool("jobcontext", {"area": "applications", "action": "erase"}), True)
+check("a delete is refused in words and never sent",
+      ("Deleting a story is not possible from here" in voice.run_tool(
+          "jobcontext", {"area": "stories", "action": "delete", "args": {"story_id": "7"}}), len(sent())), (True, n))
+check("a change asked for outside a turn goes nowhere",
+      ("cannot be put forward from here" in voice.run_tool("jobcontext", {
+          "area": "wellbeing", "action": "checkin", "args": {"mood": 6, "energy": 7}}), len(sent())), (True, n))
+long = voice.run_tool("jobcontext", {"area": "insights", "action": "session_context"})
+check("a long answer is cut to what the model can hold", len(long) < voice.JC_RESULT_MAX + 120, True)
+sys.stderr = real_err
+log = journal.getvalue()
+check("the journal names the action and its arguments", "jobcontext people.get read (name)" in log, True)
+check("but never their values", any(w in log for w in ("Sam Reed", "staff engineer")), False)
+
+check("once the records are read, the conversation is private", voice.CONVO["private"], True)
+real_get, real_public = voice.http_get, voice.is_public
+FETCHED = []
+voice.is_public = lambda u: True
+voice.http_get = lambda u, limit=0: (FETCHED.append(u), (b"<p>Hello there.</p>", "utf-8", "text/html"))[1]
+real_err, sys.stderr = sys.stderr, io.StringIO()
+got = voice.run_tool("read_page", {"url": "https://example.org/?q=Acme+Senior+Engineer"})
+check("so no address is fetched for the rest of it", ("Not fetched" in got, FETCHED), (True, []))
+check("the other lookups still work", voice.run_tool("wikipedia", '{"query": "x"}').startswith("Result of the lookup"), True)
+jp = voice.Pipeline(voice.StateFile(voice_file), voice.Transcript(transcript_file), send=lambda *a: True,
+                    snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: "Fine.", tts=fake_tts)
+jp.forget()
+check("a new conversation is not private", voice.CONVO["private"], False)
+check("and can fetch again", ("Hello there." in voice.run_tool("read_page", {"url": "https://example.org/"}), len(FETCHED)), (True, 1))
+sys.stderr = real_err
+voice.http_get, voice.is_public = real_get, real_public
+
+MODEL = {"asks": 0, "said": [], "script": None}
+
+
+def call(area, action, args, cid="c1"):
+    return {"id": cid, "type": "function", "function": {
+        "name": "jobcontext", "arguments": json.dumps({"area": area, "action": action, "args": args})}}
+
+
+APPLIED = call("applications", "update", {"company": "Acme", "role": "Senior Engineer", "status": "applied"})
+
+
+def model(msgs, tools=None):
+    """A model that does what its script says with the newest message."""
+    MODEL["asks"] += 1
+    MODEL["said"].append(msgs[-1]["content"])
+    last = msgs[-1]
+    if last["role"] == "tool":
+        return {"content": "From the records: " + last["content"].split("): ", 1)[-1][:80]}
+    if MODEL["script"]:
+        return MODEL["script"](last["content"])
+    return {"content": "Noted."}
+
+
+def script(text):
+    if "applied" in text:
+        return {"content": "I have saved it for you!", "tool_calls": [APPLIED]}
+    if "briefing" in text:
+        return {"content": "", "tool_calls": [call("insights", "briefing", {})]}
+    return {"content": "Noted."}
+
+
+MODEL["script"] = script
+jdir = tempfile.mkdtemp()
+j_state, j_lines = os.path.join(jdir, "voice.json"), os.path.join(jdir, "transcript.jsonl")
+JSPOKEN = []
+jp = voice.Pipeline(voice.StateFile(j_state), voice.Transcript(j_lines), send=lambda *a: True,
+                    snd_format=lambda: (16000, 2, 1), stt=lambda audio, fmt: JP["hears"],
+                    llm=lambda m: voice.llm(m, model),
+                    tts=lambda text: (JSPOKEN.append(text), fake_tts(text))[1])
+JP = {"hears": ""}
+
+
+def j_said():
+    try:
+        with open(j_lines, encoding="utf-8") as f:
+            return [json.loads(x) for x in f if x.strip()]
+    except OSError:
+        return []
+
+
+def typed(text, via="phone"):
+    """A typed turn, start to finish; Douglas's line."""
+    n = len([x for x in j_said() if x["who"] == "douglas"])
+    ok = jp.say(text, via)
+    if not ok[0]:
+        return ok
+    until(lambda: len([x for x in j_said() if x["who"] == "douglas"]) > n and jp.state == "idle")
+    return j_said()[-1]["text"]
+
+
+def spoke(text, sound=None, ask_id="q-jobs-0001"):
+    """The same through a phone's microphone; what was said back."""
+    JP["hears"] = text
+    n = len(JSPOKEN)
+    jp.hear(sound or LOUD * 2, 16000, "phone", ask_id + str(len(JSPOKEN)))
+    until(lambda: len(JSPOKEN) > n and jp.state == "idle")
+    return JSPOKEN[-1]
+
+
+real_err, sys.stderr = sys.stderr, io.StringIO()
+jlog = sys.stderr
+JOBS["calls"].clear()
+jp.forget()
+got = typed("Tell me my briefing")
+check("asked, he reads the records and answers from them",
+      (got, sent()), ("From the records: Two interviews this week: Acme on Tuesday, Initech on Thursday.",
+                      [("insights", {"action": "briefing"})]))
+JOBS["calls"].clear()
+asks = MODEL["asks"]
+got = typed("Log that I applied to Acme for Senior Engineer")
+check("a change is not sent", sent(), [])
+check("it is read back in full instead, by the program",
+      got, "Not saved yet. Applications, update: Create or update a tracked application.\n"
+           "Company: Acme\nRole: Senior Engineer\nStatus: applied\nReply yes to save it, or no to drop it.")
+check("whatever the model had to say about it", "saved it for you" in got, False)
+check("and the model is not asked again that turn", MODEL["asks"] - asks, 1)
+check("it waits", (voice.CONVO["pending"]["area"], voice.CONVO["pending"]["action"], voice.CONVO["pending"]["via"]),
+      ("applications", "update", "phone"))
+asks = MODEL["asks"]
+got = typed("yes")
+check("a yes sends exactly what was read back",
+      sent(), [("applications", {"action": "update", "company": "Acme", "role": "Senior Engineer", "status": "applied"})])
+check("and he says what the server said", got, "Saved. Updated: Acme, Senior Engineer (applied)")
+check("without the model having a say", MODEL["asks"] - asks, 0)
+check("nothing is left waiting", voice.CONVO["pending"], None)
+got = typed("yes")
+check("a second yes sends nothing more", (got, len(sent())), ("Noted.", 1))
+check("the conversation remembers it was saved",
+      [m["content"] for m in jp.history[-4:]],
+      ["yes", "Saved. Updated: Acme, Senior Engineer (applied)", "yes", "Noted."])
+
+JOBS["calls"].clear()
+typed("I applied to Acme, log it")
+check("no drops it", (typed("no thanks"), sent(), voice.CONVO["pending"]), ("Dropped. Nothing was saved.", [], None))
+typed("I applied to Acme, log it")
+got = typed("What's the weather like on Mars?")
+check("so does talking about something else, and he says so",
+      (got, sent(), voice.CONVO["pending"]), ("That change was not saved. Noted.", [], None))
+check("the model is told it was dropped",
+      MODEL["said"][-1].endswith("[The person did not say yes to the change you put forward, so it was "
+                                 "dropped and nothing was saved.]"), True)
+typed("I applied to Acme, log it")
+check("a yes with strings attached is not a yes",
+      (typed("yes but make it interviewing").startswith("That change was not saved."), sent()), (True, []))
+typed("I applied to Acme, log it")
+voice.CONVO["pending"]["ts"] -= voice.JOBCONTEXT_CONFIRM_S + 1
+check("a yes that comes too late saves nothing",
+      (typed("yes"), sent()), ("That change waited too long for a yes and was not saved. Noted.", []))
+typed("I applied to Acme, log it")
+check("a yes from another device is not this person's yes",
+      (typed("yes", "deck").startswith("That change was not saved."), sent()), (True, []))
+typed("I applied to Acme, log it")
+check("typed, ok will do", (typed("ok").startswith("Saved."), len(sent())), (True, 1))
+
+JOBS["calls"].clear()
+got = spoke("I applied to Acme for Senior Engineer, log it.")
+check("aloud, the read-back is made for the ear",
+      got, "Not saved yet. Applications, update: Create or update a tracked application. Company: Acme. "
+           "Role: Senior Engineer. Status: applied. Say yes to save it, or no to drop it.")
+got = spoke("Okay.")
+check("an okay out of a microphone is not a yes: he asks again",
+      (got, sent(), voice.CONVO["pending"] is not None),
+      ("Nothing is saved yet. Say yes to save it, or no to drop it.", [], True))
+got = spoke("Yes.", SECOND * 2)
+check("nor is a yes that nobody said out loud", (got, sent()),
+      ("Nothing is saved yet. Say yes to save it, or no to drop it.", []))
+got = spoke("Yes, save it.")
+check("a spoken yes is", (got, len(sent())), ("Saved. Updated: Acme, Senior Engineer (applied)", 1))
+
+V = voice.verdict
+check("what counts as a yes", [V(t, True) for t in (
+    "Yes.", "Yeah, go ahead.", "Do it.", "Save it, please.", "Yes please, Douglas.", "Confirm.")], ["yes"] * 6)
+check("what counts as a no", [V(t, True) for t in (
+    "No.", "No thanks.", "Don't save it.", "Cancel that.", "Never mind.", "Wait.")], ["no"] * 6)
+check("what is too vague to save on when heard, and fine when typed",
+      ([V(t, True) for t in ("Okay.", "Sure.", "Sounds good.", "That's right.")],
+       [V(t, False) for t in ("ok", "sure", "sounds good", "that's right")]), (["unclear"] * 4, ["yes"] * 4))
+check("and what is neither", [V(t, False) for t in (
+    "you", "Thank you.", "yes but change the status", "no, make it interviewing", "is it saved?", "",
+    "yes yes yes yes yes yes yes yes yes", "what did you say")], ["other"] * 8)
+
+JOBS["calls"].clear()
+MODEL["script"] = lambda text: ({"content": "", "tool_calls": [
+    call("applications", "update", {"company": "Acme", "status": "applied"})]}
+    if "applied" in text else {"content": "Which role was it?"})
+got = typed("I applied to Acme")
+check("a change with something missing is not put forward",
+      (got.startswith("From the records: applications update also needs: role. Nothing was sent."),
+       voice.CONVO["pending"], sent()), (True, None, []))
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("applications", "update", {"company": "Acme", "role": "SE", "status": "applied", "salary": "lots"})]}
+check("nor one with an argument the action does not take",
+      ("takes no argument called 'salary'" in typed("I applied to Acme"), voice.CONVO["pending"]), (True, None))
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("wellbeing", "checkin", {"mood": "6", "energy": 7.0, "productive": "yes", "notes": ""})]}
+got = typed("Check me in: mood 6, energy 7, productive")
+check("numbers and yes/no are read back as what they are, blanks left out",
+      got.split("\n")[1:4], ["Mood: 6", "Energy: 7", "Productive: yes"])
+check("and sent that way", (typed("yes"), sent()[-1]),
+      ("Sent. The server says: Check-in saved (2026-11-22, energy 7/10, mood: 6).",
+       ("wellbeing", {"action": "checkin", "mood": 6, "energy": 7, "productive": True})))
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("wellbeing", "checkin", {"mood": "cheerful", "energy": 7})]}
+check("a value of the wrong kind is sent back to the model", "'mood' has to be integer" in typed("Check me in"), True)
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("people", "log", {"name": "Sam Reed", "relationship": "recruiter", "company": "Acme",
+                           "context": "met at a meetup", "tags": ["recruiter", "acme"]})]}
+got = typed("Add Sam Reed, a recruiter at Acme I met at a meetup")
+check("a list of tags is read back as the text it will be saved as", "Tags: recruiter, acme" in got, True)
+check("and the server's tick is a saved", typed("yes"), "Saved. Person logged (#12): Sam Reed, recruiter at Acme")
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("applications", "decide", {"company": "Acme", "role": "Senior Engineer", "decision": "add"})]}
+typed("Add Acme to my pipeline")
+check("the server's cross is not",
+      typed("yes"), "It was not saved. The server said: No queued job found for Acme, Senior Engineer.")
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("certification", "state_profile", {"min_activities_per_week": 5})]}
+check("changing the rules is put forward as a change, and says so",
+      "Mode: set" in typed("Make it five activities a week"), True)
+typed("no")
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("job_search", "url", {"url": "https://jobs.example.org/posting/42?ref=x"})]}
+got = typed("Queue that posting")
+check("an address is fetched only after it has been read back",
+      ("Url: https://jobs.example.org/posting/42?ref=x" in got, sent()[-1][0]), (True, "applications"))
+typed("no")
+got = spoke("Queue that posting.")
+check("and not at all by voice, where an address cannot be checked",
+      ("cannot be read back for a yes out loud" in got, voice.CONVO["pending"]), (True, None))
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("people", "log", {"name": "Sam Reed", "relationship": "recruiter", "company": "Acme", "context": "meetup",
+                           "notes": "see [her profile](https://x.example/p) and *call* back"})]}
+got = spoke("Add Sam Reed.")
+check("aloud, nothing that would be saved goes unsaid, markup included",
+      "Notes: see [her profile](https://x.example/p) and *call* back." in got, True)
+spoke("No.")
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("stories", "log", {"story": "word " * 600, "tags": "x"})]}
+check("something too long to read back is not put forward",
+      ("too much to read back" in typed("Log this story"), voice.CONVO["pending"]), (True, None))
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    APPLIED, call("wellbeing", "checkin", {"mood": 1, "energy": 1}, "c2")]}
+n = len(sent())
+got = typed("I applied to Acme, and check me in")
+check("one change at a time: the first is read back, the second is not even looked at",
+      (voice.CONVO["pending"]["area"], "Mood" in got, len(sent())), ("applications", False, n))
+typed("no")
+MODEL["script"] = lambda text: {"content": "", "tool_calls": [
+    call("stories", "delete", {"story_id": "7"})]} if "delete" in text.lower() else {"content": "Noted."}
+n = len(sent())
+got = typed("Delete story 7")
+check("a delete is never put forward, so there is nothing to say yes to",
+      (voice.CONVO["pending"], typed("yes"), len(sent())), (None, "Noted.", n))
+
+GATE2 = threading.Event()
+
+
+def slow_model(msgs, tools=None):
+    GATE2.wait(5)
+    return {"content": "", "tool_calls": [APPLIED]}
+
+
+jp.llm = lambda m: voice.llm(m, slow_model)
+before = len(j_said())
+jp.say("I applied to Acme, log it", "phone")
+until(lambda: jp.state == "thinking")
+jp.ptt("cancel", "phone")
+GATE2.set()
+time.sleep(0.3)
+check("a turn that was cancelled leaves nothing waiting for a yes",
+      (voice.CONVO["pending"], [x["who"] for x in j_said()[before:]]), (None, ["user"]))
+jp.llm = lambda m: voice.llm(m, model)
+MODEL["script"] = script
+n = len(sent())
+check("so a yes after it saves nothing", (typed("yes"), len(sent())), ("Noted.", n))
+
+for mode, want in (("error", "It was not saved. The server said: it fell over"),
+                   ("locked", "It was not saved: the job search server refused it (HTTP 401)."),
+                   ("down", "I cannot tell whether that was saved: the job search server reported a fault. "
+                            "Ask me to check before trying again.")):
+    typed("I applied to Acme, log it")
+    JOBS["mode"] = mode
+    check(f"a yes the server answers badly ({mode}) is reported as it went", typed("yes"), want)
+    JOBS["mode"] = "ok"
+typed("I applied to Acme, log it")
+JOBS["mode"], voice.JOBCONTEXT_TIMEOUT_S = "slow", 0.3
+check("one that gets no answer in time is not called saved or unsaved",
+      typed("yes"), "I cannot tell whether that was saved: the job search server did not answer in time. "
+                    "Ask me to check before trying again.")
+JOBS["mode"], voice.JOBCONTEXT_TIMEOUT_S = "ok", 45.0
+time.sleep(1.0)                                    # let the slow answer finish
+typed("I applied to Acme, log it")
+JOBS["mode"] = "elsewhere"
+n = len(JOBS["thief"])
+check("and a redirect is not followed with the change either",
+      (typed("yes").startswith("It was not saved: the job search server refused it (HTTP 302)"), len(JOBS["thief"])), (True, n))
+JOBS["mode"] = "ok"
+
+typed("Tell me my briefing")
+typed("I applied to Acme, log it")
+check("new conversation wipes the slate: the talk, the privacy, the change that was waiting",
+      (typed("New conversation, please."), jp.history[:-2], voice.CONVO), ("Clean slate.", [], {"private": False, "pending": None}))
+voice.JOBCONTEXT_VIA = ("phone",)
+check("the records can be kept to the phone",
+      ("not available from this device" in typed("Tell me my briefing", "deck"),
+       typed("Tell me my briefing", "phone").startswith("From the records: Two interviews")), (True, True))
+voice.JOBCONTEXT_VIA = ()
+
+big = {"n": 0}
+
+
+def greedy(msgs, tools=None):
+    big["n"] += 1
+    if msgs[-1]["role"] == "tool":
+        big["last"] = [len(m["content"]) for m in msgs if m["role"] == "tool"]
+        return {"content": "Done."}
+    return {"content": "", "tool_calls": [call("insights", "session_context", {}, f"c{i}") for i in range(3)]}
+
+
+voice.llm([{"role": "user", "content": "everything"}], greedy)
+check("a turn's lookups share one budget, so the model's memory is not overrun",
+      (sum(big["last"]) <= voice.TURN_RESULTS_MAX + 3 * 45, big["last"][2] < 2500), (True, True))
+sys.stderr = real_err
+log = jlog.getvalue()
+check("the journal follows a change from held to sent, by name",
+      ["douglas-voice: jobcontext applications.update " + w in log for w in (
+          "held for a yes (company, role, status)", "sent", "dropped: the answer was no",
+          "dropped: the answer was not a yes", "dropped: no answer in time", "turned down by the server")],
+      [True] * 6)
+check("and holds none of what was in it", any(w in log for w in ("Acme", "Senior Engineer", "Sam Reed", "meetup")), False)
+jp.forget()
+js.shutdown()
+voice.JOBCONTEXT_URL = voice.JOBCONTEXT_TOKEN = ""
+voice.JC.update(areas={}, catalogue="")
+voice.offer_tools()
+check("with the server gone from the settings the tool goes too",
+      ("jobcontext" in voice.TOOLS, [t["function"]["name"] for t in voice.TOOL_SPECS].count("jobcontext")), (False, 0))
+
+
 hs.shutdown()
 ls.shutdown()
 print("douglas-voice tests passed" if not FAILS else f"{FAILS} FAILED")

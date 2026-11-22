@@ -36,14 +36,16 @@ A turn is: the kept audio → Wyoming faster-whisper (:10300) → llama.cpp's
 OpenAI-compatible /v1/chat/completions (:8081) as "Douglas" → Wyoming Piper
 (:10200) → the satellite's speaker.
 
-The model has no internet and no eyes of its own; this program lends it
-both. Lookups (the weather, news feeds and a news search, Wikipedia, reading
+The model has no internet, no eyes and no records of its own; this program
+lends it all three. Lookups (the weather, news feeds and a news search, Wikipedia, reading
 a page) are read-only tools the model may call, each one a plain request to
 a public service, so the words of a lookup do leave the house. There is no
 general web search: that needs a search service's API key. A picture is
 put into words by a second, small vision model on this machine (EYES_URL)
 and the words are handed to Douglas as what he saw; the picture goes
-nowhere else.
+nowhere else. The owner's job search records (JOBCONTEXT_URL, their own
+jobContext server) he may read; a change to them is read back by this
+program and sent only after a yes, and nothing can be deleted.
 
 It honours the contract douglas-agent.py documents:
     VOICE_STATE_FILE   {"state", "satellite", "eyes", "ts", "last_turn", "heard"},
@@ -141,6 +143,10 @@ USER_AGENT = E("DOUGLAS_USER_AGENT", "Douglas-home-assistant/1.0")
 NEWS_SEARCH = E("DOUGLAS_NEWS_SEARCH",
                 "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q={q}")
 TOOL_ROUNDS = 4                               # look, read, read again, answer
+# All the results of one turn's lookups, in characters. The model reads a
+# fixed number of tokens and the instructions take a good part of them: past
+# this a result is cut short rather than the whole turn lost.
+TURN_RESULTS_MAX = int(E("DOUGLAS_TURN_RESULTS_MAX", "9000"))
 # His eyes: a small vision model on its own port (llama-eyes.service). His
 # own model reads only text, so a picture is first put into words by this
 # one. Empty means he cannot see, and he says so.
@@ -166,6 +172,21 @@ OWNER = E("DOUGLAS_OWNER", "the owner")
 # that one read. Without MCP_URL and MCP_TOKEN nothing is fetched.
 MCP_URL = E("MCP_URL", "")
 MCP_TOKEN = E("MCP_TOKEN", "")
+# The owner's job search records, on their jobContext server (MCP over
+# HTTPS): applications, interviews, contacts, documents, check-ins. Douglas
+# reads them when asked. Anything that would add or change a record is held,
+# read back in full and sent only after the person answers yes; deleting is
+# not offered at all. The key itself can do anything its owner can, so those
+# rules are kept by this program, not left to the model. Without both values
+# he has no such tool.
+JOBCONTEXT_URL = E("JOBCONTEXT_URL", "")
+JOBCONTEXT_TOKEN = E("JOBCONTEXT_TOKEN", "")
+JOBCONTEXT_TIMEOUT_S = float(E("JOBCONTEXT_TIMEOUT_S", "45"))
+JOBCONTEXT_CONFIRM_S = float(E("JOBCONTEXT_CONFIRM_S", "180"))   # how long a change waits for its yes
+JOBCONTEXT_REFRESH_S = float(E("JOBCONTEXT_REFRESH_S", "21600"))
+# Where the records may be asked about from: any of VIAS, e.g. "phone" to
+# keep them off the microphone anyone in the room can press. Empty: anywhere.
+JOBCONTEXT_VIA = tuple(E("JOBCONTEXT_VIA", "").replace(",", " ").split())
 # Where to speak. Douglas's own speaker is the satellite's 1 W driver. When
 # SPEAKER_URL names a machine with real speakers (the workstation's media
 # agent: http://host:9110/speak?token=...) and that machine says it can play
@@ -429,26 +450,37 @@ def read_instructions() -> str:
     return text
 
 
-def mcp_call(tool: str, arguments: dict, timeout: float = 60) -> str:
-    """One tools/call against an MCP server over streamable HTTP, returning
-    the text of the result. Tries a plain stateless call first; a server that
-    insists on a session gets initialize + the call."""
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """An MCP request carries a key. It goes to the address it was given and
+    nowhere else: followed, a redirect would hand that key to wherever the
+    answer pointed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+MCP_HTTP = urllib.request.build_opener(NoRedirects)
+
+
+def mcp_request(url: str, token: str, method: str, params: dict, timeout: float = 60) -> dict:
+    """One request to an MCP server over streamable HTTP; its result. Tries
+    a plain stateless request first; a server that insists on a session gets
+    initialize + the request."""
     def post(payload: dict, session: str | None = None):
         h = {"Content-Type": "application/json",
              "Accept": "application/json, text/event-stream",
-             "Authorization": "Bearer " + MCP_TOKEN}
+             "Authorization": "Bearer " + token}
         if session:
             h["Mcp-Session-Id"] = session
-        req = urllib.request.Request(MCP_URL, data=json.dumps(payload).encode(), headers=h)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=h)
+        with MCP_HTTP.open(req, timeout=timeout) as r:
             return r.headers.get("Mcp-Session-Id"), r.read(8_000_000).decode("utf-8", "replace")
 
     def message(body: str) -> dict:
         data = [ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")]
         return json.loads(data[-1] if data else body)
 
-    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": tool, "arguments": arguments}}
+    call = {"jsonrpc": "2.0", "id": 2, "method": method, "params": params}
     try:
         _, body = post(call)
     except urllib.error.HTTPError as e:
@@ -465,10 +497,23 @@ def mcp_call(tool: str, arguments: dict, timeout: float = 60) -> str:
     msg = message(body)
     if "error" in msg:
         raise RuntimeError(str(msg["error"])[:200])
-    res = msg.get("result") or {}
+    res = msg.get("result")
+    return res if isinstance(res, dict) else {}
+
+
+def mcp_text(result: dict) -> str:
+    """The words of a tools/call result."""
+    return "".join(c.get("text", "") for c in result.get("content") or [] if isinstance(c, dict))
+
+
+def mcp_call(tool: str, arguments: dict, timeout: float = 60) -> str:
+    """One tools/call against the tone server, returning the text of the
+    result."""
+    res = mcp_request(MCP_URL, MCP_TOKEN, "tools/call",
+                      {"name": tool, "arguments": arguments}, timeout)
     if res.get("isError"):
         raise RuntimeError("the tool reported an error")
-    return "".join(c.get("text", "") for c in res.get("content", []) if isinstance(c, dict))
+    return mcp_text(res)
 
 
 SAMPLE_HEAD = re.compile(r"^── Sample #?(\S+) \| (.+?)(?:\s+──)?\s*$", re.M)
@@ -558,10 +603,14 @@ def read_tone() -> str:
         return ""
 
 
+WARMED = threading.Event()       # a warm-up has been started at least once
+
+
 def warm() -> None:
     """Have the model server read the instructions once, so that the first
     real turn does not pay for them - a quarter of a minute on a big model.
     The server keeps what it has read; only the last lines change per turn."""
+    WARMED.set()
     try:
         complete([{"role": "system", "content": system_prompt("voice", True)},
                   {"role": "user", "content": "."}],
@@ -654,6 +703,22 @@ def system_prompt(via: str, spoken: bool) -> str:
     else:
         parts.append("You have no internet access and no tools: you cannot look "
                      "anything up, check the weather or read the news.")
+    if TOOLS_ON and JC["areas"]:
+        parts.append(
+            f"You can reach {OWNER}'s job search records with the jobcontext tool: "
+            "applications and the job queue, interviews, contacts, saved documents, stories, "
+            "check-ins and summaries. For anything about the job search, look there before "
+            "you answer, and use only what comes back: never fill in a company, a name, a "
+            "date or a number it does not give. For a quick overview, use insights briefing. "
+            "You can also put a change forward: a new record, or a correction to one. A "
+            "change is never saved when you ask for it. This program reads it back to the "
+            "person exactly as it would be saved, and saves it only if they then say yes. So "
+            "put a change forward only when the person has asked for one, include only what "
+            "they told you, and never say that something was saved, logged, queued or "
+            "updated unless a message in this conversation says it was. Nothing can be "
+            "deleted from here. The records are private: once you have read them you cannot "
+            "fetch web addresses until a new conversation begins, which the person starts by "
+            "saying \"new conversation\".\n\n" + JC_INTRO + JC["catalogue"])
     if EYES_URL:
         parts.append(
             "You can see pictures that are sent to you. When one comes with a message, "
@@ -1010,6 +1075,429 @@ def tool_look(question: str = "") -> str:
     return see(SEEN["image"], str(question or ""))
 
 
+# ── the owner's job search: read at once, changed only on a yes ──────────
+#
+# Three rules, all kept here rather than asked of the model:
+#   1. An action listed in JC_READS is carried out when the model calls it.
+#   2. Any other action is taken to change something. It is not sent. The
+#      turn ends with this program reading the change back, field by field,
+#      exactly as it would be sent, and it goes to the server only if the
+#      person's next message is a plain yes. A new action on the server is
+#      therefore held until someone lists it as a read, never the reverse.
+#   3. Once the records have been read in a conversation, no web address is
+#      fetched until the conversation is over. What comes back from the
+#      server is private, and some of it (a job advert, a recruiter's
+#      message) was written by strangers: text like that can ask a model to
+#      carry what it has read somewhere else, and a fetch is how it would.
+
+CONVO = {"private": False, "pending": None}   # this conversation; forgotten with its history
+TURN = threading.local()                      # .ctx: the turn this thread is answering
+JC = {"areas": {}, "catalogue": ""}           # what the server offers, from its own tools/list
+JC_READY = threading.Event()                  # the first attempt to fetch that list is over
+JC_RESULT_MAX = 3500                          # characters of an answer handed to the model
+JC_VALUE_MAX = 6000                           # characters in one argument
+JC_SAY_MAX, JC_SHOW_MAX = 700, 2400           # a read-back: aloud, on a screen
+JC_READS = {area: frozenset(names.split()) for area, names in {
+    "applications": "status get_queue assess",
+    "job_search": "boards result discover web greenhouse lever ashby recruitee",
+    "documents": "generation_status diff customization_strategy preview_story_retrieval provenance",
+    "materials": "read_master_resume read_resume read_reference read_latex_asset list search",
+    "interviews": "read_prepared list context upcoming prep_context get_prep quick_reference "
+                  "leetcode_cheatsheet",
+    "people": "list get referral_chains draft_reply review_message crossref_get fb_queue",
+    "stories": "personal_context star_context star_all tone_profile",
+    "wellbeing": "log oura_get hbdi_profile",
+    "brand": "posts github_stats portfolio",
+    "insights": "daily_digest briefing weekly_summary session_context rejections "
+                "compensation_compare evals_results",
+    "workspace": "check",
+    "certification": "list_reports state_profile",
+}.items()}
+# Reads that one argument turns into writes. They are sent with it pinned to
+# the reading value; asked for with the other, they are held like any change.
+JC_PINNED = {("job_search", board): {"auto_queue": False}
+             for board in ("web", "greenhouse", "lever", "ashby", "recruitee")}
+JC_PINNED[("certification", "state_profile")] = {"mode": "get"}
+JC_ONLY = {("certification", "state_profile"): {"mode", "state"}}   # a read with these and no more
+JC_WRITES_WITH = {("certification", "state_profile"): {"mode": "set"}}    # and a change means this
+# Never sent, yes or no, with what the model is told instead.
+JC_REFUSED = {
+    ("materials", "delete"): "Deleting a saved document is not possible from here: it is done "
+                             "in the jobContext app.",
+    ("stories", "delete"): "Deleting a story is not possible from here: it is done in the "
+                           "jobContext app.",
+    ("job_search", "remove_board"): "Removing a saved board is not possible from here: it is "
+                                    "done in the jobContext app.",
+    ("workspace", "setup"): "Setting up the workspace is not possible from here: it is done "
+                            "in the jobContext app.",
+    ("documents", "generate_resume"): "That takes minutes and would be cut off here. Use "
+                                      "submit_resume, then generation_status.",
+    ("documents", "generate_resume_agent"): "That takes minutes and would be cut off here. "
+                                            "Use submit_resume, then generation_status.",
+    ("documents", "generate_cover_letter"): "That takes minutes and would be cut off here. "
+                                            "Use submit_cover_letter, then generation_status.",
+}
+# The list of what can be asked for is a couple of thousand tokens. It goes
+# in the instructions, ahead of the lines that change every minute, where the
+# model server reads it once and keeps it. In the tool's own description it
+# would sit after those lines and be read again on every turn.
+JC_INTRO = ("The areas of the job search records and the actions in each, as the jobcontext "
+            "tool takes them: area, action, and the action's arguments by name in args. Each "
+            "line is: action(arguments it needs; optional ones) and what it does. An action "
+            "marked * adds or changes a record: it is read back for a yes, as described "
+            "above. The rest only read.\n")
+# An action the server grows later is held for a yes like any other change,
+# unless its name says it takes something away: then it is not offered.
+JC_REMOVES = re.compile(r"delete|remove|purge|wipe|erase|destroy|reset|clear")
+JC_NO_REMOVING = ("Taking things out of the records is not possible from here: it is done in "
+                  "the jobContext app.")
+# The one action that has the server fetch an address the model names. An
+# address cannot be checked by ear, so by voice it is not put forward.
+JC_FETCHES = {("job_search", "url")}
+ACTION_LINE = re.compile(r"^\s+(\w+)\s+[\u2014\u2013-]+\s+(\S.*)$")
+
+
+def jc_on() -> bool:
+    """Is there a job search server, at an address a key may be sent to?
+    Over plain HTTP only this machine qualifies."""
+    if not (TOOLS_ON and JOBCONTEXT_URL and JOBCONTEXT_TOKEN):
+        return False
+    u = urllib.parse.urlsplit(JOBCONTEXT_URL)
+    return u.scheme == "https" or (u.scheme == "http"
+                                   and u.hostname in ("127.0.0.1", "localhost", "::1"))
+
+
+def names_in(listing: str) -> list[str]:
+    """The argument names in "a, b (one of: x, y), c"."""
+    parts, depth, cur = [], 0, ""
+    for ch in listing:
+        depth += (ch == "(") - (ch == ")" and depth > 0)
+        if ch == "," and not depth:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    found = (re.match(r"\s*(\w+)", p) for p in parts + [cur])
+    return [m.group(1) for m in found if m]
+
+
+def jc_parse(tools: list) -> dict:
+    """The server's tools as {area: {"about", "props", "actions"}}. The
+    actions are the ones its schema allows; what each is for, and which
+    arguments it needs and takes, come from the description, which lists
+    them one to a line under "Actions:"."""
+    areas = {}
+    for t in tools if isinstance(tools, list) else []:
+        if not isinstance(t, dict):
+            continue
+        props = (t.get("inputSchema") or {}).get("properties") or {}
+        allowed = [str(a) for a in (props.get("action") or {}).get("enum") or []]
+        name = str(t.get("name") or "")
+        if not re.fullmatch(r"\w{1,40}", name) or not allowed:
+            continue
+        head, _, listed = str(t.get("description") or "").partition("Actions:")
+        actions = {}
+        for line in listed.splitlines():
+            m = ACTION_LINE.match(line)
+            if not m or m.group(1) not in allowed:
+                continue
+            text = " ".join(m.group(2).split())
+            rest, _, takes = text.partition(" Optional: ")
+            about, _, needs = rest.partition(" Requires: ")
+            actions[m.group(1)] = {"text": text, "about": about.strip(),
+                                   "needs": names_in(needs.rstrip(". ")),
+                                   "takes": names_in(takes.rstrip(". "))}
+        for a in allowed:                    # allowed, but not described
+            actions.setdefault(a, {"text": "", "about": "", "needs": [], "takes": []})
+        kinds = {}
+        for p, spec in props.items():
+            spec = spec if isinstance(spec, dict) else {}
+            alts = [x for x in spec.get("anyOf") or [spec] if isinstance(x, dict)]
+            kinds[p] = {str(x.get("type")) for x in alts} - {"null", "None"}
+        areas[name] = {"about": " ".join(head.split()), "props": kinds, "actions": actions}
+    return areas
+
+
+def jc_kind(area: str, action: str, args: dict) -> str:
+    """"read", "write" or "refused", for an action the server has."""
+    if (area, action) in JC_REFUSED or JC_REMOVES.search(action):
+        return "refused"
+    if action not in JC_READS.get(area, ()):
+        return "write"
+    pinned = JC_PINNED.get((area, action), {})
+    if any(k in args and args[k] != v for k, v in pinned.items()):
+        return "write"
+    only = JC_ONLY.get((area, action))
+    return "write" if only is not None and set(args) - only else "read"
+
+
+def gist(text: str, limit: int) -> str:
+    """The first clause of a description, for a list that has to stay short."""
+    text = re.split(r"(?<=[a-z0-9)])[.;:] |\s+[\u2014\u2013]\s+| \(", text, maxsplit=1)[0].rstrip(".")
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0]
+
+
+def jc_catalogue(areas: dict) -> str:
+    """What the model is shown: every action it may ask for, one to a line,
+    in the server's own words cut to their first clause."""
+    lines = []
+    for area, a in areas.items():
+        lines.append(f"{area} ({gist(a['about'], 80)}):")
+        for name, act in a["actions"].items():
+            kind = jc_kind(area, name, {})
+            if kind == "refused":
+                continue
+            needs, takes = ", ".join(act["needs"]), ", ".join(act["takes"])
+            args = "; ".join(x for x in (needs, takes and "optional " + takes) if x)
+            lines.append(f" {name}{'*' if kind == 'write' else ''}"
+                         + (f"({args})" if args else "") + f" {gist(act['about'], 80)}".rstrip())
+    return "\n".join(lines)
+
+
+def jc_value(value, kinds: set):
+    """One argument in the type the server wants, or None if it cannot be."""
+    if isinstance(value, str):
+        value = value.strip()
+        low = value.lower()
+        if "integer" in kinds and re.fullmatch(r"-?\d{1,12}", value):
+            return int(value)
+        if "boolean" in kinds and low in ("true", "false", "yes", "no"):
+            return low in ("true", "yes")
+        return value if "string" in kinds or not kinds else None
+    if isinstance(value, bool):
+        return value if "boolean" in kinds or not kinds else None
+    if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
+        if "integer" in kinds or "number" in kinds or not kinds:
+            return int(value)
+        return str(int(value)) if "string" in kinds else None
+    if isinstance(value, float):
+        return value if "number" in kinds else str(value) if "string" in kinds else None
+    if isinstance(value, list) and "string" in kinds and all(
+            isinstance(x, (str, int, float)) and not isinstance(x, bool) for x in value):
+        return ", ".join(str(x).strip() for x in value)       # tags, given as a list
+    if isinstance(value, dict) and "object" in kinds:
+        return value
+    return None
+
+
+def jc_check(area: str, action: str, args: dict, strict: bool) -> tuple[dict, str]:
+    """The arguments as they would be sent, or what is wrong with them in
+    words the model can act on. A read forgives an argument the action does
+    not take; a change does not, since what is read back must be all of it."""
+    a = JC["areas"][area]
+    act = a["actions"][action]
+    known = act["needs"] + act["takes"]
+    out = {}
+    for k, v in args.items():
+        if v is None or v == "" or k == "action":
+            continue
+        if k not in a["props"] or (act["text"] and k not in known):
+            if strict:
+                return {}, (f"{area} {action} takes no argument called {k!r}. It takes: "
+                            f"{', '.join(known) or 'none'}. Nothing was put forward.")
+            continue
+        value = jc_value(v, a["props"][k])
+        if value is None or value == "":
+            want = " or ".join(sorted(a["props"][k])) or "text"
+            return {}, f"The argument {k!r} has to be {want}. Nothing was sent."
+        if len(json.dumps(value)) > JC_VALUE_MAX:
+            return {}, f"The argument {k!r} is too long to send from here."
+        out[k] = value
+    missing = [k for k in act["needs"] if k not in out]
+    if missing:
+        return {}, (f"{area} {action} also needs: {', '.join(missing)}. Nothing was sent. If "
+                    "the person has not told you, ask them; do not make it up.")
+    return out, ""
+
+
+def jc_call(area: str, arguments: dict) -> tuple[str, bool]:
+    """One call to the server: its words, and whether they are an error."""
+    res = mcp_request(JOBCONTEXT_URL, JOBCONTEXT_TOKEN, "tools/call",
+                      {"name": area, "arguments": arguments}, JOBCONTEXT_TIMEOUT_S)
+    return mcp_text(res).strip(), bool(res.get("isError"))
+
+
+def plain(value) -> str:
+    """A value as it is read back."""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, dict):
+        return "; ".join(f"{str(k).replace('_', ' ')}: {plain(v)}" for k, v in value.items())
+    return " ".join(str(value).split())
+
+
+def jc_readback(area: str, action: str, args: dict, spoken: bool) -> str:
+    """A change, in full, as the person is asked to approve it. Built from
+    the very arguments that would be sent, never from the model's account
+    of them."""
+    about = JC["areas"][area]["actions"][action]["about"].replace("/", " or ")
+    what = (f"{area.replace('_', ' ').capitalize()}, {action.replace('_', ' ')}"
+            + (f": {about}" if about else "."))
+    what += "" if what[-1:] in ".!?" else "."
+    fields = [(k.replace("_", " ").capitalize(), plain(v)) for k, v in args.items()]
+    if spoken:
+        said = " ".join(f"{k}: {v}{'' if v[-1:] in '.!?' else '.'}" for k, v in fields)
+        return (f"Not saved yet. {what} {said or 'No details.'} "
+                "Say yes to save it, or no to drop it.")
+    shown = "\n".join(f"{k}: {v}" for k, v in fields)
+    return (f"Not saved yet. {what}\n{shown or '(no details)'}\n"
+            "Reply yes to save it, or no to drop it.")
+
+
+def tool_jobcontext(area: str = "", action: str = "", args=None, **loose) -> str:
+    """The model's way into the job search records. A read is carried out;
+    a change is only put forward, for the turn to end on its read-back."""
+    ctx = getattr(TURN, "ctx", None)
+    if not JC["areas"]:
+        return "The job search records cannot be reached right now."
+    if JOBCONTEXT_VIA and (ctx or {}).get("via") not in JOBCONTEXT_VIA:
+        return ("The job search records are not available from this device, only from: "
+                + ", ".join(SOURCES.get(v, v) for v in JOBCONTEXT_VIA) + ". Say so.")
+    area, action = str(area or "").strip().lower(), str(action or "").strip().lower()
+    if "." in action and action.split(".", 1)[0] in JC["areas"]:
+        area, action = action.split(".", 1)          # "applications.status" in one field
+    elif "." in area and not action:
+        area, action = area.split(".", 1)
+    if isinstance(args, str):
+        try:
+            args = json.loads(args or "{}")
+        except ValueError:
+            args = None
+    args = dict(args) if isinstance(args, dict) else {}
+    args.update({k: v for k, v in loose.items() if k not in args})   # arguments given loose
+    if area not in JC["areas"]:
+        return f"There is no area called {area!r}. The areas: {', '.join(JC['areas'])}."
+    if jc_kind(area, action, {}) == "refused":
+        return JC_REFUSED.get((area, action), JC_NO_REMOVING)
+    offered = JC["areas"][area]["actions"]
+    if action not in offered:
+        return (f"{area} has no action called {action!r}. Its actions: "
+                + ", ".join(n for n in offered if jc_kind(area, n, {}) != "refused") + ".")
+    args, wrong = jc_check(area, action, args, jc_kind(area, action, args) == "write")
+    if wrong:
+        return wrong
+    names = ", ".join(args) or "no arguments"       # the journal gets names, never values
+    if jc_kind(area, action, args) == "read":
+        log(f"jobcontext {area}.{action} read ({names})")
+        text, failed = jc_call(area, {"action": action, **args,
+                                      **JC_PINNED.get((area, action), {})})
+        CONVO["private"] = True
+        if failed:
+            return "The server answered with an error: " + (text[:400] or "no reason given")
+        return text[:JC_RESULT_MAX] or "The server returned nothing."
+    if ctx is None:
+        return "A change cannot be put forward from here."
+    if ctx["held"]:
+        return ("One change at a time: this one was not put forward. Bring it up again once "
+                "the first is settled.")
+    if (area, action) in JC_FETCHES and ctx["spoken"]:
+        return ("A web address cannot be read back for a yes out loud. Tell the person to "
+                "send the request as typed text, where the address is shown. Nothing was "
+                "put forward.")
+    for k, v in JC_WRITES_WITH.get((area, action), {}).items():
+        args.setdefault(k, v)
+    readback = jc_readback(area, action, args, ctx["spoken"])
+    if len(readback) > (JC_SAY_MAX if ctx["spoken"] else JC_SHOW_MAX):
+        return ("That is too much to read back for a yes"
+                + (" out loud: it can be shortened, or sent as typed text, where it is shown "
+                   "in full." if ctx["spoken"] else ": shorten it, or it has to be done in "
+                   "the jobContext app.") + " Nothing was put forward.")
+    ctx["held"] = {"area": area, "action": action, "args": args, "readback": readback}
+    log(f"jobcontext {area}.{action} held for a yes ({names})")
+    return ("Nothing has been saved. The change is being read back to the person now, and "
+            "they will be asked to say yes.")
+
+
+def held() -> bool:
+    """Has the turn on this thread put a change forward? Then it is over:
+    the read-back is the reply."""
+    return bool((getattr(TURN, "ctx", None) or {}).get("held"))
+
+
+def brief(text: str, limit: int = 200) -> str:
+    """The first line of the server's answer, without its decoration."""
+    for line in str(text).splitlines():
+        line = re.sub(r"^[^\w(\"']+", "", " ".join(line.split()))
+        if line:
+            return line if len(line) <= limit else line[:limit].rsplit(" ", 1)[0] + " ..."
+    return ""
+
+
+def jc_commit(change: dict) -> str:
+    """Send a change the person has just said yes to, and say truthfully
+    what became of it. Only ever called for that."""
+    area, action = change["area"], change["action"]
+    try:
+        text, failed = jc_call(area, {"action": action, **change["args"]})
+    except Exception as e:                       # noqa: BLE001 — say what happened, whatever it was
+        log(f"jobcontext {area}.{action} not confirmed saved: {type(e).__name__}: {e}")
+        code = e.code if isinstance(e, urllib.error.HTTPError) else 0
+        timed_out = isinstance(e, TimeoutError) or isinstance(
+            getattr(e, "reason", None), TimeoutError)
+        if timed_out or code >= 500:
+            return ("I cannot tell whether that was saved: the job search server "
+                    + ("did not answer in time." if timed_out else "reported a fault.")
+                    + " Ask me to check before trying again.")
+        return "It was not saved: the job search server " + (
+            f"refused it (HTTP {code})." if code else "could not be reached.")
+    CONVO["private"] = True
+    # The server marks its own answers: a tick for done, a cross or a warning
+    # for not. Anything else is passed on as what it is, the server's words.
+    mark = text.lstrip()[:1]
+    if failed or mark in ("\u2717", "\u26a0", "\u274c"):
+        log(f"jobcontext {area}.{action} turned down by the server")
+        return "It was not saved. The server said: " + (brief(text, 300) or "no reason given.")
+    log(f"jobcontext {area}.{action} sent")
+    if mark in ("\u2713", "\u2705"):
+        return ("Saved. " + brief(text)).strip()
+    return "Sent. " + ("The server says: " + brief(text) if brief(text) else
+                       "The server took it without a word.")
+
+
+YES = {"yes", "yeah", "yep", "yup", "aye", "confirm", "confirmed", "affirmative",
+       "absolutely", "definitely", "save"}
+YES_PHRASES = ("do it", "go ahead", "save it", "save that", "go for it", "please do")
+WEAK_YES = {"ok", "okay", "sure", "fine", "alright", "right", "correct", "good"}
+YES_FILLER = {"please", "thanks", "thank", "you", "douglas", "doug", "it", "that", "that's",
+              "thats", "is", "save", "do", "go", "ahead", "for", "sounds", "looks", "now"}
+NO = {"no", "nope", "nah", "cancel", "stop", "don't", "dont", "not", "never", "nevermind",
+      "drop", "forget", "negative", "wait"}
+NO_FILLER = YES_FILLER | {"mind", "do"}
+RESETS = {"new conversation", "start over", "start again", "start fresh", "fresh start",
+          "start a new conversation", "forget this conversation", "clear the conversation"}
+
+
+def wording(text: str) -> list[str]:
+    return re.sub(r"[^a-z' ]+", " ", str(text).lower()).split()
+
+
+def verdict(text: str, heard: bool) -> str:
+    """What the person answered to a read-back: "yes", "no", "unclear" (it
+    sounded like agreement, but not plainly enough to save on), or "other".
+    Only a short answer that is nothing but agreement is a yes. Aloud, an
+    "okay" is not one: a speech recogniser handed room noise writes "okay"
+    all by itself, and the person was told to say yes."""
+    words = wording(text)
+    if not words or len(words) > 8:
+        return "other"
+    if any(w in NO for w in words):
+        return "no" if all(w in NO or w in NO_FILLER for w in words) else "other"
+    if not all(w in YES or w in WEAK_YES or w in YES_FILLER for w in words):
+        return "other"
+    line = " ".join(words)
+    if any(w in YES for w in words) or any(p in line for p in YES_PHRASES):
+        return "yes"
+    if any(w in WEAK_YES for w in words):
+        return "unclear" if heard else "yes"
+    return "other"
+
+
+def is_reset(text: str) -> bool:
+    """Did the person ask, in so many words, for a clean slate?"""
+    words = [w for w in wording(text) if w not in ("please", "douglas", "doug", "hey", "let's", "lets")]
+    return " ".join(words) in RESETS
+
+
 TOOLS = {
     "weather": (tool_weather, "Current conditions and the forecast for the next seven days. "
                 "Call it for any question about the weather.", {
@@ -1036,10 +1524,69 @@ if EYES_URL:
                      "specific question about it.", {
         "question": {"type": "string", "description": "What you want to know about the picture."}},
         ["question"])
-TOOL_SPECS = [{"type": "function", "function": {
-    "name": name, "description": desc,
-    "parameters": {"type": "object", "properties": props, "required": need}}}
-    for name, (_fn, desc, props, need) in TOOLS.items()]
+TOOL_SPECS: list = []
+
+
+def offer_tools() -> None:
+    """(Re)build what the model is offered. The job search tool is in it
+    only once the server has said what it has."""
+    global TOOL_SPECS
+    if JC["areas"]:
+        TOOLS["jobcontext"] = (
+            tool_jobcontext, "Read the person's job search records, or put a change to them "
+            "forward. The areas, their actions and the arguments each takes are listed in "
+            "your instructions.", {
+                "area": {"type": "string", "enum": list(JC["areas"])},
+                "action": {"type": "string", "description": "One of that area's actions."},
+                "args": {"type": "object", "description": "The action's arguments, by name. "
+                         "Leave out any the person did not give you."}}, ["area", "action"])
+    else:
+        TOOLS.pop("jobcontext", None)
+    TOOL_SPECS = [{"type": "function", "function": {
+        "name": name, "description": desc,
+        "parameters": {"type": "object", "properties": props, "required": need}}}
+        for name, (_fn, desc, props, need) in list(TOOLS.items())]
+
+
+offer_tools()
+
+
+def jc_refresh() -> bool:
+    """Ask the job search server what it offers. On any failure what was
+    known before stays: the tool is not taken away over one bad answer."""
+    try:
+        areas = jc_parse(mcp_request(JOBCONTEXT_URL, JOBCONTEXT_TOKEN, "tools/list", {},
+                                     JOBCONTEXT_TIMEOUT_S).get("tools"))
+    except (urllib.error.URLError, OSError, ValueError, RuntimeError) as e:
+        log(f"job search records not reachable: {e}")
+        return False
+    if not areas:
+        log("job search records not usable: the server listed no actions")
+        return False
+    if areas != JC["areas"]:
+        JC.update(areas=areas, catalogue=jc_catalogue(areas))
+        offer_tools()
+        every = [(a, n) for a, v in areas.items() for n in v["actions"]]
+        log(f"job search records: {len(areas)} areas, {len(every)} actions, "
+            f"{sum(jc_kind(a, n, {}) == 'write' for a, n in every)} of them held for a yes, "
+            f"{sum(jc_kind(a, n, {}) == 'refused' for a, n in every)} never sent")
+    return True
+
+
+def jc_loop() -> None:
+    """Keep that list current, and have the model read the instructions
+    again when it changes (they carry it)."""
+    while True:
+        before = JC["areas"]
+        try:
+            ok = jc_refresh()
+        except Exception as e:               # noqa: BLE001 — this thread has to outlive a bad answer
+            log(f"job search records not refreshed: {type(e).__name__}: {e}")
+            ok = False
+        JC_READY.set()
+        if WARMED.is_set() and JC["areas"] is not before:
+            warm()                           # start-up did not wait for it, or it has changed
+        time.sleep(JOBCONTEXT_REFRESH_S if ok else min(300.0, JOBCONTEXT_REFRESH_S))
 
 
 def run_tool(name: str, args) -> str:
@@ -1053,9 +1600,19 @@ def run_tool(name: str, args) -> str:
     if name not in TOOLS or not isinstance(args, dict):
         return f"There is no tool called {name!r}."
     fn, _desc, props, _need = TOOLS[name]
-    log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
+    if name == "read_page" and CONVO["private"]:
+        log("tool read_page refused: job search records are in this conversation")
+        return ("Not fetched. Job search records have been read in this conversation, and "
+                "while they are part of it you cannot fetch web addresses. Tell the person "
+                "that it will work again in a new conversation, which they can start by "
+                "saying \"new conversation\".")
+    if name == "jobcontext":             # it says what it did itself: names, never values
+        keep = args
+    else:
+        log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
+        keep = {k: v for k, v in args.items() if k in props}
     try:
-        result = fn(**{k: v for k, v in args.items() if k in props})
+        result = fn(**keep)
     except Exception as e:      # whatever a lookup trips on, the turn goes on
         log(f"tool {name} failed: {type(e).__name__}: {e}")
         return f"The {name} lookup failed: {str(e)[:120] or type(e).__name__}"
@@ -1084,7 +1641,7 @@ def llm(messages: list[dict], ask=None) -> str:
     ask = ask or complete
     if not TOOLS_ON:
         return str(ask(messages).get("content") or "")
-    msgs = list(messages)
+    msgs, room = list(messages), TURN_RESULTS_MAX
     for _ in range(TOOL_ROUNDS):
         m = ask(msgs, TOOL_SPECS)
         calls = m.get("tool_calls") or []
@@ -1093,9 +1650,14 @@ def llm(messages: list[dict], ask=None) -> str:
         msgs.append({"role": "assistant", "content": m.get("content") or "", "tool_calls": calls})
         for c in calls[:3]:
             f = c.get("function") or {}
+            found = run_tool(f.get("name") or "", f.get("arguments"))
+            if len(found) > room:
+                found = found[:max(room, 0)] + " [cut short: no more fits in one turn]"
+            room -= len(found)
             msgs.append({"role": "tool", "tool_call_id": c.get("id") or "",
-                         "name": f.get("name") or "",
-                         "content": run_tool(f.get("name") or "", f.get("arguments"))})
+                         "name": f.get("name") or "", "content": found})
+            if held():
+                return ""       # a change waits for a yes: its read-back is the reply
     return str(ask(msgs).get("content") or "")      # enough looking up: answer
 
 
@@ -1251,6 +1813,7 @@ class Pipeline:
         self._listen_started = 0.0
         self._turn = 0                  # bumped by cancel/start; stale turns stop
         self._played = threading.Event()
+        self._level = 0.0               # how loud the last thing heard was, dBFS
         self._outcomes: dict[str, dict] = {}    # recorded turns: id -> what became of it
         self._outcomes_lock = threading.Lock()
 
@@ -1433,7 +1996,7 @@ class Pipeline:
         self.send("transcript", {"text": heard})
         if not heard or not self._current(turn):
             return
-        reply = self._exchange(heard, via, turn, speakable, True)
+        reply = self._exchange(heard, via, turn, speakable, True, heard=True)
         if reply is not None:
             self._speak(reply, turn)
 
@@ -1446,7 +2009,7 @@ class Pipeline:
             if not heard:
                 state = "nothing"
             elif self._current(turn):
-                reply = self._exchange(heard, via, turn, speakable, True)
+                reply = self._exchange(heard, via, turn, speakable, True, heard=True)
                 if reply is not None:
                     pcm, src = self.tts(reply)
                     self._outcome(ask_id, "spoken", wav_of(pcm, src))
@@ -1464,6 +2027,7 @@ class Pipeline:
         """Speech to words, and a note of how long and how loud it was."""
         rate, width, channels = fmt
         secs, level = len(audio) / (rate * width * channels), loudness(audio, width)
+        self._level = level
         heard = self.stt(audio, fmt)
         said = " ".join(re.sub(r"[^\w' ]+", " ", heard.lower()).split())
         if level < QUIET_DB and said in NOT_SPEECH:
@@ -1494,14 +2058,48 @@ class Pipeline:
                     self.st.update(state="idle")
 
     def _exchange(self, said: str, via: str, turn: int, clean, spoken: bool,
-                  image: bytes = b"") -> str | None:
+                  image: bytes = b"", heard: bool = False) -> str | None:
         """One user line in, one Douglas line out, both in the transcript and
         the shared memory. None when a newer turn has superseded this one.
-        A picture is looked at first; what was seen goes in with the line."""
+        A picture is looked at first; what was seen goes in with the line.
+        `spoken` is how the reply will be delivered, `heard` how the line
+        arrived: through a microphone and a speech recogniser, or typed."""
         self.tr.append("user", f"[picture] {said}" if image else said, via)
+        if not self._current(turn):
+            return None         # cancelled already: it settles nothing
         if time.time() - self.last_exchange > HISTORY_IDLE_S:
-            self.history = []
-            SEEN["image"] = b""
+            self.forget()
+        if not image and is_reset(said):
+            self.forget()
+            return self._answered(said, "Clean slate.", via, turn)
+        # A change that was read back is settled by this message, before the
+        # model sees a word of it, and by this program alone.
+        lead = note = ""
+        waiting, CONVO["pending"] = CONVO["pending"], None
+        if waiting:
+            answer = "other" if image or via != waiting["via"] else verdict(said, heard)
+            if answer == "yes" and heard and self._level < QUIET_DB:
+                answer = "unclear"      # a yes nobody said out loud: the recogniser's own
+            name = f"{waiting['area']}.{waiting['action']}"
+            if time.time() - waiting["ts"] > JOBCONTEXT_CONFIRM_S:
+                log(f"jobcontext {name} dropped: no answer in time")
+                lead = "That change waited too long for a yes and was not saved."
+                note = ("[The change you put forward was not answered in time. It was "
+                        "dropped and nothing was saved.]")
+            elif answer == "yes":
+                return self._answered(said, clean(jc_commit(waiting)), via, turn, always=True)
+            elif answer == "no":
+                log(f"jobcontext {name} dropped: the answer was no")
+                return self._answered(said, "Dropped. Nothing was saved.", via, turn)
+            elif answer == "unclear":
+                CONVO["pending"] = waiting              # still waiting, on the same clock
+                return self._answered(said, "Nothing is saved yet. Say yes to save it, "
+                                            "or no to drop it.", via, turn)
+            else:
+                log(f"jobcontext {name} dropped: the answer was not a yes")
+                lead = "That change was not saved."
+                note = ("[The person did not say yes to the change you put forward, so it "
+                        "was dropped and nothing was saved.]")
         if image:
             SEEN["image"] = image                # kept for a second look
             try:
@@ -1513,20 +2111,51 @@ class Pipeline:
                      f"{saw}]" if saw else
                      "\n\n[A picture came with this message, but you could not look at "
                      "it: your eyes are not working right now.]")
+        if note:
+            said += "\n\n" + note
         msgs = ([{"role": "system", "content": system_prompt(via, spoken)}] + self.history
                 + [{"role": "user", "content": said}])
-        reply = clean(self.llm(msgs))
+        ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None}
+        try:
+            reply = clean(self.llm(msgs))
+        finally:
+            TURN.ctx = None
         if not self._current(turn):
+            return None         # and a change this turn put forward is never read back
+        change = ctx["held"]
+        if change:
+            # The reply is the read-back, whatever the model went on to say,
+            # and only now, with it on its way to the person, can a yes count.
+            # It is not tidied for speech the way the model's words are: that
+            # drops markup, and nothing that would be saved may go unsaid.
+            reply = no_dashes(change["readback"])
+            CONVO["pending"] = dict(change, ts=time.time(), via=via)
+        elif lead:
+            reply = f"{lead} {reply}".strip()
+        return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn)
+
+    def _answered(self, said: str, reply: str, via: str, turn: int,
+                  always: bool = False) -> str | None:
+        """One exchange into the shared memory and the transcript. None when
+        a newer turn has superseded this one - unless `always`: what became
+        of a change the person approved is on record even if nobody waits
+        to hear it."""
+        if not self._current(turn) and not always:
             return None
-        if not reply:
-            reply = "Sorry, I lost my train of thought."
         self.history = (self.history + [{"role": "user", "content": said},
                                         {"role": "assistant", "content": reply}]
                         )[-2 * HISTORY_TURNS:]
         self.last_exchange = time.time()
         self.tr.append("douglas", reply, via)
         self.st.update(last_turn=time.time())
-        return reply
+        return reply if self._current(turn) else None
+
+    def forget(self) -> None:
+        """The end of a conversation: what was said, the picture, the records
+        that were read and any change still waiting all go together."""
+        self.history = []
+        SEEN["image"] = b""
+        CONVO.update(private=False, pending=None)
 
     def _hush(self) -> None:
         """Cut short an utterance playing on the remote speaker. Called with
@@ -1670,10 +2299,21 @@ def main() -> None:
             state.heartbeat()
 
     threading.Thread(target=beat, daemon=True).start()
-    if MCP_URL and MCP_TOKEN:
-        threading.Thread(target=tone_loop, daemon=True).start()
+    if jc_on():
+        threading.Thread(target=jc_loop, daemon=True).start()
     else:
-        threading.Thread(target=warm, daemon=True).start()
+        JC_READY.set()
+        if JOBCONTEXT_URL and JOBCONTEXT_TOKEN and TOOLS_ON:
+            log("JOBCONTEXT_URL is not https: the key is not sent in the clear, so the "
+                "job search records are off")
+
+    def first() -> None:
+        # The instructions carry the list of what the job search server
+        # offers; give it a moment to arrive before the model reads them.
+        JC_READY.wait(20)
+        (tone_loop if MCP_URL and MCP_TOKEN else warm)()
+
+    threading.Thread(target=first, daemon=True).start()
     threading.Thread(target=sat.run_forever, daemon=True).start()
     srv = ThreadingHTTPServer((PTT_HOST, PTT_PORT), Handler)
     log(f"PTT on {PTT_HOST}:{PTT_PORT}, satellite {SAT_HOST}:{SAT_PORT}, "
@@ -1681,7 +2321,8 @@ def main() -> None:
         + (f" (then :{TTS_FALLBACK_PORT})" if TTS_FALLBACK_PORT else "")
         + f", model {LLM_URL}, remote speaker "
         + (urllib.parse.urlsplit(SPEAKER_URL).netloc if SPEAKER_URL else "none")
-        + f", lookups {'on' if TOOLS_ON else 'off'}, eyes {EYES_URL or 'none'}")
+        + f", lookups {'on' if TOOLS_ON else 'off'}, eyes {EYES_URL or 'none'}"
+        + f", job search records {urllib.parse.urlsplit(JOBCONTEXT_URL).netloc if jc_on() else 'off'}")
     srv.serve_forever()
 
 
