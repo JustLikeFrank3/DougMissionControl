@@ -477,7 +477,8 @@ boot, disable the old unit by hand (it was never installed by this repo):
 
 Douglas serves llama.cpp on `:8081` (start it with `--metrics` for the
 tok/s meters), Open WebUI on `:8080`, and Wyoming speech-to-text/text-to-speech
-on `:10300`/`:10200` for DougVoice. `douglas/setup.sh`, run on Douglas,
+on `:10300`/`:10200` for DougVoice, with his own voice (`douglas-tts`) on
+`:10210`. `douglas/setup.sh`, run on Douglas,
 installs `douglas-agent` (`:9111`) — the panel's one window into it — and
 mints the token that goes into the Pi's `boot.env` as `DOUGLAS_AGENT_TOKEN`.
 The Pi reaches Douglas and DougVoice by MagicDNS name (`douglas`,
@@ -495,8 +496,9 @@ and runs `douglas/setup.sh` at the end. In order:
 2. **`sudo TS_AUTHKEY=tskey-… ./douglas/provision.sh`** — hostname `douglas`,
    the HWE kernel and Mesa (Strix Halo's gfx1151 needs both newer than 24.04
    GA), Tailscale, the GTT/TTM limit on the kernel command line, llama.cpp
-   built for Vulkan/RADV, Open WebUI, faster-whisper, Piper, `douglas-voice`
-   and `douglas-agent`. Without `TS_AUTHKEY` it prints a login URL and waits.
+   built for Vulkan/RADV, Open WebUI, faster-whisper, Piper, the Kokoro
+   voice (its 337 MB model is fetched and checked against a pinned hash),
+   `douglas-voice` and `douglas-agent`. Without `TS_AUTHKEY` it prints a login URL and waits.
 3. **`sudo reboot`** — the GTT limit and the new kernel only exist after one.
 4. **Put a model in `/srv/models`** and point `LLAMA_MODEL` at it in
    `/etc/douglas/llama.env` (nothing multi-GB is downloaded for you).
@@ -531,8 +533,9 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
 | `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
+| `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE`, `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (the voice asked of the service on `TTS_PORT`), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -567,6 +570,19 @@ whatever a lookup returns is handed to the model marked as information, not
 instructions. Lookups are the one thing that leaves the house: the words of
 the question go to the service asked. `DOUGLAS_TOOLS=0` turns them off, and he
 then says he has no internet.
+
+**How he sounds.** Piper, the voice he started with, is quick and clear and
+sounds like a machine reading. He speaks with Kokoro instead: a small neural
+voice (82M parameters) that sounds like a person and still runs on the CPU,
+about ten times faster than real time, so a fifteen-second reply is ready in
+a second and a half and none of the graphics memory is spent on it.
+`douglas-tts` serves it on `:10210` (loopback) over the same Wyoming
+`synthesize` Piper answers, so the pipeline only needed a different port.
+`KOKORO_VOICE` in `tts.env` picks the voice (`bm_lewis` by default; the
+model has dozens, British and American among them) and `KOKORO_SPEED` the
+pace. Piper stays installed: if `douglas-tts` is down or fails, the pipeline
+says so in its journal and speaks the reply with Piper (`TTS_FALLBACK_PORT`).
+Kokoro reads naturally but does not act: it will not sigh or lean on a word.
 
 **What he can see.** His own model reads only text, so pictures go through a
 second, small vision model (`llama-eyes`, `:8082`). `POST /say` takes an
@@ -732,6 +748,7 @@ bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
+python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand-in model
 python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 ```
 
@@ -745,6 +762,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
 | `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it |
+| `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
 `test_deck_ui.sh` skips cleanly where node is absent; the Pi runs the panel in
@@ -862,6 +880,12 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   router, not something to expose to the internet.
 - fauxmo is LAN-only, "off" is a deliberate no-op, and the state probe is
   a read.
+- The speech services run on onnxruntime. The version installed here
+  (1.32.0) uploads usage telemetry to Microsoft on Linux unless
+  `ORT_DISABLE_TELEMETRY=1` is set (watched with `strace`: one HTTPS
+  connection and a device-id file without it, nothing with it). The units for Whisper, Piper, Open WebUI and
+  the Kokoro voice all set it, and `douglas-tts`, which needs no network at
+  all, is also limited to loopback by systemd (`IPAddressDeny=any`).
 - No secrets in the repo. Both agent tokens are generated at install time,
   and `.gitignore` covers `*.token`.
 

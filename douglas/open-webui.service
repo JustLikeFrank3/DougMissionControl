@@ -8,6 +8,9 @@ User=douglas
 Group=douglas
 StateDirectory=open-webui
 Environment=DATA_DIR=/var/lib/open-webui HOME=/var/lib/open-webui
+# onnxruntime (inside this service) reports usage to Microsoft unless told
+# not to. Nothing in this house needs that.
+Environment=ORT_DISABLE_TELEMETRY=1
 EnvironmentFile=/etc/douglas/open-webui.env
 ExecStart=/opt/open-webui/bin/open-webui serve --host 0.0.0.0 --port ${OPEN_WEBUI_PORT}
 Restart=on-failure

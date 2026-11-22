@@ -757,6 +757,49 @@ check("tts client against a Wyoming server", voice.tts("abcd"),
       (b"abcdabcd", (22050, 2, 1)))
 
 
+# -- two voices: the one he should have, and the one that is always there --
+
+def fake_kokoro(c):
+    ev = voice.read_event(c.makefile("rb"))
+    a = {"rate": 24000, "width": 2, "channels": 1}
+    voice.write_event(c, "audio-start", a)
+    voice.write_event(c, "audio-chunk", a, (ev[1].get("voice") or {}).get("name", "?").encode())
+    voice.write_event(c, "audio-stop")
+    c.close()
+
+
+def broken_voice(c):
+    voice.read_event(c.makefile("rb"))
+    voice.write_event(c, "error", {"text": "the model fell over"})
+    c.close()
+
+
+def closed_port():
+    s = socket.create_server(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+piper = voice.TTS_PORT
+voice.TTS_PORT, voice.TTS_VOICE = serve_once(fake_kokoro), "bm_lewis"
+voice.TTS_FALLBACK_PORT = piper
+check("the voice asked for is the one that speaks, at its own rate", voice.tts("abcd"),
+      (b"bm_lewis", (24000, 2, 1)))
+voice.TTS_PORT = closed_port()
+check("with that voice's service down he speaks with the other", voice.tts("abcd"),
+      (b"abcdabcd", (22050, 2, 1)))
+voice.TTS_PORT = serve_once(broken_voice)
+check("and when it answers with an error", voice.tts("abcd"), (b"abcdabcd", (22050, 2, 1)))
+voice.TTS_FALLBACK_PORT = 0
+try:
+    voice.tts("abcd")
+    check("with no second voice a failure is a failure", "spoke", "raised")
+except RuntimeError as e:
+    check("with no second voice a failure is a failure", str(e), "tts: the model fell over")
+voice.TTS_PORT, voice.TTS_VOICE = piper, ""
+
+
 class Llama(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass

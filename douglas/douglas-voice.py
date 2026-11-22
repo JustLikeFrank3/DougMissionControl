@@ -77,6 +77,9 @@ STT_HOST, STT_PORT = E("STT_HOST", "127.0.0.1"), int(E("STT_PORT", "10300"))
 TTS_HOST, TTS_PORT = E("TTS_HOST", "127.0.0.1"), int(E("TTS_PORT", "10200"))
 STT_LANGUAGE = E("STT_LANGUAGE", "en")
 TTS_VOICE = E("TTS_VOICE", "")
+# A second voice for when the first does not answer; 0 for none.
+TTS_FALLBACK_HOST = E("TTS_FALLBACK_HOST", TTS_HOST)
+TTS_FALLBACK_PORT = int(E("TTS_FALLBACK_PORT", "0"))
 LLM_URL = E("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 LLM_MODEL = E("LLM_MODEL", "douglas")
 LLM_MAX_TOKENS = int(E("LLM_MAX_TOKENS", "400"))
@@ -1044,12 +1047,26 @@ def llm(messages: list[dict], ask=None) -> str:
 
 
 def tts(text: str) -> tuple[bytes, tuple[int, int, int]]:
-    """Piper over Wyoming: one synthesize, PCM back."""
+    """The reply as speech. If the voice is not answering and a second one is
+    configured, Douglas speaks with that rather than not at all: the neural
+    voice is a service of its own, and Piper is always there behind it."""
+    try:
+        return synthesize(TTS_HOST, TTS_PORT, text, TTS_VOICE)
+    except (OSError, RuntimeError, ValueError) as e:
+        if not TTS_FALLBACK_PORT:
+            raise
+        log(f"the voice on :{TTS_PORT} failed ({type(e).__name__}: {e}) - "
+            f"speaking with the one on :{TTS_FALLBACK_PORT}")
+        return synthesize(TTS_FALLBACK_HOST, TTS_FALLBACK_PORT, text, "")
+
+
+def synthesize(host: str, port: int, text: str, voice: str) -> tuple[bytes, tuple[int, int, int]]:
+    """A voice over Wyoming: one synthesize, PCM back."""
     data: dict = {"text": text}
-    if TTS_VOICE:
-        data["voice"] = {"name": TTS_VOICE}
+    if voice:
+        data["voice"] = {"name": voice}
     pcm, fmt = bytearray(), (22050, 2, 1)
-    with socket.create_connection((TTS_HOST, TTS_PORT), timeout=60) as s:
+    with socket.create_connection((host, port), timeout=60) as s:
         write_event(s, "synthesize", data)
         f = s.makefile("rb")
         while (ev := read_event(f)) is not None:
@@ -1483,7 +1500,9 @@ def main() -> None:
     threading.Thread(target=sat.run_forever, daemon=True).start()
     srv = ThreadingHTTPServer((PTT_HOST, PTT_PORT), Handler)
     log(f"PTT on {PTT_HOST}:{PTT_PORT}, satellite {SAT_HOST}:{SAT_PORT}, "
-        f"stt :{STT_PORT}, tts :{TTS_PORT}, model {LLM_URL}, remote speaker "
+        f"stt :{STT_PORT}, tts :{TTS_PORT}"
+        + (f" (then :{TTS_FALLBACK_PORT})" if TTS_FALLBACK_PORT else "")
+        + f", model {LLM_URL}, remote speaker "
         + (urllib.parse.urlsplit(SPEAKER_URL).netloc if SPEAKER_URL else "none")
         + f", lookups {'on' if TOOLS_ON else 'off'}, eyes {EYES_URL or 'none'}")
     srv.serve_forever()

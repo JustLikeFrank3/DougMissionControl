@@ -8,6 +8,9 @@ User=douglas
 Group=douglas
 StateDirectory=wyoming/piper
 Environment=HOME=/var/lib/wyoming/piper
+# onnxruntime (inside this service) reports usage to Microsoft unless told
+# not to. Nothing in this house needs that.
+Environment=ORT_DISABLE_TELEMETRY=1
 EnvironmentFile=/etc/douglas/speech.env
 ExecStart=/opt/wyoming-piper/bin/wyoming-piper --uri tcp://0.0.0.0:${PIPER_PORT} --voice ${PIPER_VOICE} --data-dir /var/lib/wyoming/piper --download-dir /var/lib/wyoming/piper $PIPER_ARGS
 Restart=on-failure

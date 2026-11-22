@@ -1,0 +1,26 @@
+[Unit]
+Description=douglas-tts - Douglas's speaking voice (Kokoro), Wyoming protocol on :10210
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=douglas
+Group=douglas
+EnvironmentFile=/etc/douglas/tts.env
+# onnxruntime, the library the model runs on, reports usage to Microsoft
+# unless it is told not to. It is told, and the service is cut off from every
+# address but this machine's own as well: what Douglas says stays here.
+Environment=ORT_DISABLE_TELEMETRY=1
+IPAddressDeny=any
+IPAddressAllow=localhost
+# -I: the interpreter looks nowhere but its own virtualenv for code.
+ExecStart=/opt/kokoro/bin/python -I /opt/douglas/douglas-tts.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

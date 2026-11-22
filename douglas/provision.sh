@@ -12,7 +12,9 @@
 #                         a picture (optional: enabled once its model is on disk)
 #     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net)
 #     wyoming-whisper     faster-whisper STT on :10300
-#     wyoming-piper       Piper TTS on :10200
+#     wyoming-piper       Piper TTS on :10200 (the fallback voice)
+#     douglas-tts         Kokoro, the voice he speaks with, on :10210 (enabled
+#                         once its model is on disk)
 #     douglas-voice       DougVoice's pipeline, PTT on :10800
 #     douglas-agent       the deck's window into all of it, :9111 (./setup.sh)
 #
@@ -204,6 +206,46 @@ PIPER_VOICE=en_GB-alan-medium
 PIPER_ARGS=
 CONF
 
+# His voice. Piper is quick and sounds like a machine reading; Kokoro is a
+# small neural voice that sounds like a person and still runs on the CPU.
+# Piper stays: it is what the pipeline falls back to if douglas-tts is down.
+step "Kokoro voice"
+[ -x /opt/kokoro/bin/python ] || python3 -m venv /opt/kokoro
+/opt/kokoro/bin/pip install -q --upgrade --only-binary=:all: 'kokoro-onnx>=0.6,<0.7'
+
+env=/etc/douglas/tts.env
+[ -f "$env" ] || cat > "$env" <<'CONF'
+# Douglas's speaking voice: Kokoro, served by douglas-tts. Restart after editing:
+#     sudo systemctl restart douglas-tts
+TTS_BIND=127.0.0.1
+TTS_LISTEN_PORT=10210
+KOKORO_MODEL=/srv/models/kokoro/kokoro-v1.0.onnx
+KOKORO_VOICES=/srv/models/kokoro/voices-v1.0.bin
+# Any voice in the model: bm_lewis, bm_george, bm_fable, bm_daniel (British),
+# am_michael, am_fenrir, am_puck, am_onyx, am_eric, am_liam (American), and more.
+KOKORO_VOICE=bm_lewis
+# Pace: 1.0 is the voice's own; 0.9 is a little slower.
+KOKORO_SPEED=1.0
+CONF
+chown root:douglas "$env" && chmod 640 "$env"
+
+# The model: two files, 337 MB, from the kokoro-onnx project's release. The
+# release publishes no checksums, so these are the ones this was tested with.
+kokoro_release=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
+fetch_kokoro() {            # file, sha256
+    [ -s "$1" ] && return 0
+    install -d -m 755 "$(dirname "$1")"
+    if curl -fsSL --retry 3 -o "$1.part" "$kokoro_release/$(basename "$1")" \
+            && echo "$2  $1.part" | sha256sum -c --quiet -; then
+        mv "$1.part" "$1" && chmod 644 "$1"
+    else
+        rm -f "$1.part"
+        warn "could not fetch $(basename "$1") - Douglas will speak with Piper until it is there"
+    fi
+}
+fetch_kokoro "$(envval "$env" KOKORO_MODEL)" 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5
+fetch_kokoro "$(envval "$env" KOKORO_VOICES)" bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d
+
 # ── Open WebUI ───────────────────────────────────────────────────────────
 step "Open WebUI"
 if [ ! -x /opt/open-webui/bin/open-webui ]; then
@@ -232,6 +274,7 @@ chown root:douglas /etc/douglas/open-webui.env && chmod 640 /etc/douglas/open-we
 # ── the voice pipeline ───────────────────────────────────────────────────
 step "douglas-voice"
 install -m 755 "$here/douglas-voice.py" /opt/douglas/douglas-voice.py
+install -m 755 "$here/douglas-tts.py" /opt/douglas/douglas-tts.py
 env=/etc/douglas/voice.env
 if [ ! -f "$env" ]; then
     ptt_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
@@ -249,8 +292,11 @@ STT_HOST=127.0.0.1
 STT_PORT=10300
 STT_LANGUAGE=en
 TTS_HOST=127.0.0.1
-TTS_PORT=10200
-#TTS_VOICE=en_GB-alan-medium
+# His voice: Kokoro (douglas-tts on :10210, the voice is set in tts.env), with
+# Piper on :10200 behind it for the day that service is down.
+TTS_PORT=10210
+TTS_VOICE=bm_lewis
+TTS_FALLBACK_PORT=10200
 LLM_URL=http://127.0.0.1:8081
 LLM_MAX_TOKENS=400
 # Lookups (weather, news, Wikipedia, reading a web page) are on. Each one
@@ -275,7 +321,7 @@ chown root:douglas "$env" && chmod 640 "$env"
 # ── units ────────────────────────────────────────────────────────────────
 step "systemd units"
 units="llama-server open-webui wyoming-whisper wyoming-piper douglas-voice"
-for u in $units llama-eyes; do
+for u in $units llama-eyes douglas-tts; do
     install -m 644 "$here/$u.service" "/etc/systemd/system/$u.service"
 done
 systemctl daemon-reload
@@ -285,6 +331,13 @@ if [ -f "$eyes" ]; then
     units="$units llama-eyes"
 else
     echo "  no vision model at $eyes - Douglas cannot be shown pictures (see /etc/douglas/eyes.env)"
+fi
+# So is the neural voice: without its model he speaks with Piper.
+kokoro="$(envval /etc/douglas/tts.env KOKORO_MODEL)"
+if [ -f "$kokoro" ] && [ -f "$(envval /etc/douglas/tts.env KOKORO_VOICES)" ]; then
+    units="douglas-tts $units"
+else
+    echo "  no Kokoro model at $kokoro - Douglas speaks with Piper (see /etc/douglas/tts.env)"
 fi
 for u in $units; do
     systemctl enable "$u"
@@ -318,8 +371,10 @@ step "status"
 sleep 3
 eyes_port=""
 [ -f "$eyes" ] && eyes_port="$(envval /etc/douglas/eyes.env EYES_PORT) llama-eyes"
+tts_port=""
+[ -f "$kokoro" ] && tts_port="$(envval /etc/douglas/tts.env TTS_LISTEN_PORT) douglas-tts"
 for p in "8081 llama-server" ${eyes_port:+"$eyes_port"} "8080 open-webui" "10300 wyoming-whisper" \
-         "10200 wyoming-piper" "10800 douglas-voice" "9111 douglas-agent"; do
+         "10200 wyoming-piper" ${tts_port:+"$tts_port"} "10800 douglas-voice" "9111 douglas-agent"; do
     set -- $p
     if (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then
         printf '  up    :%-5s %s\n' "$1" "$2"
