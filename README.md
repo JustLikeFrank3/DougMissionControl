@@ -309,11 +309,27 @@ so it asks for the token once: in Safari, tap COPY THIS PHONE'S TOKEN at the
 bottom of the page, then paste it into the app's token screen (which also
 takes the whole link).
 
-HOLD TO TALK on the phone borrows DougVoice's ears, exactly as the panel's
-button does: a plain-HTTP page is not allowed the phone's own microphone. The
-button says so, and when a press picks up nothing the line under the ask box
-says that too ("DougVoice heard nothing in 3.5 s"), from the length, level
-and word count the pipeline now keeps of each listen (never the words).
+HOLD TO TALK on the plain page borrows DougVoice's ears, exactly as the
+panel's button does: a plain-HTTP page is not allowed the phone's own
+microphone. The button says so, and when a press picks up nothing the line
+under the ask box says that too ("DougVoice heard nothing in 3.5 s"), from the
+length, level and word count the pipeline keeps of each listen (never the
+words).
+
+**Talking through the phone.** A browser lends a page its microphone only on
+HTTPS. `sudo ./pi/mobile-https.sh`, run on node1, puts the phone page on
+`https://<node1>.<tailnet>.ts.net/m` with `tailscale serve`: tailnet only, as
+before. It needs HTTPS enabled for the tailnet, and issuing the certificate
+records the machine's tailnet name in the public certificate log. Requests
+that arrive that way reach deck-api from loopback, the address the panel is
+trusted on, so deck-api asks anything a proxy forwarded for the token, and the
+script takes the HTTPS front down again if a request without one gets in.
+The plain page then offers TALK THROUGH THIS PHONE, a link that takes the
+phone's token along. On the HTTPS page HOLD TO TALK records through the
+phone's own microphone (16 kHz, up to 20 s), sends the recording through the
+same waiting queue as a typed question, and plays Douglas's reply through the
+phone; nothing is played in the house. `sudo ./pi/mobile-https.sh off` undoes
+it.
 
 **IDLE** — the resting state, and the default surface: a clock, the boot
 tiles, and the fleet's status cards. The panel spends most of its life with nothing
@@ -593,6 +609,14 @@ model has dozens, British and American among them) and `KOKORO_SPEED` the
 pace. Piper stays installed: if `douglas-tts` is down or fails, the pipeline
 says so in its journal and speaks the reply with Piper (`TTS_FALLBACK_PORT`).
 Kokoro reads naturally but does not act: it will not sigh or lean on a word.
+
+**From a phone's own microphone.** `POST /hear` takes a turn recorded
+somewhere else (base64 16-bit mono PCM, with an id) and treats it as a spoken
+turn, except that nothing is played in the house: the reply is synthesised
+and kept, and `GET /speech?id=` hands it back as a WAV to whoever sent the
+recording (202 while he is still thinking; `nothing` if no words were heard in
+it). `douglas-agent` and deck-api relay both, and the phone page on HTTPS uses
+them for HOLD TO TALK.
 
 **What he can see.** His own model reads only text, so pictures go through a
 second, small vision model (`llama-eyes`, `:8082`). `POST /say` takes an

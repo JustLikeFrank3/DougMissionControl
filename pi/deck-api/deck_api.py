@@ -17,6 +17,10 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/douglas/ptt        {"action":"start|stop|cancel"} push-to-talk
     POST /api/douglas/say        {"text":"...","via":"deck|phone"} typed turn;
                                  "image":"<base64>" adds a picture to look at
+    POST /api/douglas/hear       {"audio":"<base64 16-bit mono PCM>","rate":16000}
+                                 a turn recorded on the phone's own microphone
+    GET  /api/douglas/speech     ?id=<the turn's id>: his reply as a WAV, for
+                                 the phone to play
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -178,6 +182,7 @@ VOICE_SAT_PORT = int(cfg("VOICE_SAT_PORT", "10700"))
 DOUGLAS_AGENT_PORT = int(cfg("DOUGLAS_AGENT_PORT", "9111"))
 DOUGLAS_AGENT_TOKEN = cfg("DOUGLAS_AGENT_TOKEN", "")
 DOUGLAS_PICTURE_MAX = 11_000_000      # base64 characters: about 8 MB of picture
+DOUGLAS_AUDIO_MAX = 4_500_000         # base64 characters: a recording of half a minute
 # Which inputs to offer on a monitor that will NOT declare its own. Empty -
 # the default - means offer everything.
 #
@@ -199,6 +204,10 @@ MON_DEFAULT_INPUTS = [s for s in
 LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
 LINUX_MEDIA_TOKEN = cfg("LINUX_MEDIA_TOKEN", "")
 DECK_TOKEN = cfg("DECK_TOKEN", "")
+# Where the phone page is on HTTPS, if pi/mobile-https.sh has put it there:
+# https://<this machine>.<tailnet>.ts.net. The plain page offers it, because
+# only an HTTPS page is lent a phone's microphone.
+DECK_HTTPS_URL = cfg("DECK_HTTPS_URL", "").rstrip("/")
 LISTEN_PORT = int(cfg("DECK_PORT", "8088"))
 POLL_IDLE = float(cfg("DECK_POLL_IDLE", "5"))
 POLL_BUSY = float(cfg("DECK_POLL_BUSY", "2"))
@@ -336,6 +345,7 @@ class Deck:
             # the checkout; only setup-deck.sh updates /opt/flightdeck, and
             # confusing the two costs an afternoon.
             "version": BUILD,
+            "https_url": DECK_HTTPS_URL or None,
             "surface": {"active": DEFAULT_SURFACE, "default": DEFAULT_SURFACE,
                         "previous": None, "episode": None,
                         "manual_in_episode": False, "all": list(SURFACES)},
@@ -1634,6 +1644,68 @@ def douglas_say(text: str, via: str, image: object = None,
             return False, "douglas-agent did not answer"
         return bool(got.get("ok")), str(got.get("message") or "")
 
+    return _once(ask_id, send)
+
+
+def douglas_hear(audio: object, rate: object, via: str,
+                 ask_id: object = None) -> tuple[bool, str]:
+    """A turn recorded on a phone's own microphone (base64 16-bit mono PCM).
+    Douglas transcribes and answers it; the reply lands in the transcript and
+    its audio waits on Douglas to be collected with douglas_speech()."""
+    audio = audio if isinstance(audio, str) else ""
+    if not audio:
+        return False, "nothing recorded"
+    if len(audio) > DOUGLAS_AUDIO_MAX:
+        return False, "that recording is too long"
+    if not DOUGLAS_AGENT_TOKEN:
+        return False, "DOUGLAS_AGENT_TOKEN unset in boot.env"
+    try:
+        rate = int(rate or 16000)
+    except (TypeError, ValueError):
+        rate = 16000
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/hear"
+           f"?token={DOUGLAS_AGENT_TOKEN}")
+    payload = {"audio": audio, "rate": rate, "via": via if via in ("deck", "phone") else "phone",
+               "id": ask_id if isinstance(ask_id, str) and SAID_ID.fullmatch(ask_id) else ""}
+
+    def send() -> tuple[bool, str]:
+        got = _ws_json(url, payload, timeout=25)
+        if not isinstance(got, dict):
+            return False, "douglas-agent did not answer"
+        return bool(got.get("ok")), str(got.get("message") or "")
+
+    return _once(ask_id, send)
+
+
+def douglas_speech(ask_id: str) -> tuple[int, bytes | dict]:
+    """The reply to a recorded turn, for the phone that sent it to play: a
+    WAV once Douglas has it ready, and his word on where it stands until
+    then ({"state": "thinking" | "nothing" | "failed" | "unknown"})."""
+    if not SAID_ID.fullmatch(ask_id or ""):
+        return 400, {"ok": False, "state": "unknown"}
+    if not DOUGLAS_AGENT_TOKEN:
+        return 502, {"ok": False, "state": "failed",
+                     "message": "DOUGLAS_AGENT_TOKEN unset in boot.env"}
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/speech"
+           f"?token={DOUGLAS_AGENT_TOKEN}&id={quote(ask_id)}")
+    try:
+        with urllib.request.urlopen(url, timeout=6) as r:
+            body = r.read(8_000_000)
+            if r.headers.get_content_type() == "audio/wav":
+                return 200, body
+            return r.status, json.loads(body)
+    except urllib.error.HTTPError as e:         # he answered: an id he does not know
+        try:
+            return e.code, json.loads(e.read(4096))
+        except (ValueError, OSError):
+            return e.code, {"ok": False, "state": "unknown"}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 502, {"ok": False, "state": "failed", "message": "douglas-agent did not answer"}
+
+
+def _once(ask_id: object, send) -> tuple[bool, str]:
+    """Send a question to Douglas unless one with this id has already been
+    taken. Without a proper id every copy is sent."""
     if not (isinstance(ask_id, str) and SAID_ID.fullmatch(ask_id)):
         return send()
     now = time.time()
@@ -1696,8 +1768,25 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
+    def _proxied(self) -> str:
+        """Who a local proxy says this request is really from, or "". The
+        phone page is put on HTTPS by `tailscale serve`, which forwards to
+        this port: every one of those requests arrives from 127.0.0.1, and
+        says in its headers whose it is."""
+        for h in ("X-Forwarded-For", "Tailscale-User-Login", "X-Real-IP", "Forwarded"):
+            v = self.headers.get(h)
+            if v:
+                return v.split(",")[0].strip()[:60] or "a proxy"
+        return ""
+
+    def _client(self) -> str:
+        return self._proxied() or self.client_address[0]
+
     def _authorised(self, query: dict) -> bool:
-        if self.client_address[0] in ("127.0.0.1", "::1"):
+        # The panel on this Pi needs no token: it is the only thing that
+        # reaches this port from loopback of its own accord. A request a
+        # proxy passed on is somebody else's, and needs one like any other.
+        if self.client_address[0] in ("127.0.0.1", "::1") and not self._proxied():
             return True
         if not DECK_TOKEN:
             return False
@@ -1724,7 +1813,7 @@ class Handler(BaseHTTPRequestHandler):
     def _note(self, what: str) -> None:
         """One journal line about a request: who, which route, what happened.
         Never the query (it carries the token) and never what was said."""
-        print(f"http: {urlparse(self.path).path} from {self.client_address[0]}: "
+        print(f"http: {urlparse(self.path).path} from {self._client()}: "
               f"{' '.join(what.split())[:200]}", file=sys.stderr, flush=True)
 
     def _body(self) -> dict | None:
@@ -1815,6 +1904,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, douglas_status())
 
+        # The reply to a turn the phone recorded, for the phone to play.
+        if path == "/api/douglas/speech":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            code, out = douglas_speech((query.get("id") or [""])[0])
+            if isinstance(out, bytes):
+                return self._send(200, out, "audio/wav")
+            return self._json(code, out)
+
         # Media and squadrons ride the same fast-poll pattern as /api/sim and
         # stay off the SSE state for the same reasons.
         if path == "/api/media":
@@ -1891,6 +1989,21 @@ class Handler(BaseHTTPRequestHandler):
                           else " again: Douglas already has it" if ok else f" refused ({msg})")
                        + f" in {time.monotonic() - began:.1f} s")
             # Douglas not answering is the one refusal that passes by itself.
+            retry = not ok and msg == "douglas-agent did not answer"
+            return self._json(200 if ok else 502, {"ok": ok, "message": msg, "retry": retry})
+
+        if path == "/api/douglas/hear":
+            audio, began = body.get("audio"), time.monotonic()
+            ok, msg = douglas_hear(audio, body.get("rate"), str(body.get("via") or "phone"),
+                                   body.get("id"))
+            try:
+                secs = len(audio) * 3 / 4 / (int(body.get("rate") or 16000) * 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                secs = 0.0
+            self._note(f"{secs:.1f} s recorded"
+                       + (" accepted" if ok and msg != "already sent"
+                          else " again: Douglas already has it" if ok else f" refused ({msg})")
+                       + f" in {time.monotonic() - began:.1f} s")
             retry = not ok and msg == "douglas-agent did not answer"
             return self._json(200 if ok else 502, {"ok": ok, "message": msg, "retry": retry})
 
@@ -1983,7 +2096,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # One line per stream, not per frame: enough to answer "did the kiosk
         # come back after a restart, and did it get frames" from the journal.
-        print(f"sse: open {self.client_address[0]}:{self.client_address[1]}",
+        print(f"sse: open {self._client()}:{self.client_address[1]}",
               file=sys.stderr, flush=True)
         seen = -1
         sent = 0
@@ -1997,7 +2110,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # kiosk reloaded or navigated away
         finally:
-            print(f"sse: closed {self.client_address[0]}:{self.client_address[1]}"
+            print(f"sse: closed {self._client()}:{self.client_address[1]}"
                   f" after {sent} frame(s)", file=sys.stderr, flush=True)
 
     # -- static -------------------------------------------------------------

@@ -930,6 +930,86 @@ check("the agent tells the deck whether he can see",
       (False, None, True))
 voice.EYES_URL = ""
 
+print("-- a recording from a phone, answered on the phone --")
+import wave
+HSENT, HOLD = [], threading.Event()
+
+
+def patient_llm(messages):
+    HOLD.wait(5)
+    return "Ten past nine."
+
+
+phone = voice.Pipeline(voice.StateFile(voice_file), voice.Transcript(transcript_file),
+                       send=lambda *a: HSENT.append(a[0]) or True,
+                       snd_format=lambda: (16000, 2, 1),
+                       stt=lambda audio, fmt: "What time is it?" if len(audio) > 40000 else "",
+                       llm=patient_llm, tts=fake_tts)
+voice.PIPE = phone
+TWO = SECOND * 2
+before = len(lines())
+check("it is taken", phone.hear(TWO, 16000, "phone", "q-phone-0001"), (True, "thinking"))
+check("its reply is not ready while he thinks", phone.speech("q-phone-0001"), ("thinking", b""))
+check("and a second recording has to wait its turn",
+      phone.hear(TWO, 16000, "phone", "q-phone-0002"), (False, "Douglas is busy (thinking)"))
+HOLD.set()
+check("then the reply is there to collect", until(lambda: phone.speech("q-phone-0001")[0] == "spoken"), True)
+with wave.open(io.BytesIO(phone.speech("q-phone-0001")[1])) as w:
+    check("as a WAV at the voice's own rate", (w.getframerate(), w.getsampwidth(), w.getnchannels(), w.getnframes()),
+          (22050, 2, 1, 2205))
+until(lambda: phone.state == "idle")
+check("it is in the conversation like any spoken turn",
+      [(x["who"], x["text"], x["via"]) for x in lines()[before:]],
+      [("user", "What time is it?", "phone"), ("douglas", "Ten past nine.", "phone")])
+check("and nothing was played in the house", [e for e in HSENT if e.startswith("audio")], [])
+check("what was heard is on record", on_disk()["heard"]["words"], 4)
+phone.hear(SECOND, 16000, "phone", "q-phone-0003")
+check("a recording with nothing in it", until(lambda: phone.speech("q-phone-0003")[0] == "nothing"), True)
+until(lambda: phone.state == "idle")
+check("too short to be anything", phone.hear(b"\x00\x00" * 100, 16000), (False, "too short"))
+check("too long", phone.hear(SECOND * int(voice.HEAR_MAX_S + 2), 16000), (False, "too long"))
+check("an unlikely sample rate", phone.hear(TWO, 12345)[0], False)
+check("an id nobody sent", phone.speech("q-nobody-0001"), ("unknown", b""))
+
+
+def no_voice(text):
+    raise RuntimeError("no voice today")
+
+
+before = len(lines())
+phone.tts = no_voice
+real_err, sys.stderr = sys.stderr, io.StringIO()
+phone.hear(TWO, 16000, "phone", "q-phone-0004")
+check("a voice that fails leaves the reply unspoken", until(lambda: phone.speech("q-phone-0004")[0] == "failed"), True)
+sys.stderr = real_err
+check("but still written down", [x["text"] for x in lines()[before:]], ["What time is it?", "Ten past nine."])
+phone.tts = fake_tts
+until(lambda: phone.state == "idle")
+for n in range(6):
+    phone._outcome(f"q-old-{n:04d}", "nothing")
+check("only a handful of replies are kept", len(phone._outcomes), 4)
+
+check("the agent relays a recording", agent.relay_hear(
+    {"audio": base64.b64encode(TWO).decode(), "rate": 16000, "via": "phone", "id": "q-phone-0005"}),
+    (200, {"ok": True, "message": "thinking"}))
+check("and brings the reply's audio back",
+      until(lambda: isinstance(agent.speech("q-phone-0005")[1], bytes)), True)
+check("as it was made", agent.speech("q-phone-0005")[1][:4] + agent.speech("q-phone-0005")[1][8:12], b"RIFFWAVE")
+check("an id nobody sent comes back as unknown", agent.speech("q-nobody-0001"),
+      (404, {"ok": False, "state": "unknown"}))
+until(lambda: phone.state == "idle")
+check("a recording that is not base64 is refused by the pipeline",
+      agent.relay_hear({"audio": "not base64!", "id": "q-phone-0006"}),
+      (200, {"ok": False, "message": "audio must be base64 PCM"}))
+check("and one with nothing in it by the agent", agent.relay_hear({"via": "phone"})[0], 400)
+voice.PTT_TOKEN = "s3cret"
+try:
+    urllib.request.urlopen(url.replace("/ptt", "/speech") + "?id=q-phone-0005", timeout=3)
+    check("the audio wants the token like everything else", "served", "refused")
+except urllib.error.HTTPError as e:
+    check("the audio wants the token like everything else", e.code, 403)
+voice.PTT_TOKEN = ""
+
 print("-- what a quiet room sounds like to Whisper --")
 import array
 check("no signal at all", voice.loudness(b"\x00\x00" * 4000, 2), -96.0)

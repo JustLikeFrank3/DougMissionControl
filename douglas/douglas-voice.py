@@ -21,6 +21,15 @@ the model is a deliberate press — DougVoice's own button or the deck's.
                 start  begin keeping the satellite's audio (state listening)
                 stop   end it and run the turn (thinking → speaking → idle)
                 cancel drop whatever is in flight and go idle
+    POST /hear  {"audio": "<base64 16-bit mono PCM>", "rate": 16000,
+                 "via": "phone", "id": "..."}
+                a turn recorded somewhere else, a phone's own microphone,
+                and to be answered there: transcribed and answered like a
+                spoken turn, but nothing is played in the house.
+    GET  /speech?id=...
+                the reply to that recording as a WAV, once it is ready (202
+                and {"state": "thinking"} until then; "nothing" if nothing
+                was heard in it, "failed" if he answered but not aloud).
     GET  /health  200 "ok"
 
 A turn is: the kept audio → Wyoming faster-whisper (:10300) → llama.cpp's
@@ -37,8 +46,10 @@ and the words are handed to Douglas as what he saw; the picture goes
 nowhere else.
 
 It honours the contract douglas-agent.py documents:
-    VOICE_STATE_FILE   {"state", "satellite", "eyes", "ts", "last_turn"}, rewritten
-                       atomically on every change and every HEARTBEAT_S.
+    VOICE_STATE_FILE   {"state", "satellite", "eyes", "ts", "last_turn", "heard"},
+                       rewritten atomically on every change and every
+                       HEARTBEAT_S. "heard" is the last listen: its length,
+                       level and word count, never the words.
     TRANSCRIPT_FILE    one JSONL line per turn: {"ts", "who", "text", "via"}.
     POST /ptt          the body douglas-agent relays from the deck.
 
@@ -51,6 +62,7 @@ import array
 import base64
 import email.utils
 import html
+import io
 import ipaddress
 import json
 import math
@@ -63,6 +75,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import wave
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -188,6 +201,12 @@ MIN_LISTEN_S = float(E("VOICE_MIN_LISTEN_S", "0.3"))
 # thanks someone for watching. A transcript that is only one of those, from
 # audio quieter than this (dB below full scale), is taken as nothing heard.
 QUIET_DB = float(E("VOICE_QUIET_DB", "-45"))
+# A turn recorded somewhere else and sent whole (POST /hear): a phone's own
+# microphone. As long as a held button may be, and a little; 16-bit mono.
+HEAR_MAX_S = MAX_LISTEN_S + 5
+HEAR_RATES = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
+HEAR_BODY_MAX = 4 * 1024 * 1024
+SPEECH_KEEP_S = 300                 # how long a reply's audio waits to be collected
 NOT_SPEECH = {"you", "thank you", "thanks", "thank you for watching", "thanks for watching",
               "bye", "bye bye", "so", "okay", "oh", "hmm", "uh"}
 HEARTBEAT_S = float(E("VOICE_HEARTBEAT_S", "5"))
@@ -333,6 +352,17 @@ def loudness(pcm: bytes, width: int) -> float:
     part = a[::max(1, len(a) // 20000)]
     rms = math.sqrt(sum(x * x for x in part) / len(part))
     return max(-96.0, round(20 * math.log10(max(rms, 0.5) / 32768.0), 1))
+
+
+def wav_of(pcm: bytes, fmt: tuple[int, int, int]) -> bytes:
+    """PCM in a WAV wrapper: something a phone's browser plays as it stands."""
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setframerate(fmt[0])
+        w.setsampwidth(fmt[1])
+        w.setnchannels(fmt[2])
+        w.writeframes(pcm)
+    return out.getvalue()
 
 
 def fmt_of(d: dict) -> tuple[int, int, int]:
@@ -1221,6 +1251,8 @@ class Pipeline:
         self._listen_started = 0.0
         self._turn = 0                  # bumped by cancel/start; stale turns stop
         self._played = threading.Event()
+        self._outcomes: dict[str, dict] = {}    # recorded turns: id -> what became of it
+        self._outcomes_lock = threading.Lock()
 
     @property
     def state(self) -> str:
@@ -1289,6 +1321,57 @@ class Pipeline:
                          speak and self.linked(), image), daemon=True).start()
         return True, "thinking"
 
+    def hear(self, audio: bytes, rate: int, via: str = "phone",
+             ask_id: str = "") -> tuple[bool, str]:
+        """A turn recorded somewhere else, a phone's own microphone, and to
+        be answered there. It is transcribed and answered like any spoken
+        turn, but the reply is not played in the house: its audio is kept
+        for whoever sent the recording to collect (speech())."""
+        if rate not in HEAR_RATES:
+            return False, "audio must be 16-bit mono PCM at a usual sample rate"
+        secs = len(audio) / (rate * 2)
+        if secs < MIN_LISTEN_S:
+            return False, "too short"
+        if secs > HEAR_MAX_S:
+            return False, "too long"
+        via = via if via in VIAS else "phone"
+        with self._lock:
+            if self.state in ("listening", "thinking"):
+                return False, f"Douglas is busy ({self.state})"
+            self._turn += 1                          # it ends any speech, as a typed turn does
+            self._played.set()
+            self._hush()
+            turn = self._turn
+            self.st.update(state="thinking")
+        self._outcome(ask_id, "thinking")
+        threading.Thread(target=self.run_heard, args=(audio, (rate, 2, 1), via, turn, ask_id),
+                         daemon=True).start()
+        return True, "thinking"
+
+    def _outcome(self, ask_id: str, state: str, wav: bytes = b"") -> None:
+        """What became of a turn that is answered somewhere else. Kept for a
+        few minutes, and only a handful: audio is not small."""
+        if not ask_id:
+            return
+        now = time.time()
+        with self._outcomes_lock:
+            self._outcomes[ask_id] = {"ts": now, "state": state, "wav": wav}
+            for old in [k for k, v in self._outcomes.items() if now - v["ts"] > SPEECH_KEEP_S]:
+                del self._outcomes[old]
+            while len(self._outcomes) > 4:
+                del self._outcomes[min(self._outcomes, key=lambda k: self._outcomes[k]["ts"])]
+
+    def speech(self, ask_id: str) -> tuple[str, bytes]:
+        """("spoken", a WAV) once the reply to that turn is ready. Before
+        that "thinking"; "nothing" if nothing was heard in the recording;
+        "failed" if he answered but not aloud, or not at all; "unknown" for
+        an id never seen or long since collected."""
+        with self._outcomes_lock:
+            got = self._outcomes.get(ask_id)
+        if not got or time.time() - got["ts"] > SPEECH_KEEP_S:
+            return "unknown", b""
+        return got["state"], got["wav"]
+
     def audio(self, data: dict, payload: bytes | None) -> None:
         """A microphone chunk from the satellite. Kept only while listening."""
         if not payload:
@@ -1346,6 +1429,39 @@ class Pipeline:
                     self.st.update(state="idle")
 
     def _run_turn(self, audio: bytes, fmt, via: str, turn: int) -> None:
+        heard = self._listen(audio, fmt, via)
+        self.send("transcript", {"text": heard})
+        if not heard or not self._current(turn):
+            return
+        reply = self._exchange(heard, via, turn, speakable, True)
+        if reply is not None:
+            self._speak(reply, turn)
+
+    def run_heard(self, audio: bytes, fmt, via: str, turn: int, ask_id: str) -> None:
+        """A recording from elsewhere: the same turn, with the reply's audio
+        kept for collection rather than played here."""
+        state = "failed"
+        try:
+            heard = self._listen(audio, fmt, via)
+            if not heard:
+                state = "nothing"
+            elif self._current(turn):
+                reply = self._exchange(heard, via, turn, speakable, True)
+                if reply is not None:
+                    pcm, src = self.tts(reply)
+                    self._outcome(ask_id, "spoken", wav_of(pcm, src))
+                    state = "spoken"
+        except Exception as e:                   # noqa: BLE001 — never wedge
+            log(f"recorded turn failed: {e}")
+        finally:
+            if state != "spoken":
+                self._outcome(ask_id, state)
+            with self._lock:
+                if self._current(turn) and self.state != "listening":
+                    self.st.update(state="idle")
+
+    def _listen(self, audio: bytes, fmt, via: str) -> str:
+        """Speech to words, and a note of how long and how loud it was."""
         rate, width, channels = fmt
         secs, level = len(audio) / (rate * width * channels), loudness(audio, width)
         heard = self.stt(audio, fmt)
@@ -1361,12 +1477,7 @@ class Pipeline:
             + (f"{words} word{'s' if words != 1 else ''}" if words else "nothing recognised"))
         self.st.update(heard={"ts": time.time(), "seconds": round(secs, 1),
                               "level_db": level, "words": words})
-        self.send("transcript", {"text": heard})
-        if not heard or not self._current(turn):
-            return
-        reply = self._exchange(heard, via, turn, speakable, True)
-        if reply is not None:
-            self._speak(reply, turn)
+        return heard
 
     def run_text(self, text: str, via: str, turn: int, speak: bool,
                  image: bytes = b"") -> None:
@@ -1464,35 +1575,60 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def _send(self, code: int, obj) -> None:
+    def _send(self, code: int, obj, kind: str = "text/plain") -> None:
         body = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
         self.send_response(code)
-        self.send_header("Content-Type", "text/plain" if isinstance(obj, bytes)
+        self.send_header("Content-Type", kind if isinstance(obj, bytes)
                          else "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _allowed(self, u) -> bool:
+        return not PTT_TOKEN or (parse_qs(u.query).get("token") or [""])[0] == PTT_TOKEN
+
     def do_GET(self):  # noqa: N802
-        if urlparse(self.path).path == "/health":
+        u = urlparse(self.path)
+        if u.path == "/health":
             return self._send(200, b"ok")
+        if u.path == "/speech":
+            # The reply to a recorded turn, as audio, for the phone that sent
+            # the recording. 202 while he is still thinking.
+            if not self._allowed(u):
+                return self._send(403, {"error": "forbidden"})
+            assert PIPE is not None
+            state, wav = PIPE.speech((parse_qs(u.query).get("id") or [""])[0])
+            if state == "spoken":
+                return self._send(200, wav, "audio/wav")
+            return self._send({"thinking": 202, "unknown": 404}.get(state, 200),
+                              {"ok": False, "state": state})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
         u = urlparse(self.path)
-        if u.path not in ("/ptt", "/say"):
+        if u.path not in ("/ptt", "/say", "/hear"):
             return self._send(404, {"error": "not found"})
-        if PTT_TOKEN and (parse_qs(u.query).get("token") or [""])[0] != PTT_TOKEN:
+        if not self._allowed(u):
             return self._send(403, {"error": "forbidden"})
         try:
             n = min(int(self.headers.get("Content-Length") or 0),
-                    SAY_BODY_MAX if u.path == "/say" else 16384)
+                    {"/say": SAY_BODY_MAX, "/hear": HEAR_BODY_MAX}.get(u.path, 16384))
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = None
         if not isinstance(body, dict):
             return self._send(400, {"ok": False, "message": "JSON object expected"})
         assert PIPE is not None
+        if u.path == "/hear":
+            try:
+                audio = base64.b64decode(str(body.get("audio") or ""), validate=True)
+                rate = int(body.get("rate") or 16000)
+            except (ValueError, TypeError):
+                return self._send(400, {"ok": False, "message": "audio must be base64 PCM"})
+            ok, msg = PIPE.hear(audio, rate, str(body.get("via") or "phone"),
+                                str(body.get("id") or "")[:64])
+            return self._send(200 if ok else 409,
+                              {"ok": ok, "message": msg, "state": PIPE.state})
         if u.path == "/say":
             try:                        # plain base64, or a data: URL from a browser
                 image = base64.b64decode(str(body.get("image") or "").split(",", 1)[-1],

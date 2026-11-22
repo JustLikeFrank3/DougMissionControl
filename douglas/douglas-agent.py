@@ -11,6 +11,13 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
     POST /say?token=<t>      {"text":"...","via":"deck|phone","speak":false,
                               "image":"<base64>"}  (the picture is optional)
                              a typed turn, relayed to the pipeline's /say
+    POST /hear?token=<t>     {"audio":"<base64 16-bit mono PCM>","rate":16000,
+                              "via":"phone","id":"..."}
+                             a turn recorded on a phone's own microphone,
+                             relayed to the pipeline's /hear
+    GET  /speech?token=<t>&id=<id>
+                             the reply to that turn as a WAV, for the phone
+                             to play; JSON saying where it stands until then
     GET  /health             200 "ok" — liveness, no token, no data
 
 Everything it reports is read at request time from where it already lives:
@@ -45,13 +52,15 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 PORT = int(os.environ.get("DOUGLAS_AGENT_PORT", "9111"))
 TOKEN = os.environ.get("DOUGLAS_AGENT_TOKEN", "")
 LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 VOICE_STATE_FILE = os.environ.get("VOICE_STATE_FILE", "/run/douglas/voice.json")
 SAY_BODY_MAX = 12 * 1024 * 1024          # a typed turn may carry a picture
+HEAR_BODY_MAX = 6 * 1024 * 1024          # a recording from a phone, as base64
+SPEECH_MAX = 8 * 1024 * 1024             # a reply's audio on its way back
 VOICE_STALE_S = float(os.environ.get("VOICE_STALE_S", "30"))
 TRANSCRIPT_FILE = os.environ.get("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 TRANSCRIPT_TURNS = int(os.environ.get("TRANSCRIPT_TURNS", "40"))
@@ -303,6 +312,45 @@ def relay_say(body: dict) -> tuple[int, dict]:
     return _relay(url, payload, "thinking", timeout=20 if image else 3)
 
 
+def relay_hear(body: dict) -> tuple[int, dict]:
+    """A turn recorded on a phone's own microphone, relayed whole to the
+    pipeline's /hear. The pipeline answers at once; the reply lands in the
+    transcript, and its audio waits there to be collected (speech())."""
+    audio = body.get("audio") if isinstance(body.get("audio"), str) else ""
+    if not audio:
+        return 400, {"ok": False, "message": "nothing recorded"}
+    try:
+        rate = int(body.get("rate") or 16000)
+    except (TypeError, ValueError):
+        rate = 16000
+    url = VOICE_PTT_URL.replace("/ptt", "/hear", 1) if VOICE_PTT_URL else ""
+    return _relay(url, {"audio": audio, "rate": rate, "via": str(body.get("via") or "phone"),
+                        "id": str(body.get("id") or "")[:64]}, "thinking", timeout=20)
+
+
+def speech(ask_id: str) -> tuple[int, bytes | dict]:
+    """The reply to a recorded turn as the pipeline kept it: a WAV once it
+    is ready, and until then the pipeline's own word on where it stands."""
+    if not VOICE_PTT_URL:
+        return 200, {"ok": False, "state": "unknown"}
+    url = VOICE_PTT_URL.replace("/ptt", "/speech", 1)
+    url += ("&" if "?" in url else "?") + "id=" + quote(ask_id[:64])
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            body = r.read(SPEECH_MAX)
+            if r.headers.get_content_type() == "audio/wav":
+                return 200, body
+            return r.status, json.loads(body)
+    except urllib.error.HTTPError as e:     # it answered: an id it does not know
+        try:
+            return e.code, json.loads(e.read(4096))
+        except (ValueError, OSError):
+            return e.code, {"ok": False, "state": "unknown"}
+    except (urllib.error.URLError, OSError, ValueError):
+        return 502, {"ok": False, "state": "failed",
+                     "message": "the voice pipeline did not answer"}
+
+
 def _relay(url: str, payload: dict, done: str, timeout: float = 3) -> tuple[int, dict]:
     if not url:
         return 200, {"ok": False, "message": "no voice pipeline installed on Douglas yet"}
@@ -337,11 +385,11 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):     # journald gets errors, not polls
         pass
 
-    def _send(self, code: int, obj) -> None:
+    def _send(self, code: int, obj, kind: str = "text/plain") -> None:
         body = (obj if isinstance(obj, bytes) else json.dumps(obj).encode())
         self.send_response(code)
         self.send_header("Content-Type", "application/json" if not isinstance(obj, bytes)
-                         else "text/plain")
+                         else kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -359,21 +407,27 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised():
                 return self._send(403, {"error": "forbidden"})
             return self._send(200, status())
+        if path == "/speech":
+            if not self._authorised():
+                return self._send(403, {"error": "forbidden"})
+            ask_id = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+            code, out = speech(ask_id)
+            return self._send(code, out, "audio/wav")
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        if path not in ("/ptt", "/say"):
+        if path not in ("/ptt", "/say", "/hear"):
             return self._send(404, {"error": "not found"})
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
         try:
             n = min(int(self.headers.get("Content-Length") or 0),
-                    SAY_BODY_MAX if path == "/say" else 16384)
+                    {"/say": SAY_BODY_MAX, "/hear": HEAR_BODY_MAX}.get(path, 16384))
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}
-        relay = relay_say if path == "/say" else relay_ptt
+        relay = {"/say": relay_say, "/hear": relay_hear}.get(path, relay_ptt)
         code, out = relay(body if isinstance(body, dict) else {})
         return self._send(code, out)
 

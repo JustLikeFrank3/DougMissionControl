@@ -102,13 +102,17 @@
            keyboard up. The line keeps its height when empty, so the talk
            button below does not jump under a thumb. -->
       <div class="note" id="dgl-note" role="status"></div>
-      <!-- The button borrows DougVoice's ears: a phone on a plain-HTTP page
-           is not allowed its own microphone. It says so, because "hold to
-           talk" on a phone reads as "talk to the phone". -->
+      <!-- On an HTTPS page the button uses this phone's own microphone and
+           speaker. On plain HTTP a browser lends neither, and it borrows
+           DougVoice's ears instead. Either way it says which, because "hold
+           to talk" on a phone reads as "talk to the phone". -->
       <button class="ptt" id="dgl-ptt" data-state="absent">
         <span>HOLD TO TALK</span><small id="dgl-ptt-s">—</small>
-        <i class="where">DougVoice listens, not this phone</i>
+        <i class="where" id="dgl-ptt-where">DougVoice listens, not this phone</i>
       </button>
+      <!-- From the plain page to the one a phone lends its microphone to,
+           taking this phone's token along so it is not asked for again. -->
+      <a class="wide link" id="dgl-https" hidden>TALK THROUGH THIS PHONE</a>
       <a class="wide link" id="dgl-chat" hidden target="_blank" rel="noopener">OPEN CHAT</a>
     </section>
 

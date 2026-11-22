@@ -174,6 +174,14 @@ function connect() {
     gateTried = false;
     // Offered where there is a token to hand on and somewhere else to take it.
     $('handoff').hidden = !token || inApp();
+    // The same page on HTTPS, where the phone lends its microphone. Offered
+    // from the plain page only, with the token in the link: it is this
+    // phone's own, going to the same node1.
+    var https = $('dgl-https');
+    https.hidden = canRecord || !s.https_url || location.protocol === 'https:';
+    if (!https.hidden) {
+      https.href = s.https_url + '/m' + (token ? '?token=' + encodeURIComponent(token) : '');
+    }
     es = new EventSource(api('/api/events'));
     es.onopen = function () { setConn('live', 'live'); };
     es.onmessage = function (e) {
@@ -340,12 +348,25 @@ function paintAsk() {
   var d = lastDgl || {};
   var agent = !!d.agent, voice = d.voice || {};
   var vstate = agent && VOICE_SUB[voice.state] ? voice.state : 'absent';
-  if (polled) {
-    var ptt = $('dgl-ptt');
+  var ptt = $('dgl-ptt');
+  if (canRecord) {
+    // This phone's own microphone: the button is about what the phone is
+    // doing, and is never out of reach. What Douglas is doing is on the
+    // line under the box.
+    var mine = rec ? (rec.live ? 'listening' : 'idle') : speaking ? 'speaking'
+      : (ask && ask.kind === 'voice') || awaiting ? 'thinking' : 'idle';
+    ptt.dataset.state = mine;
+    ptt.disabled = false;
+    $('dgl-ptt-s').textContent = rec ? (rec.live ? 'LISTENING…' : 'STARTING…')
+      : speaking ? 'SPEAKING…' : mine === 'thinking' ? 'THINKING…' : 'READY';
+    $('dgl-ptt-where').textContent = 'this phone\'s microphone and speaker';
+  } else if (polled) {
     ptt.dataset.state = vstate;
     ptt.disabled = vstate === 'absent' && !pressed;
     $('dgl-ptt-s').textContent = !lastDgl ? 'NO LINK' : !agent ? 'NO AGENT'
       : vstate === 'absent' ? 'NO VOICE PIPELINE' : VOICE_SUB[vstate];
+  }
+  if (polled) {
     // The camera is offered once he has said he can see, and stays through a
     // lost link: a photo can be taken now and go when node1 is back.
     if (agent) eyes = !!voice.eyes;
@@ -361,7 +382,8 @@ function paintAsk() {
     : vstate === 'thinking' ? 'Douglas is thinking…'
     : vstate === 'listening' ? 'Douglas is listening…' : '';
   var box = $('dgl-ask-text'), go = $('dgl-ask-go');
-  var sending = ask && ask.kind === 'photo' ? 'Sending the photo…' : 'Sending…';
+  var sending = !ask ? '' : ask.kind === 'photo' ? 'Sending the photo…'
+    : ask.kind === 'voice' ? 'Sending what you said…' : 'Sending…';
   // While a question is on its way the button stops it, and what is going
   // cannot be edited from under it.
   go.textContent = ask ? 'STOP' : 'SEND';
@@ -373,7 +395,12 @@ function paintAsk() {
   var note = $('dgl-note');
   if (note.dataset.sticky === '1') return;      // a failure is still being read
   note.className = 'note';
-  if (ask && ask.flying) {
+  if (rec) {
+    note.textContent = rec.live
+      ? 'Listening through this phone. Let go when you have finished. ' +
+        clock(Date.now() - rec.started)
+      : 'Starting the microphone…';
+  } else if (ask && ask.flying) {
     var secs = Math.round((Date.now() - ask.last) / 1000);
     note.textContent = sending + (secs >= 3 ? ' ' + secs + ' s' : '');
   } else if (ask) {
@@ -390,7 +417,11 @@ function paintAsk() {
     // press that gets no answer is otherwise indistinguishable from a
     // Douglas who has stopped working.
     var heard = voice.heard, deaf = '';
-    if (heard && heard.words === 0 && d.ts - heard.ts < 20) {
+    if (speaking) {
+      deaf = 'Douglas is speaking. Hold the button to cut in.';
+    } else if (awaiting && !why) {
+      deaf = 'Fetching his reply…';
+    } else if (!canRecord && heard && heard.words === 0 && d.ts - heard.ts < 20) {
       deaf = 'DougVoice heard nothing in ' + heard.seconds + ' s' +
         (heard.level_db < -45 ? ': the room around it was quiet' : '') +
         '. It listens through its own microphone, not this phone\'s.';
@@ -568,14 +599,19 @@ function trySend() {
   // A photo gets longer: it is a few hundred kilobytes to push through
   // whatever link the phone has, and deck-api then gives Douglas twenty
   // seconds to take it.
-  post('/api/douglas/say', mine.body, mine.kind === 'photo' ? 45000 : 12000).then(function (r) {
+  post(mine.kind === 'voice' ? '/api/douglas/hear' : '/api/douglas/say', mine.body,
+       mine.kind === 'text' ? 12000 : 45000).then(function (r) {
     if (ask !== mine) return;                  // stopped while it was out
     mine.flying = false;
     if (r && r.ok) {
       endAsk();
-      $('dgl-ask-text').value = '';
-      clearShot();
-      $('dgl-ask-text').blur();                // drop the keyboard so the reply is visible
+      if (mine.kind === 'voice') {
+        awaitSpeech(mine.body.id);             // his reply comes back as sound
+      } else {
+        $('dgl-ask-text').value = '';
+        clearShot();
+        $('dgl-ask-text').blur();              // drop the keyboard so the reply is visible
+      }
     } else if (r && !r.retry) {
       // Douglas or the deck said no, and asking again will not change that.
       // Nothing is thrown away: the words and the photo stay in place.
@@ -603,15 +639,210 @@ $('dgl-ask').addEventListener('submit', function (e) {
   if (!text && !shot) return;                  // a photo alone asks "what is this?"
   var body = { text: text, via: 'phone', id: newId() };
   if (shot) body.image = shot.b64;
+  queueAsk(body, shot ? 'photo' : 'text');
+});
+
+function queueAsk(body, kind) {
   clearTimeout(noteTimer);
   $('dgl-note').dataset.sticky = '';           // a new try: the last failure has been read
-  ask = { body: body, kind: shot ? 'photo' : 'text', since: Date.now(), flying: false, last: 0 };
+  ask = { body: body, kind: kind, since: Date.now(), flying: false, last: 0 };
   // Once a second: count the seconds on the line under the box, and see
   // whether the question can go yet.
   askTimer = setInterval(function () { trySend(); paintAsk(); }, 1000);
   trySend();
   paintAsk();
-});
+}
+
+// ── this phone's own microphone and speaker ─────────────────────────────
+// On an HTTPS page the browser lends the microphone, and then HOLD TO TALK
+// means what it says on a phone: speak into it, and hear him from it. The
+// recording goes whole, as 16 kHz PCM, through the same queue as a typed
+// question; his reply comes back as a WAV and is played here, not in the
+// house. On plain HTTP the browser lends nothing, and the button borrows
+// DougVoice's ears instead.
+
+var AudioCtx = window.AudioContext || window.webkitAudioContext;
+var canRecord = !!(window.isSecureContext && AudioCtx && navigator.mediaDevices &&
+                   navigator.mediaDevices.getUserMedia);
+var REC_RATE = 16000, REC_MAX_MS = 20000;
+var actx = null;                 // one audio context: it records, and it plays
+var rec = null;                  // the recording under way: { chunks, rate, live, ... }
+var awaiting = null;             // a recorded turn whose reply has not come back as sound yet
+var speaking = null;             // the reply playing now
+var speechTimer = 0;
+
+// Made, or woken, inside the press: a phone only lets a page make sound
+// that a touch started, and playing his reply later rides on this one.
+function audioCtx() {
+  if (!actx) actx = new AudioCtx();
+  if (actx.state === 'suspended' && actx.resume) actx.resume();
+  return actx;
+}
+
+function stopTracks(stream) {
+  stream.getTracks().forEach(function (t) { t.stop(); });
+}
+
+function startRec() {
+  stopSpeaking();
+  var ctx = audioCtx();
+  var mine = rec = { chunks: [], rate: ctx.sampleRate, live: false, started: 0, timer: 0 };
+  navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  }).then(function (stream) {
+    if (rec !== mine) { stopTracks(stream); return; }      // let go before it came
+    mine.stream = stream;
+    mine.source = ctx.createMediaStreamSource(stream);
+    mine.node = ctx.createScriptProcessor(4096, 1, 1);
+    mine.node.onaudioprocess = function (e) {
+      mine.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    // It has to lead somewhere to run at all, and that must not be the speaker.
+    mine.sink = ctx.createGain();
+    mine.sink.gain.value = 0;
+    mine.source.connect(mine.node);
+    mine.node.connect(mine.sink);
+    mine.sink.connect(ctx.destination);
+    mine.live = true;
+    mine.started = Date.now();
+    mine.timer = setTimeout(function () { if (rec === mine) endRec(true); }, REC_MAX_MS);
+    paintAsk();
+  }, function (err) {
+    if (rec === mine) rec = null;
+    dglNote(err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
+      ? 'This page is not allowed the microphone. Allow it for this site in the ' +
+        'browser\'s settings, then hold the button again.'
+      : 'The microphone would not start on this phone.', 9000);
+    paintAsk();
+  });
+  paintAsk();
+}
+
+function endRec(send) {
+  var r = rec;
+  rec = null;
+  if (!r) return;
+  clearTimeout(r.timer);
+  if (r.node) {
+    r.node.onaudioprocess = null;
+    try { r.source.disconnect(); r.node.disconnect(); r.sink.disconnect(); } catch (e) { /* gone already */ }
+  }
+  if (r.stream) stopTracks(r.stream);
+  if (send && r.live) {
+    var pcm = toPcm16(r.chunks, r.rate, REC_RATE);
+    if (pcm.length < REC_RATE * 0.4) {
+      dglNote('That was too short to hear. Hold the button for as long as you are speaking.', 6000);
+    } else {
+      queueAsk({ audio: toBase64(pcm), rate: REC_RATE, via: 'phone', id: newId() }, 'voice');
+    }
+  } else if (send) {
+    dglNote('The microphone had not started yet. Hold the button, wait for LISTENING, then speak.', 6000);
+  }
+  paintAsk();
+}
+
+// What the microphone gave (floats at the phone's own rate, usually 48 kHz)
+// as what speech-to-text wants: 16-bit at 16 kHz. Each output sample is the
+// average of the input it spans, which is filter enough for speech.
+function toPcm16(chunks, from, to) {
+  var n = 0, i, j;
+  for (i = 0; i < chunks.length; i++) n += chunks[i].length;
+  var all = new Float32Array(n), at = 0;
+  for (i = 0; i < chunks.length; i++) { all.set(chunks[i], at); at += chunks[i].length; }
+  var step = from / to, count = Math.floor(n / step), out = new Int16Array(count);
+  for (i = 0; i < count; i++) {
+    var a = Math.floor(i * step), b = Math.min(n, Math.max(a + 1, Math.floor((i + 1) * step)));
+    var sum = 0;
+    for (j = a; j < b; j++) sum += all[j];
+    var v = Math.max(-1, Math.min(1, sum / (b - a)));
+    out[i] = v < 0 ? v * 32768 : v * 32767;
+  }
+  return out;
+}
+
+function toBase64(int16) {
+  var bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength), s = '';
+  for (var i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+// The recording has been taken: now his reply, as sound. It is asked for
+// once a second until it is ready, or until it is plain it never will be.
+function awaitSpeech(id) {
+  clearInterval(speechTimer);
+  awaiting = { id: id, since: Date.now(), flying: false };
+  speechTimer = setInterval(fetchSpeech, 1000);
+}
+
+function endAwait() {
+  clearInterval(speechTimer);
+  awaiting = null;
+}
+
+function fetchSpeech() {
+  var mine = awaiting;
+  if (!mine || mine.flying) return;
+  if (Date.now() - mine.since > 120000) {
+    endAwait();
+    dglNote('His reply never came back as sound. If he answered, it is in the log above.', 8000);
+    paintAsk();
+    return;
+  }
+  mine.flying = true;
+  var ctl = window.AbortController ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function () { ctl.abort(); }, 20000) : 0;
+  fetch(api('/api/douglas/speech?id=' + encodeURIComponent(mine.id)),
+        { cache: 'no-store', signal: ctl ? ctl.signal : undefined }).then(function (r) {
+    var sound = (r.headers.get('Content-Type') || '').indexOf('audio/') === 0;
+    return sound ? r.arrayBuffer().then(function (b) { return { sound: b }; }) : r.json();
+  }).then(function (got) {
+    clearTimeout(timer);
+    mine.flying = false;
+    if (awaiting !== mine) return;             // a new press took over
+    if (got && got.sound) {
+      endAwait();
+      playSpeech(got.sound);
+    } else if (got && got.state === 'nothing') {
+      endAwait();
+      dglNote('Douglas did not catch any words in that. Hold the button and speak ' +
+              'towards the phone.', 8000);
+    } else if (got && (got.state === 'failed' || got.state === 'unknown')) {
+      endAwait();
+      dglNote('He answered in the log above, but the sound of it did not come.', 8000);
+    }
+    paintAsk();
+  }, function () {
+    clearTimeout(timer);
+    mine.flying = false;                       // the link: ask again in a second
+  });
+}
+
+function playSpeech(buf) {
+  var ctx = audioCtx();
+  ctx.decodeAudioData(buf, function (sound) {
+    stopSpeaking();
+    var src = ctx.createBufferSource();
+    src.buffer = sound;
+    src.connect(ctx.destination);
+    src.onended = function () {
+      if (speaking && speaking.src === src) { speaking = null; paintAsk(); }
+    };
+    speaking = { src: src };
+    src.start();
+    paintAsk();
+  }, function () {
+    dglNote('This phone could not play his reply. It is in the log above.', 8000);
+    paintAsk();
+  });
+}
+
+function stopSpeaking() {
+  if (!speaking) return;
+  try { speaking.src.onended = null; speaking.src.stop(); } catch (e) { /* ended already */ }
+  speaking = null;
+}
 
 function pttSend(action) {
   post('/api/douglas/ptt', { action: action }, 8000).then(function (r) {
@@ -625,10 +856,14 @@ function pttSend(action) {
     if (ptt.disabled || pressed) return;
     e.preventDefault();
     try { ptt.setPointerCapture(e.pointerId); } catch (err) { /* older browsers */ }
+    if (canRecord && ask) {                    // one thing on its way at a time
+      dglNote('Your last one is still on its way. Press STOP to take it back.', 5000);
+      return;
+    }
     pressed = true;
     ptt.classList.add('pressed');
     if (navigator.vibrate) navigator.vibrate(15);
-    pttSend('start');
+    if (canRecord) { endAwait(); startRec(); } else pttSend('start');
     repace();
   });
   function release(action) {
@@ -636,7 +871,7 @@ function pttSend(action) {
       if (!pressed) return;
       pressed = false;
       ptt.classList.remove('pressed');
-      pttSend(action);
+      if (canRecord) endRec(action === 'stop'); else pttSend(action);
     };
   }
   ptt.addEventListener('pointerup', release('stop'));
@@ -727,7 +962,7 @@ function tickNp() { poll('np', '/api/media', paintNp); }
 function busy() {
   var st = lastDgl && lastDgl.voice && lastDgl.voice.state;
   // A question waiting for the link is the best reason there is to look often.
-  return pressed || !!ask || st === 'listening' || st === 'thinking' || st === 'speaking';
+  return pressed || !!ask || !!awaiting || st === 'listening' || st === 'thinking' || st === 'speaking';
 }
 function repace() { if (!document.hidden) every('dgl', busy() ? 700 : 3000, tickDouglas); }
 

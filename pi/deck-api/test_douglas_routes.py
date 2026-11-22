@@ -177,6 +177,85 @@ code, out, log = post("/api/douglas/say", {"text": "", "via": "phone", "id": "q-
 check("an empty question is not", (code, out["retry"]), (502, False))
 d.douglas_say = fake_say
 
+print("-- the same deck behind a local HTTPS proxy, as tailscale serve puts it --")
+def get(path, headers=None):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+d.DECK_TOKEN = "deck-token"
+check("the panel itself, from loopback, needs no token", get("/api/state"), 200)
+check("a request the proxy passed on does", get("/api/state", {"X-Forwarded-For": "100.64.0.9"}), 403)
+check("with the token it is let in", get("/api/state?token=deck-token", {"X-Forwarded-For": "100.64.0.9"}), 200)
+check("a wrong token is not", get("/api/state?token=nope", {"X-Forwarded-For": "100.64.0.9"}), 403)
+check("the proxy's identity header alone is enough to ask for one",
+      get("/api/douglas", {"Tailscale-User-Login": "someone@example.com"}), 403)
+journal, real = io.StringIO(), sys.stderr
+sys.stderr = journal
+try:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/douglas/ptt?token=deck-token",
+                                 json.dumps({"action": "start"}).encode(),
+                                 {"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9, 10.0.0.1"})
+    urllib.request.urlopen(req, timeout=5).read()
+finally:
+    sys.stderr = real
+check("and the journal names who it was passed on for", journal.getvalue().strip(),
+      "http: /api/douglas/ptt from 100.64.0.9: start")
+
+print("-- a turn recorded on the phone --")
+heard, answer["got"], answer["wait"] = [], {"ok": True, "message": "thinking"}, 0.0
+d._ws_json = lambda url, payload=None, timeout=3: (heard.append((url.split("?")[0].rsplit("/", 1)[-1], payload, timeout)), answer["got"])[1]
+recording = "A" * 85336                                  # two seconds of 16 kHz, as base64
+code, out, log = post("/api/douglas/hear", {"audio": recording, "rate": 16000, "via": "phone", "id": "q-heard-0001"})
+check("it goes to Douglas whole, with time to take it",
+      (code, out["ok"], heard[-1][0], heard[-1][1]["audio"] == recording, heard[-1][1]["rate"], heard[-1][2]),
+      (200, True, "hear", True, 16000, 25))
+check("the journal has its length, not its sound", log.strip(),
+      "http: /api/douglas/hear from 127.0.0.1: 2.0 s recorded accepted in 0.0 s")
+code, out, log = post("/api/douglas/hear", {"audio": recording, "rate": 16000, "id": "q-heard-0001"})
+check("sent twice it reaches him once", (out["message"], len(heard)), ("already sent", 1))
+code, out, log = post("/api/douglas/hear", {"audio": "", "id": "q-heard-0002"})
+check("an empty recording is refused here", (code, out["message"], len(heard)), (502, "nothing recorded", 1))
+code, out, log = post("/api/douglas/hear", {"audio": "A" * (d.DOUGLAS_AUDIO_MAX + 4), "id": "q-heard-0003"})
+check("and one that is too long", (code, out["message"]), (502, "that recording is too long"))
+
+print("-- his reply, as sound for the phone --")
+class Agent(d.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        q = d.parse_qs(d.urlparse(self.path).query)
+        which = (q.get("id") or [""])[0]
+        if which == "q-ready-0001":
+            body, kind, code = b"RIFF....WAVEfmt fake audio", "audio/wav", 200
+        elif which == "q-think-0001":
+            body, kind, code = b'{"ok": false, "state": "thinking"}', "application/json", 202
+        elif which == "q-quiet-0001":
+            body, kind, code = b'{"ok": false, "state": "nothing"}', "application/json", 200
+        else:
+            body, kind, code = b'{"ok": false, "state": "unknown"}', "application/json", 404
+        self.send_response(code); self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+agent_srv = d.ThreadingHTTPServer(("127.0.0.1", 0), Agent)
+threading.Thread(target=agent_srv.serve_forever, daemon=True).start()
+d.DOUGLAS_HOST, d.DOUGLAS_AGENT_PORT = "127.0.0.1", agent_srv.server_address[1]
+def speech(which):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/douglas/speech?id={which}", timeout=5) as r:
+            return r.status, r.headers.get_content_type(), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get_content_type(), e.read()
+check("ready: the audio itself", speech("q-ready-0001"), (200, "audio/wav", b"RIFF....WAVEfmt fake audio"))
+check("still thinking", (speech("q-think-0001")[0], json.loads(speech("q-think-0001")[2])["state"]), (202, "thinking"))
+check("nothing was heard in it", json.loads(speech("q-quiet-0001")[2])["state"], "nothing")
+check("an id he never saw", (speech("q-never-0001")[0], json.loads(speech("q-never-0001")[2])["state"]), (404, "unknown"))
+check("an id that is not one is not passed on", speech("../../etc")[0], 400)
+agent_srv.shutdown()
+d.DOUGLAS_AGENT_PORT = 1
+check("Douglas not answering", (speech("q-ready-0001")[0], json.loads(speech("q-ready-0001")[2])["state"]), (502, "failed"))
+d.DECK_TOKEN = ""
+
 server.shutdown()
 print()
 if fails:
