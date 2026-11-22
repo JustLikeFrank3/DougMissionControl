@@ -14,7 +14,8 @@
 #                         sees for itself needs none)
 #     douglas-draw        an image model on :8083, so Douglas can draw one
 #                         (optional: built and enabled once its model is on disk)
-#     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net)
+#     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net, or
+#                         that address on :8443 once ChatGPT's connector has :443)
 #     wyoming-whisper     faster-whisper STT on :10300
 #     wyoming-piper       Piper TTS on :10200 (the fallback voice)
 #     douglas-tts         Kokoro, the voice he speaks with, on :10210 (enabled
@@ -437,7 +438,12 @@ model="$(envval /etc/douglas/llama.env LLAMA_MODEL)"
 if [ "$OPEN_WEBUI_HTTPS" = 1 ]; then
     # Browsers only allow the microphone on HTTPS, so phones talk to Open WebUI
     # through tailscale serve (needs HTTPS certificates enabled for the tailnet).
-    tailscale serve --bg --https=443 http://127.0.0.1:8080 >/dev/null 2>&1 \
+    # Port 443 unless ChatGPT's connector has it (douglas-chatgpt.py): that
+    # one is published to the internet with Funnel, which makes a whole port
+    # public, so Open WebUI must not be put back on it. It lives on :8443 then.
+    webui_port=443
+    [ -f /etc/douglas/chatgpt.env ] && webui_port=8443
+    tailscale serve --bg --https="$webui_port" http://127.0.0.1:8080 >/dev/null 2>&1 \
         || warn "tailscale serve failed - enable HTTPS in the tailnet's admin console, or OPEN_WEBUI_HTTPS=0"
 fi
 

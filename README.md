@@ -567,6 +567,7 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
 | `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists and `voice.env`'s `EYES_URL` points at it: a model that sees for itself needs no second one |
 | `draw.env` | `douglas-draw`, the image model on `:8083` (loopback): `DRAW_MODEL`, `DRAW_VAE`, `DRAW_CLIP_L`, `DRAW_T5XXL` (FLUX.1 schnell's four files), `DRAW_ARGS` (default `--steps 4 --cfg-scale 1.0 -W 1024 -H 1024`), `DRAW_HOST`/`DRAW_PORT`. `provision.sh` builds stable-diffusion.cpp and enables the unit only once the model file exists |
+| `chatgpt.env` | `douglas-chatgpt`, ChatGPT's chat-only line to Douglas: `CHATGPT_SECRET` (required, at least 24 URL-safe characters: it is the path of the connector's address, and changing it revokes the connector), `CHATGPT_PORT` (default `9120`, loopback), `CHATGPT_PER_HOUR` (default `60`), `LLM_URL`. Not created by `provision.sh`: the connector is set up by hand, see `douglas-chatgpt.py` |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
@@ -671,6 +672,19 @@ every device, spoken or typed, and what belongs to one turn (the time, the
 device, how the reply will be delivered) closes the person's own message in
 square brackets. The same pair of questions a minute apart went from 6.8
 seconds each to 2.6.
+
+**A line for ChatGPT.** `douglas-chatgpt` lets ChatGPT talk to Douglas as one
+AI to another, and nothing more. It is a small MCP server with one tool,
+`ask_douglas`, added to ChatGPT as a custom connector. ChatGPT's servers are
+on the public internet, so this is the one part of Douglas that is published
+there: through Tailscale Funnel on port 443 (the only port ChatGPT will
+use), which is why Open WebUI moves to tailnet-only `:8443` when it is set
+up. The address carries a secret in its path and every other path is a bare
+404. What arrives that way gets his built-in persona and no more: no
+lookups, no eyes, no drawing, no records, none of the owner's instruction
+files, facts or tone samples, no view of the house transcript. One question
+at a time, a cap an hour and a cap on length; every exchange is in the
+journal (`journalctl -u douglas-chatgpt -o cat`).
 
 **How he sounds.** Piper, the voice he started with, is quick and clear and
 sounds like a machine reading. He speaks with Kokoro instead: a small neural
@@ -875,6 +889,7 @@ python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with s
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
 python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand-in model
+python3 douglas/test_douglas_chatgpt.py # ChatGPT's line to Douglas: the secret path, the exchange, the persona
 python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 ```
 
@@ -1020,6 +1035,13 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   the pipeline's rules, not the model's: reads on request, changes only after
   a read-back and a yes, no deletes. Revoking the key on the server ends all
   of it.
+- One thing on Douglas is published to the internet, and only if it is set
+  up: `douglas-chatgpt`, through Tailscale Funnel on port 443. Its key is a
+  secret in the path, it runs as a throwaway user with the filesystem
+  read-only, and it can do one thing, pass a message to the model under a
+  persona that knows nothing about the household. Funnel publishes a whole
+  port, so nothing else may share that one: `provision.sh` puts Open WebUI on
+  `:8443` once the connector's `chatgpt.env` exists.
 - No secrets in the repo. Both agent tokens are generated at install time,
   and `.gitignore` covers `*.token`.
 
