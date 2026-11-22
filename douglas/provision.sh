@@ -292,10 +292,11 @@ STT_HOST=127.0.0.1
 STT_PORT=10300
 STT_LANGUAGE=en
 TTS_HOST=127.0.0.1
-# His voice: Kokoro (douglas-tts on :10210, the voice is set in tts.env), with
-# Piper on :10200 behind it for the day that service is down.
+# His voice: Kokoro (douglas-tts on :10210), with Piper on :10200 behind it
+# for the day that service is down. Which voice is set in one place, tts.env;
+# TTS_VOICE here would override it for this pipeline only.
 TTS_PORT=10210
-TTS_VOICE=bm_lewis
+#TTS_VOICE=
 TTS_FALLBACK_PORT=10200
 LLM_URL=http://127.0.0.1:8081
 LLM_MAX_TOKENS=400
