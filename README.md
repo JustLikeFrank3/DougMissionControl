@@ -304,6 +304,10 @@ A phone is not loopback, so it needs `DECK_TOKEN`: run
 `sudo ./pi/mobile-link.sh` on node1 and open the link it prints (a QR code too
 when `qrencode` is installed). The page keeps the token in that browser and
 strips it from the address bar; "Add to Home Screen" makes it a full-screen app.
+On an iPhone that app is a browser of its own and shares nothing with Safari,
+so it asks for the token once: in Safari, tap COPY THIS PHONE'S TOKEN at the
+bottom of the page, then paste it into the app's token screen (which also
+takes the whole link).
 
 **IDLE** — the resting state, and the default surface: a clock, the boot
 tiles, and the fleet's status cards. The panel spends most of its life with nothing

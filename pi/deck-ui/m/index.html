@@ -33,11 +33,18 @@
     <p>This phone reaches node1, but deck-api wants its <code>DECK_TOKEN</code>.
        Run <code>pi/mobile-link.sh</code> on node1 and open the link it prints,
        or paste the token here.</p>
+    <!-- The Home Screen app is a browser of its own: on an iPhone it shares
+         nothing with Safari, the token included, so it asks once however
+         long Safari has had it. Shown only there. -->
+    <p id="gate-app" hidden>This is the Home Screen app, and it keeps its own storage, apart
+       from Safari's. Open this page in Safari, where this phone already has the token, tap
+       <b>COPY THIS PHONE'S TOKEN</b> at the bottom, then come back and paste it here.</p>
     <form id="gate-form">
       <input id="gate-token" type="password" autocomplete="off" autocapitalize="off"
-             spellcheck="false" placeholder="DECK_TOKEN">
+             spellcheck="false" placeholder="DECK_TOKEN or the whole link">
       <button type="submit">Save</button>
     </form>
+    <p class="note bad" id="gate-note" role="alert"></p>
   </section>
 
   <main id="main">
@@ -127,6 +134,15 @@
     </section>
 
     <footer class="foot" id="foot"></footer>
+
+    <!-- Handing this browser's token to another one on the same phone: the
+         Home Screen app, which starts without it. The token is copied, not
+         shown, unless copying is refused and it has to be picked up by hand. -->
+    <section class="handoff" id="handoff" hidden>
+      <button type="button" id="handoff-go">COPY THIS PHONE'S TOKEN</button>
+      <input id="handoff-text" type="text" readonly hidden aria-label="the deck token">
+      <div class="note" id="handoff-note">for the Home Screen app, which asks for it once</div>
+    </section>
   </main>
 
   <script type="module" src="/m/m.js"></script>

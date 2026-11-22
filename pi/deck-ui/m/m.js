@@ -66,21 +66,84 @@ function post(path, body, ms) {
   }, ms || 30000);
 }
 
+// Added to the Home Screen, the page runs as an app of its own. On an iPhone
+// that app shares no storage with Safari, so it starts without the token
+// Safari has had all along.
+function inApp() {
+  return navigator.standalone === true ||
+    !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+
+var gateTried = false;           // a token was just saved: a refusal now is about that token
+
 function showGate() {
   $('gate').hidden = false;
   $('main').hidden = true;
+  $('gate-app').hidden = !inApp();
+  if (gateTried) {
+    $('gate-note').textContent = 'node1 did not accept that. Paste the token again, or the whole link.';
+  }
   setConn('no token', 'dead');
 }
 
 $('gate-form').addEventListener('submit', function (e) {
   e.preventDefault();
   var v = $('gate-token').value.trim();
+  // The whole link from pi/mobile-link.sh will do as well as the token in it.
+  var inLink = /[?&]token=([^&#\s]+)/.exec(v);
+  if (inLink) {
+    try { v = decodeURIComponent(inLink[1]); } catch (err) { v = inLink[1]; }
+  }
   if (!v) return;
+  $('gate-token').value = '';
+  $('gate-note').textContent = '';
+  gateTried = true;
   try { localStorage.setItem(KEY, v); } catch (err) { /* session only */ }
   token = v;
   $('gate').hidden = true;
   $('main').hidden = false;
   connect();
+});
+
+// ── handing the token on ─────────────────────────────────────────────────
+// The other browser on this phone, the Home Screen app, has to be given the
+// token once, and nobody should have to type thirty-two characters. This
+// puts it on the clipboard. The page is plain HTTP on a tailnet name, where
+// the modern clipboard is not offered, so the old way is the usual one; and
+// if that is refused too, the token is shown, selected, to be copied by hand.
+
+var handoffTimer = 0;
+function handoffDone(ok) {
+  var box = $('handoff-text'), note = $('handoff-note');
+  clearTimeout(handoffTimer);
+  if (ok) {
+    box.hidden = true;
+    box.value = '';
+    note.textContent = 'Copied. Open the Home Screen app, paste it into the box and tap Save.';
+  } else {
+    note.textContent = 'This browser would not copy it. Hold the text above, choose Copy, ' +
+                       'then paste it in the Home Screen app.';
+    handoffTimer = setTimeout(function () {       // not left on screen for long
+      box.hidden = true;
+      box.value = '';
+      note.textContent = 'for the Home Screen app, which asks for it once';
+    }, 60000);
+  }
+}
+
+$('handoff-go').addEventListener('click', function () {
+  var box = $('handoff-text');
+  if (!token) return;
+  box.hidden = false;
+  box.value = token;
+  box.focus();
+  box.select();
+  box.setSelectionRange(0, token.length);
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+  if (ok || !(navigator.clipboard && navigator.clipboard.writeText)) return handoffDone(ok);
+  navigator.clipboard.writeText(token).then(function () { handoffDone(true); },
+                                            function () { handoffDone(false); });
 });
 
 // ── stream ───────────────────────────────────────────────────────────────
@@ -108,6 +171,9 @@ function connect() {
       return;
     }
     render(s);
+    gateTried = false;
+    // Offered where there is a token to hand on and somewhere else to take it.
+    $('handoff').hidden = !token || inApp();
     es = new EventSource(api('/api/events'));
     es.onopen = function () { setConn('live', 'live'); };
     es.onmessage = function (e) {

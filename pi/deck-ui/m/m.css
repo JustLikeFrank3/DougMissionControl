@@ -193,6 +193,14 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 
 .foot { font-size: 11px; color: var(--mut); text-align: center; }
 
+/* ── handing the token on ── */
+.handoff { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 4px; }
+.handoff button { padding: 10px 14px; background: none; border: 1px solid var(--ln); color: var(--mut);
+                  font-size: 11px; letter-spacing: .14em; cursor: pointer; }
+.handoff input { width: 100%; padding: 10px; background: var(--pan); color: var(--fg);
+                 border: 1px solid var(--cy); font: inherit; font-size: 13px; border-radius: 0; }
+.handoff .note { text-align: center; }
+
 /* ── token gate ── */
 .gate { padding: 24px 16px; max-width: 640px; margin: 0 auto; }
 .gate h1 { font-size: 18px; font-weight: 400; letter-spacing: .1em; }
