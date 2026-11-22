@@ -1,0 +1,19 @@
+[Unit]
+Description=douglas-chatgpt - ChatGPT's chat-only line to Douglas (MCP, behind Tailscale Funnel :443)
+After=network-online.target llama-server.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/douglas/chatgpt.env
+ExecStart=/usr/bin/python3 /opt/douglas/douglas-chatgpt.py
+DynamicUser=yes
+# Talks to llama-server on loopback; reads and writes nothing on disk.
+ReadOnlyPaths=/
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
