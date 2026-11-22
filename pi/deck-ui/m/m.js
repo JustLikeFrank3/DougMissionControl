@@ -665,18 +665,53 @@ var AudioCtx = window.AudioContext || window.webkitAudioContext;
 var canRecord = !!(window.isSecureContext && AudioCtx && navigator.mediaDevices &&
                    navigator.mediaDevices.getUserMedia);
 var REC_RATE = 16000, REC_MAX_MS = 20000;
-var actx = null;                 // one audio context: it records, and it plays
-var rec = null;                  // the recording under way: { chunks, rate, live, ... }
+var rec = null;                  // the recording under way: { ctx, chunks, rate, live, ... }
 var awaiting = null;             // a recorded turn whose reply has not come back as sound yet
 var speaking = null;             // the reply playing now
 var speechTimer = 0;
 
-// Made, or woken, inside the press: a phone only lets a page make sound
-// that a touch started, and playing his reply later rides on this one.
-function audioCtx() {
-  if (!actx) actx = new AudioCtx();
-  if (actx.state === 'suspended' && actx.resume) actx.resume();
-  return actx;
+// A phone that has just lent a page its microphone treats the page's sound
+// as a telephone call: out of the earpiece, at call volume. Two things keep
+// his reply out of there. The recording gets an audio context of its own,
+// closed the moment the button is let go, so that nothing of the call is
+// left open. And the reply is played by an ordinary media element with the
+// page's audio session set to playback, which is the loudspeaker.
+function audioSession(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch (e) { /* an older phone: it decides for itself */ }
+}
+
+// A phone only lets a page make sound that a touch started. The player is
+// made, and played once on silence, inside the press: after that it may be
+// started from code, which is how his reply gets to play later.
+var player = null, playerReady = false;
+
+function silence() {
+  var n = 800, wav = new DataView(new ArrayBuffer(44 + n * 2));      // a tenth of a second
+  function text(at, t) { for (var i = 0; i < t.length; i++) wav.setUint8(at + i, t.charCodeAt(i)); }
+  text(0, 'RIFF'); wav.setUint32(4, 36 + n * 2, true); text(8, 'WAVEfmt ');
+  wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+  wav.setUint32(24, 8000, true); wav.setUint32(28, 16000, true);
+  wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+  text(36, 'data'); wav.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+}
+
+function readyPlayer() {
+  if (!player) {
+    player = new Audio();
+    player.preload = 'auto';
+    player.setAttribute('playsinline', '');
+  }
+  if (playerReady) return;
+  player.src = silence();
+  var started = player.play();
+  if (started && started.then) {
+    started.then(function () { playerReady = true; }, function () { /* the next press tries again */ });
+  } else {
+    playerReady = true;
+  }
 }
 
 function stopTracks(stream) {
@@ -685,12 +720,19 @@ function stopTracks(stream) {
 
 function startRec() {
   stopSpeaking();
-  var ctx = audioCtx();
-  var mine = rec = { chunks: [], rate: ctx.sampleRate, live: false, started: 0, timer: 0 };
+  readyPlayer();
+  audioSession('play-and-record');
+  var ctx = new AudioCtx();
+  if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+  var mine = rec = { ctx: ctx, chunks: [], rate: ctx.sampleRate, live: false, started: 0, timer: 0 };
   navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   }).then(function (stream) {
-    if (rec !== mine) { stopTracks(stream); return; }      // let go before it came
+    if (rec !== mine) {                                    // let go before it came
+      stopTracks(stream);
+      audioSession('playback');
+      return;
+    }
     mine.stream = stream;
     mine.source = ctx.createMediaStreamSource(stream);
     mine.node = ctx.createScriptProcessor(4096, 1, 1);
@@ -709,6 +751,8 @@ function startRec() {
     paintAsk();
   }, function (err) {
     if (rec === mine) rec = null;
+    if (ctx.close) ctx.close();
+    audioSession('playback');
     dglNote(err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
       ? 'This page is not allowed the microphone. Allow it for this site in the ' +
         'browser\'s settings, then hold the button again.'
@@ -728,6 +772,10 @@ function endRec(send) {
     try { r.source.disconnect(); r.node.disconnect(); r.sink.disconnect(); } catch (e) { /* gone already */ }
   }
   if (r.stream) stopTracks(r.stream);
+  // The call is over: the microphone is let go, its audio context closed,
+  // and the page's sound is media again, for the loudspeaker.
+  if (r.ctx && r.ctx.close) { try { r.ctx.close(); } catch (e) { /* closed already */ } }
+  audioSession('playback');
   if (send && r.live) {
     var pcm = toPcm16(r.chunks, r.rate, REC_RATE);
     if (pcm.length < REC_RATE * 0.4) {
@@ -820,28 +868,36 @@ function fetchSpeech() {
 }
 
 function playSpeech(buf) {
-  var ctx = audioCtx();
-  ctx.decodeAudioData(buf, function (sound) {
+  stopSpeaking();
+  if (!player) {                               // no press has made one: it cannot be started
+    dglNote('His reply is in the log above. Hold the button once and the next one will be spoken.', 8000);
+    return;
+  }
+  audioSession('playback');
+  var mine = speaking = { url: URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })) };
+  function over(failed) {
+    if (speaking !== mine) return;
     stopSpeaking();
-    var src = ctx.createBufferSource();
-    src.buffer = sound;
-    src.connect(ctx.destination);
-    src.onended = function () {
-      if (speaking && speaking.src === src) { speaking = null; paintAsk(); }
-    };
-    speaking = { src: src };
-    src.start();
+    if (failed) dglNote('This phone could not play his reply. It is in the log above.', 8000);
     paintAsk();
-  }, function () {
-    dglNote('This phone could not play his reply. It is in the log above.', 8000);
-    paintAsk();
-  });
+  }
+  player.onended = function () { over(false); };
+  player.onerror = function () { over(true); };
+  player.src = mine.url;
+  var started = player.play();
+  if (started && started.catch) started.catch(function () { over(true); });
+  paintAsk();
 }
 
 function stopSpeaking() {
   if (!speaking) return;
-  try { speaking.src.onended = null; speaking.src.stop(); } catch (e) { /* ended already */ }
+  var was = speaking;
   speaking = null;
+  if (player) {
+    player.onended = player.onerror = null;
+    try { player.pause(); } catch (e) { /* not playing */ }
+  }
+  URL.revokeObjectURL(was.url);
 }
 
 function pttSend(action) {

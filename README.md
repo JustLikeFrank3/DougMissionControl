@@ -328,7 +328,11 @@ The plain page then offers TALK THROUGH THIS PHONE, a link that takes the
 phone's token along. On the HTTPS page HOLD TO TALK records through the
 phone's own microphone (16 kHz, up to 20 s), sends the recording through the
 same waiting queue as a typed question, and plays Douglas's reply through the
-phone; nothing is played in the house. `sudo ./pi/mobile-https.sh off` undoes
+phone; nothing is played in the house. An iPhone that has just lent a page
+its microphone treats the page's sound as a telephone call, out of the
+earpiece at call volume, so the recording has an audio context of its own
+that is closed when the button is let go, and the reply is played by an
+ordinary media element with the page's audio session set to playback. `sudo ./pi/mobile-https.sh off` undoes
 it.
 
 **IDLE** — the resting state, and the default surface: a clock, the boot
