@@ -30,6 +30,8 @@ the model is a deliberate press — DougVoice's own button or the deck's.
                 the reply to that recording as a WAV, once it is ready (202
                 and {"state": "thinking"} until then; "nothing" if nothing
                 was heard in it, "failed" if he answered but not aloud).
+    GET  /picture?id=...
+                a picture he drew, by the id its transcript line carries.
     GET  /health  200 "ok"
 
 A turn is: the kept audio → Wyoming faster-whisper (:10300) → llama.cpp's
@@ -46,14 +48,18 @@ and the words are handed to Douglas as what he saw; the picture goes
 nowhere else. The owner's own records (JOBCONTEXT_URL, their jobContext
 server: their stories, samples of how they write, whatever else
 JOBCONTEXT_AREAS lets him reach) he may read; a change to them is read back
-by this program and sent only after a yes, and nothing can be deleted.
+by this program and sent only after a yes, and nothing can be deleted. With an
+image model on this machine (IMAGE_URL) he can draw: the picture is kept
+here and its id goes out with his line in the transcript.
 
 It honours the contract douglas-agent.py documents:
     VOICE_STATE_FILE   {"state", "satellite", "eyes", "ts", "last_turn", "heard"},
                        rewritten atomically on every change and every
                        HEARTBEAT_S. "heard" is the last listen: its length,
                        level and word count, never the words.
-    TRANSCRIPT_FILE    one JSONL line per turn: {"ts", "who", "text", "via"}.
+    TRANSCRIPT_FILE    one JSONL line per turn: {"ts", "who", "text", "via"},
+                       and "image" (an id for GET /picture) on a line of his
+                       that came with a picture.
     POST /ptt          the body douglas-agent relays from the deck.
 
 Config comes from the environment (EnvironmentFile=/etc/douglas/voice.env).
@@ -156,6 +162,17 @@ EYES_MODEL = E("EYES_MODEL", "eyes")
 EYES_TIMEOUT_S = float(E("EYES_TIMEOUT_S", "90"))
 EYES_MAX_TOKENS = int(E("EYES_MAX_TOKENS", "600"))
 MAX_IMAGE_BYTES = int(E("VOICE_MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
+# His hand: an image model behind stable-diffusion.cpp's server on this
+# machine (douglas-draw.service). A picture he makes is kept in PICTURES_DIR,
+# the newest PICTURES_KEEP of them, and its id rides with his line in the
+# transcript, so that a screen can ask for it. Empty: he cannot draw, and
+# says so.
+IMAGE_URL = E("IMAGE_URL", "").rstrip("/")
+IMAGE_TIMEOUT_S = float(E("IMAGE_TIMEOUT_S", "300"))
+PICTURES_DIR = E("PICTURES_DIR", "/var/lib/douglas/pictures")
+PICTURES_KEEP = int(E("PICTURES_KEEP", "60"))
+PICTURE_ID = re.compile(r"p-[0-9a-f]{12}")
+IMAGE_SHAPES = {"square": (1024, 1024), "wide": (1216, 832), "tall": (832, 1216)}
 SAY_BODY_MAX = MAX_IMAGE_BYTES * 4 // 3 + 65536     # base64, plus the words
 # True things about this household, in the owner's words (one line, in
 # /etc/douglas/voice.env). They are the only local knowledge Douglas has.
@@ -304,7 +321,7 @@ class Transcript:
     def __init__(self, path: str) -> None:
         self.path = path
 
-    def append(self, who: str, text: str, via: str) -> dict | None:
+    def append(self, who: str, text: str, via: str, image: str = "") -> dict | None:
         if who == "user":
             text = " ".join(str(text).split())   # what was said: one line
         else:
@@ -316,6 +333,8 @@ class Transcript:
             return None
         rec = {"ts": time.time(), "who": "user" if who == "user" else "douglas",
                "text": text, "via": via if via in VIAS else "voice"}
+        if image and PICTURE_ID.fullmatch(image):
+            rec["image"] = image                 # a picture he made goes with the line
         line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -422,12 +441,21 @@ THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
 MARKUP = re.compile(r"[*_`#>]+|\[(.*?)\]\([^)]*\)")
 
 
+def unthought(text: str) -> str:
+    """What the model wrote, without its reasoning. A reasoning model keeps
+    that between <think> tags, mostly. Sometimes only the closing tag shows:
+    the server had already written the opening one, or the model thought out
+    loud with thinking switched off, and everything before that tag is
+    reasoning too. Sometimes only the opening one, cut off mid-thought."""
+    text = THINK.sub("", text)
+    text = re.split(r"</think>", text, flags=re.I)[-1]
+    return re.sub(r"<think>.*", "", text, flags=re.S | re.I)
+
+
 def speakable(text: str) -> str:
     """What the model wrote, minus what a speaker cannot say: reasoning
-    blocks that leaked into content, and markdown punctuation."""
-    text = THINK.sub("", text)
-    text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)   # unterminated
-    text = MARKUP.sub(lambda m: m.group(1) or "", text)
+    that leaked into content, and markdown punctuation."""
+    text = MARKUP.sub(lambda m: m.group(1) or "", unthought(text))
     return " ".join(no_dashes(text).split())
 
 
@@ -762,6 +790,18 @@ def system_prompt() -> str:
                if TOOLS_ON else ""))
     else:
         parts.append("You cannot see pictures.")
+    if TOOLS_ON and IMAGE_URL:
+        parts.append(
+            "You can make pictures with the draw tool. Use it when the person asks for a "
+            "picture, a drawing or an image, and not otherwise. Describe what it should show "
+            "in plain words, the subject first; the tool takes about half a minute, so one "
+            "picture a turn. The picture appears under your reply on the phone page and on "
+            "the Mission Control panel; DougVoice has no screen. Hand it over in a few words "
+            "saying what you drew. You do not see what you made unless you look at it, so "
+            "claim nothing about how it turned out"
+            + ("; asked how it looks, look at it and say." if EYES_URL else "."))
+    elif TOOLS_ON:
+        parts.append("You cannot make pictures: no image model is set up.")
     extra = read_instructions()
     if extra:
         parts.append(extra)
@@ -803,11 +843,9 @@ def no_dashes(text: str) -> str:
 
 
 def readable(text: str) -> str:
-    """What the model wrote, for a screen: reasoning blocks removed, the
-    words and line breaks kept."""
-    text = THINK.sub("", text)
-    text = re.sub(r"<think>.*", "", text, flags=re.S | re.I)
-    return no_dashes(text).strip()
+    """What the model wrote, for a screen: reasoning removed, the words and
+    line breaks kept."""
+    return no_dashes(unthought(text)).strip()
 
 
 # ── tools: the few things Douglas can look up ────────────────────────────
@@ -1105,13 +1143,100 @@ def see(image: bytes, question: str = "") -> str:
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=EYES_TIMEOUT_S) as r:
         out = json.loads(r.read())
-    return THINK.sub("", str(out["choices"][0]["message"].get("content") or "")).strip()
+    return unthought(str(out["choices"][0]["message"].get("content") or "")).strip()
 
 
 def tool_look(question: str = "") -> str:
     if not SEEN["image"]:
         return "No picture has been sent in this conversation."
     return see(SEEN["image"], str(question or ""))
+
+
+# ── a hand: words, put into a picture ────────────────────────────────────
+
+# The image server takes settings hidden inside a prompt, between these
+# tags. The prompt is the model's, so they are taken out: what is drawn, and
+# at what size and cost, is this program's to say.
+EXTRA_ARGS = re.compile(r"<\s*/?\s*sd_cpp_extra_args\b[^>]*>", re.I)
+
+
+def draw(prompt: str, shape: str = "square") -> bytes:
+    """A picture of what the words say, from the image server: the bytes of
+    a JPEG (or a PNG, if that is what it sends)."""
+    if not IMAGE_URL:
+        raise RuntimeError("no image model is set up")
+    w, h = IMAGE_SHAPES.get(shape, IMAGE_SHAPES["square"])
+    req = urllib.request.Request(
+        f"{IMAGE_URL}/v1/images/generations",
+        data=json.dumps({"prompt": prompt, "n": 1, "size": f"{w}x{h}",
+                         "output_format": "jpeg", "output_compression": 90}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=IMAGE_TIMEOUT_S) as r:
+        out = json.loads(r.read(64_000_000))
+    data = base64.b64decode(out["data"][0]["b64_json"])
+    if picture_type(data) not in ("image/jpeg", "image/png"):
+        raise ValueError("the image server did not send back a picture")
+    return data
+
+
+def picture_path(pid: str) -> str:
+    """Where a kept picture is, or '' if there is none by that id."""
+    if not PICTURE_ID.fullmatch(pid or ""):
+        return ""
+    for ext in ("jpg", "png"):
+        path = os.path.join(PICTURES_DIR, f"{pid}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def keep_picture(data: bytes) -> str:
+    """Keep a picture he made, for a screen to fetch: its id. The directory
+    is his alone, and only the newest few stay in it."""
+    ext = {"image/jpeg": "jpg", "image/png": "png"}[picture_type(data)]
+    pid = "p-" + os.urandom(6).hex()
+    os.makedirs(PICTURES_DIR, mode=0o700, exist_ok=True)
+    tmp = os.path.join(PICTURES_DIR, f".{pid}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, os.path.join(PICTURES_DIR, f"{pid}.{ext}"))
+    kept = sorted((os.path.getmtime(os.path.join(PICTURES_DIR, n)), n)
+                  for n in os.listdir(PICTURES_DIR) if PICTURE_ID.fullmatch(n.rsplit(".", 1)[0]))
+    for _when, name in kept[:-PICTURES_KEEP] if PICTURES_KEEP > 0 else []:
+        try:
+            os.remove(os.path.join(PICTURES_DIR, name))
+        except OSError:
+            pass
+    return pid
+
+
+def tool_draw(prompt: str = "", shape: str = "square") -> str:
+    """Make a picture and put it with this turn's reply. One a turn: each
+    takes the graphics card a good while, and the person is waiting."""
+    ctx = getattr(TURN, "ctx", None)
+    prompt = " ".join(EXTRA_ARGS.sub(" ", str(prompt or "")).split())[:1500]
+    shape = str(shape or "square").strip().lower()
+    if not prompt:
+        return "Nothing was drawn: say what the picture should show."
+    if ctx is None:
+        return "A picture cannot be made from here."
+    if ctx.get("picture"):
+        return "One picture a turn: this one was not made. Offer it as the next."
+    started = time.time()
+    data = draw(prompt, shape if shape in IMAGE_SHAPES else "square")
+    ctx["picture"] = keep_picture(data)
+    SEEN["image"] = data                    # what he made is what "look" looks at now
+    # How long and how big: never what was asked for.
+    log(f"drew a picture in {time.time() - started:.0f} s ({len(data) // 1024} KB, {shape})")
+    where = ("The person is at DougVoice, which has no screen: tell them it is on the phone "
+             "page and the Mission Control panel." if ctx.get("via") == "voice" else
+             "It is under your reply on the screen the person is using, so do not say where it "
+             "is.")
+    return ("Done, the picture is made. " + where + " Hand it over in a few words that say what "
+            "you drew, the way you would pass someone a sketch. You have not seen it, so say "
+            "nothing about how it came out, and do not bring up that you have not seen it"
+            + (": if asked how it looks, use look." if EYES_URL else "."))
 
 
 # ── the owner's records: read at once, changed only on a yes ─────────────
@@ -1682,8 +1807,9 @@ TOOLS = {
         ["url"]),
 }
 if EYES_URL:
-    TOOLS["look"] = (tool_look, "Look again at the picture the person last sent, to answer a "
-                     "specific question about it.", {
+    TOOLS["look"] = (tool_look, "Look again at the last picture in this conversation, the one "
+                     "the person sent or the one you drew, to answer a specific question "
+                     "about it.", {
         "question": {"type": "string", "description": "What you want to know about the picture."}},
         ["question"])
 TOOL_SPECS: list = []
@@ -1691,8 +1817,20 @@ TOOL_SPECS: list = []
 
 def offer_tools() -> None:
     """(Re)build what the model is offered. The records tool is in it only
-    once the server has said what it has."""
+    once the server has said what it has, the draw tool only with an image
+    model to draw with."""
     global TOOL_SPECS
+    if IMAGE_URL:
+        TOOLS["draw"] = (
+            tool_draw, "Make a picture from a description and show it to the person. Use it "
+            "only when a picture is asked for. It takes a while.", {
+                "prompt": {"type": "string", "description": "What the picture shows, in plain "
+                           "words: the subject first, then where it is, the light, and the "
+                           "style (a photo, a watercolour, a pencil sketch)."},
+                "shape": {"type": "string", "enum": list(IMAGE_SHAPES), "description":
+                          "Square unless the subject is clearly wide or tall."}}, ["prompt"])
+    else:
+        TOOLS.pop("draw", None)
     if JC["areas"]:
         TOOLS["jobcontext"] = (
             tool_jobcontext, "Read the person's own records on their jobContext server, or "
@@ -1784,7 +1922,8 @@ def run_tool(name: str, args) -> str:
     if name == "jobcontext":             # it says what it did itself: names, never values
         keep = args
     else:
-        log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
+        if name != "draw":               # what he is asked to draw stays out of the journal too
+            log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
         keep = {k: v for k, v in args.items() if k in props}
     try:
         result = fn(**keep)
@@ -2294,7 +2433,8 @@ class Pipeline:
         here = turn_note(via, spoken)       # with the message, not in the instructions
         msgs = ([{"role": "system", "content": system_prompt()}] + self.history
                 + [{"role": "user", "content": f"{said}\n\n{here}"}])
-        ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0}
+        ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0,
+                          "picture": ""}
         try:
             answer = self.llm(msgs)
             if (TOOLS_ON and JC["areas"] and not ctx["lookups"]
@@ -2327,10 +2467,11 @@ class Pipeline:
             CONVO["pending"] = dict(change, ts=time.time(), via=via)
         elif lead:
             reply = f"{lead} {reply}".strip()
-        return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn)
+        return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn,
+                              image=ctx["picture"])
 
     def _answered(self, said: str, reply: str, via: str, turn: int,
-                  always: bool = False) -> str | None:
+                  always: bool = False, image: str = "") -> str | None:
         """One exchange into the shared memory and the transcript. None when
         a newer turn has superseded this one - unless `always`: what became
         of a change the person approved is on record even if nobody waits
@@ -2341,7 +2482,7 @@ class Pipeline:
                                         {"role": "assistant", "content": reply}]
                         )[-2 * HISTORY_TURNS:]
         self.last_exchange = time.time()
-        self.tr.append("douglas", reply, via)
+        self.tr.append("douglas", reply, via, image)
         self.st.update(last_turn=time.time())
         return reply if self._current(turn) else None
 
@@ -2426,6 +2567,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, wav, "audio/wav")
             return self._send({"thinking": 202, "unknown": 404}.get(state, 200),
                               {"ok": False, "state": state})
+        if u.path == "/picture":
+            # A picture he made, by the id his transcript line carries.
+            if not self._allowed(u):
+                return self._send(403, {"error": "forbidden"})
+            path = picture_path((parse_qs(u.query).get("id") or [""])[0])
+            try:
+                with open(path, "rb") as f:
+                    data = f.read(MAX_IMAGE_BYTES + 1)
+            except OSError:
+                return self._send(404, {"error": "no such picture"})
+            return self._send(200, data, picture_type(data) or "application/octet-stream")
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802

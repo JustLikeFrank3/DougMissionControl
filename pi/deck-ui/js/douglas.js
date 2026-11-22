@@ -136,9 +136,26 @@ function paintLog(turns) {
     div.querySelector('.via').textContent =
       '· ' + (t.via || 'voice') + ' · ' + clock(t.ts);
     div.querySelector('.txt').textContent = t.text || '';
+    if (!me && t.image) div.appendChild(picture(t.image, el));
     el.appendChild(div);
   });
   el.scrollTop = el.scrollHeight;
+}
+
+// A picture he drew comes as an id on his line. The element is kept from one
+// repaint to the next, so a new turn does not fetch every picture in the log
+// again. A touch fills the panel with it; another puts it back.
+var pics = {};
+function picture(id, log) {
+  if (pics[id]) return pics[id];
+  var img = pics[id] = new Image();
+  img.className = 'dgl-pic';
+  img.alt = 'a picture Douglas drew';
+  img.onload = function () { log.scrollTop = log.scrollHeight; };
+  img.onerror = function () { delete pics[id]; img.alt = 'his picture did not load'; };
+  img.onclick = function () { img.classList.toggle('big'); };
+  img.src = '/api/douglas/picture?id=' + encodeURIComponent(id);
+  return img;
 }
 
 function clock(ts) {

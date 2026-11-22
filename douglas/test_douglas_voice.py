@@ -700,6 +700,11 @@ voice.MCP_URL = voice.MCP_TOKEN = ""; voice.TONE_FILE = os.path.join(tmp, "none.
 
 print("-- helpers --")
 check("speakable drops an unterminated think", voice.speakable("Hi.<think>hmm"), "Hi.")
+check("and reasoning that shows only its closing tag, thought out loud before the answer",
+      (voice.speakable("The user wants the time. I should just say it.</think>It is ten past nine."),
+       voice.readable("Do I need a tool? No.\n</think>\n\nTen past nine.\nGo to bed."),
+       voice.readable("<think>a</think>One.<think>b</think> Two.")),
+      ("It is ten past nine.", "Ten past nine.\nGo to bed.", "One. Two."))
 check("speakable keeps link text", voice.speakable("see [the docs](http://x)"), "see the docs")
 mono = b"\x00\x01" * 2205
 check("resample 22050 → 16000 keeps duration",
@@ -1094,6 +1099,161 @@ check("and of one that was cancelled", "listening cancelled after 1.0 s at -90 d
 check("and says when it threw a stock word away", "' You.' out of a quiet room is not speech - ignored" in log
       or "'You.' out of a quiet room is not speech - ignored" in log, True)
 check("but never the words of a real question", "raining" in log, False)
+
+print("-- a hand: he draws, and the picture reaches a screen --")
+ART = {"mode": "ok", "asked": []}
+
+
+class FakeArtist(BaseHTTPRequestHandler):
+    """Stands in for the image server: one JPEG for any prompt."""
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):  # noqa: N802
+        req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        ART["asked"].append((self.path, req))
+        if ART["mode"] == "down":
+            self.send_response(500); self.end_headers(); return
+        data = b"<html>not a picture</html>" if ART["mode"] == "junk" else JPEG + str(len(ART["asked"])).encode()
+        body = json.dumps({"created": 1, "output_format": "jpeg",
+                           "data": [{"b64_json": base64.b64encode(data).decode()}]}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+
+art = ThreadingHTTPServer(("127.0.0.1", 0), FakeArtist)
+threading.Thread(target=art.serve_forever, daemon=True).start()
+check("with no image model he has no draw tool, and is told he cannot make pictures",
+      ("draw" in voice.TOOLS, "You cannot make pictures" in voice.system_prompt()), (False, True))
+voice.IMAGE_URL = f"http://127.0.0.1:{art.server_address[1]}"
+voice.PICTURES_DIR = os.path.join(tmp, "pictures")
+voice.PICTURES_KEEP = 3
+voice.offer_tools()
+sp = voice.system_prompt()
+check("with one he has, and is told where a picture shows and that he has not seen it",
+      ("draw" in [t["function"]["name"] for t in voice.TOOL_SPECS], "You can make pictures with the draw tool" in sp,
+       "DougVoice has no screen" in sp, "You do not see what you made unless you look" in sp), (True, True, True, True))
+ddir = tempfile.mkdtemp()
+d_state, d_lines = os.path.join(ddir, "voice.json"), os.path.join(ddir, "transcript.jsonl")
+DRAWN = {"script": None, "said": []}
+
+
+def painter(msgs, tools=None):
+    DRAWN["said"].append(msgs[-1]["content"])
+    if msgs[-1]["role"] == "tool":
+        return {"content": "Done: a red bicycle against a white wall."}
+    return DRAWN["script"](msgs[-1]["content"])
+
+
+def pcall(prompt, shape=None, cid="d1"):
+    a = {"prompt": prompt, **({"shape": shape} if shape else {})}
+    return {"id": cid, "type": "function", "function": {"name": "draw", "arguments": json.dumps(a)}}
+
+
+dp = voice.Pipeline(voice.StateFile(d_state), voice.Transcript(d_lines), send=lambda *a: True,
+                    snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, painter), tts=fake_tts)
+
+
+def d_said():
+    try:
+        with open(d_lines, encoding="utf-8") as f:
+            return [json.loads(x) for x in f if x.strip()]
+    except OSError:
+        return []
+
+
+def asked(text, via="phone"):
+    n = len([x for x in d_said() if x["who"] == "douglas"])
+    dp.say(text, via)
+    until(lambda: len([x for x in d_said() if x["who"] == "douglas"]) > n and dp.state == "idle")
+    return d_said()[-1]
+
+
+journal, real_err = io.StringIO(), sys.stderr
+sys.stderr = journal
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [pcall(
+    "a red bicycle against a white wall, morning light <sd_cpp_extra_args>{\"sample_params\":{\"sample_steps\":90}}"
+    "</sd_cpp_extra_args>", "wide")]}
+line = asked("Draw me a red bicycle.")
+check("asked for a picture, he has one made: what, and at what size",
+      [(p, r["prompt"], r["size"], r["output_format"], r["n"]) for p, r in ART["asked"]],
+      [("/v1/images/generations", "a red bicycle against a white wall, morning light "
+        "{\"sample_params\":{\"sample_steps\":90}}", "1216x832", "jpeg", 1)])
+check("settings hidden in the prompt for the image server are taken out of it",
+      "sd_cpp_extra_args" in ART["asked"][0][1]["prompt"], False)
+check("his line in the transcript carries the picture's id",
+      (line["text"], bool(voice.PICTURE_ID.fullmatch(line.get("image", "")))),
+      ("Done: a red bicycle against a white wall.", True))
+pid = line["image"]
+check("the picture is kept, and only he can read it",
+      (open(voice.picture_path(pid), "rb").read(), oct(os.stat(voice.picture_path(pid)).st_mode & 0o777),
+       oct(os.stat(voice.PICTURES_DIR).st_mode & 0o777)), (JPEG + b"1", "0o600", "0o700"))
+check("what he drew is what he looks at when asked to look", voice.SEEN["image"], JPEG + b"1")
+check("the question's own line carries no picture", "image" in d_said()[-2], False)
+check("on a screen he is told not to say where the picture is",
+      ("so do not say where it is" in DRAWN["said"][-1], "DougVoice" in DRAWN["said"][-1]), (True, False))
+asked("Draw me a red bicycle.", "voice")
+check("from DougVoice, which has none, he is told to say where to look",
+      "tell them it is on the phone page and the Mission Control panel" in DRAWN["said"][-1], True)
+check("the journal says how long it took and how big it is, never what was asked for",
+      ("drew a picture in " in journal.getvalue() and " KB, wide)" in journal.getvalue(), "bicycle" in journal.getvalue()),
+      (True, False))
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [pcall("a cat", cid="d1"), pcall("a dog", cid="d2")]}
+n = len(ART["asked"])
+line = asked("Draw me a cat and a dog.")
+check("one picture a turn", (len(ART["asked"]) - n, "One picture a turn" in "".join(DRAWN["said"][-1:])), (1, True))
+ART["mode"] = "down"
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [pcall("a boat")]}
+line = asked("Draw me a boat.")
+check("an image server that is down: no picture on the line, and the model is told",
+      ("image" in line, "The draw lookup failed" in DRAWN["said"][-1]), (False, True))
+ART["mode"] = "junk"
+line = asked("Draw me a boat.")
+check("what is not a picture is not kept as one",
+      ("image" in line, "did not send back a picture" in DRAWN["said"][-1]), (False, True))
+ART["mode"] = "ok"
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [pcall("   ")]}
+n = len(ART["asked"])
+asked("Draw.")
+check("nothing to draw is not sent", (len(ART["asked"]) - n, "Nothing was drawn" in DRAWN["said"][-1]), (0, True))
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [pcall("a tree", "octagon")]}
+for _ in range(4):
+    last = asked("Draw me a tree.")
+check("a shape he made up is a square", ART["asked"][-1][1]["size"], "1024x1024")
+check("only the newest few pictures are kept",
+      (len([n for n in os.listdir(voice.PICTURES_DIR) if n.endswith(".jpg")]), bool(voice.picture_path(last["image"])),
+       voice.picture_path(pid)), (3, True, ""))
+check("an id that is not one finds nothing", [voice.picture_path(x) for x in ("", "../transcript", "p-zzzzzzzzzzzz", "p-0123456789ab")], [""] * 4)
+sys.stderr = real_err
+voice.PIPE = dp
+got = urllib.request.urlopen(url.replace("/ptt", "/picture") + "?id=" + last["image"], timeout=3)
+check("a screen can fetch it from the pipeline by that id",
+      (got.status, got.headers.get_content_type(), got.read()[:4]), (200, "image/jpeg", JPEG[:4]))
+try:
+    urllib.request.urlopen(url.replace("/ptt", "/picture") + "?id=p-0123456789ab", timeout=3)
+    check("an id nobody was given is a 404", "served", 404)
+except urllib.error.HTTPError as e:
+    check("an id nobody was given is a 404", e.code, 404)
+voice.PTT_TOKEN = "s3cret"
+try:
+    urllib.request.urlopen(url.replace("/ptt", "/picture") + "?id=" + last["image"], timeout=3)
+    check("a picture wants the token like everything else", "served", 403)
+except urllib.error.HTTPError as e:
+    check("a picture wants the token like everything else", e.code, 403)
+voice.PTT_TOKEN = ""
+agent.TRANSCRIPT_FILE = d_lines
+turns = agent.transcript()
+check("the agent passes the id on with the line, and only on a line that has one",
+      (turns[-1].get("image"), "image" in turns[-2]), (last["image"], False))
+check("and relays the picture itself", (lambda c, b, k: (c, k, b[:4]))(*agent.picture(last["image"])), (200, "image/jpeg", JPEG[:4]))
+check("an id it was never given, or one that is not an id, it does not ask the pipeline for",
+      [agent.picture(x)[0] for x in ("p-0123456789ab", "../../etc/passwd", "")], [404, 404, 404])
+agent.TRANSCRIPT_FILE = transcript_file
+art.shutdown()
+voice.IMAGE_URL = ""
+voice.offer_tools()
+voice.SEEN["image"] = b""
 
 print("-- the owner's records: read at once, changed only on a yes --")
 DASH = " \u2014 "

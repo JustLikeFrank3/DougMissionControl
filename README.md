@@ -283,8 +283,9 @@ meters, the last few turns, a box to type to him, push-to-talk, and a link
 to its own chat page), now playing, the fleet and the event log. When Douglas
 has a vision model the ask box grows a camera button: take or pick a photo,
 add a question or not, and he answers about what is in it. The photo is
-scaled to 1280 px on the phone before it is sent. Same SSE frame, same endpoints, same
-rules as the panel.
+scaled to 1280 px on the phone before it is sent. A picture he draws shows
+under his line, here and on the panel; a tap fills the screen with it. Same
+SSE frame, same endpoints, same rules as the panel.
 
 A phone's link to node1 is not a wire: on the tailnet it can drop to a relay,
 or go quiet for a minute or two at a time. So every request from the page has
@@ -532,9 +533,12 @@ and runs `douglas/setup.sh` at the end. In order:
 3. **`sudo reboot`** — the GTT limit and the new kernel only exist after one.
 4. **Put a model in `/srv/models`** and point `LLAMA_MODEL` at it in
    `/etc/douglas/llama.env` (nothing multi-GB is downloaded for you).
-   Optionally put a small vision model and its projector in
-   `/srv/models/eyes` (`/etc/douglas/eyes.env` names a good one) and set
-   `EYES_URL` in `voice.env`: that is what lets him be shown a picture.
+   What lets him be shown a picture is `EYES_URL` in `voice.env`: his own
+   model's address if it can see (give `llama-server` its `--mmproj` in
+   `LLAMA_ARGS`), or else a small vision model and its projector in
+   `/srv/models/eyes` (see `/etc/douglas/eyes.env`). What lets him draw one
+   is an image model in `/srv/models/flux1-schnell` (`/etc/douglas/draw.env`
+   says which four files) and `IMAGE_URL` in `voice.env`.
 5. **Run `provision.sh` again.** It is idempotent: config files are written
    only when missing, so this run just rebuilds what moved and ends with a
    port-by-port up/down list that means something.
@@ -561,11 +565,12 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | File | Knobs |
 |---|---|
 | `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
-| `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists |
+| `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists and `voice.env`'s `EYES_URL` points at it: a model that sees for itself needs no second one |
+| `draw.env` | `douglas-draw`, the image model on `:8083` (loopback): `DRAW_MODEL`, `DRAW_VAE`, `DRAW_CLIP_L`, `DRAW_T5XXL` (FLUX.1 schnell's four files), `DRAW_ARGS` (default `--steps 4 --cfg-scale 1.0 -W 1024 -H 1024`), `DRAW_HOST`/`DRAW_PORT`. `provision.sh` builds stable-diffusion.cpp and enables the unit only once the model file exists |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (the vision model, `http://127.0.0.1:8082`; unset, he cannot be shown a picture and says so), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image model, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he draws are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -688,8 +693,9 @@ recording (202 while he is still thinking; `nothing` if no words were heard in
 it). `douglas-agent` and deck-api relay both, and the phone page on HTTPS uses
 them for HOLD TO TALK.
 
-**What he can see.** His own model reads only text, so pictures go through a
-second, small vision model (`llama-eyes`, `:8082`). `POST /say` takes an
+**What he can see.** A picture is put into words by a model that can see:
+his own, if it is one (`EYES_URL` pointing at `:8081`), or a second, small
+vision model beside one that reads only text (`llama-eyes`, `:8082`). `POST /say` takes an
 optional `"image"` (base64 JPEG, PNG, GIF or BMP); the pipeline has the vision
 model describe it with the question in mind, hands that to Douglas as what he
 saw, and marks the line `[picture]` in the transcript. The picture is kept for
@@ -698,6 +704,21 @@ tool) when a follow-up asks about a detail, and `read_page` on a picture's
 address looks at it the same way. Pictures never leave Douglas. With no
 vision model configured he refuses a picture and says why, and the phone page
 does not offer its camera button.
+
+**What he can draw.** With `IMAGE_URL` set he has a `draw` tool: an image
+model on the same machine (`douglas-draw`: FLUX.1 schnell behind
+stable-diffusion.cpp's server, on the same Vulkan backend as his own model)
+turns a description into a 1024x1024 picture in about 25 seconds, one a
+turn. The picture is kept on Douglas (`PICTURES_DIR`, readable by the
+pipeline alone, the newest sixty), and its id goes out with his line in the
+transcript: `GET /picture?id=` on the pipeline, relayed by `douglas-agent`
+and by deck-api (`/api/douglas/picture`), is how the phone page and the
+panel show it under that line. DougVoice has no screen, and he says where to
+look. He has not seen what he made unless he looks (`look` takes the picture
+he drew as readily as one he was sent), so he is told to hand it over
+without describing it. What he was asked to draw is not written to the
+journal, and the image server answers only this machine: it is cut off from
+the network by systemd, since making a picture needs nothing from anywhere.
 ### DougVoice — Douglas's ears
 
 DougVoice is a Raspberry Pi Zero 2 W wearing a PiSugar Whisplay HAT (WM8960
@@ -850,6 +871,7 @@ fauxmo — see the WOL note in Troubleshooting.
 ```
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
+python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp
 python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
 python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand-in model
@@ -865,7 +887,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
@@ -989,7 +1011,8 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   `ORT_DISABLE_TELEMETRY=1` is set (watched with `strace`: one HTTPS
   connection and a device-id file without it, nothing with it). The units for Whisper, Piper, Open WebUI and
   the Kokoro voice all set it, and `douglas-tts`, which needs no network at
-  all, is also limited to loopback by systemd (`IPAddressDeny=any`).
+  all, is also limited to loopback by systemd (`IPAddressDeny=any`). So is
+  `douglas-draw`, the image server.
 - Douglas's key to the owner's jobContext records is a whole one: the server
   has no narrower kind, so which parts he reaches (`JOBCONTEXT_AREAS`) is the
   pipeline's doing. It lives in `/etc/douglas/voice.env` (root:douglas,

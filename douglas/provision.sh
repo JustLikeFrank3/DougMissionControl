@@ -9,7 +9,11 @@
 #     tailscaled          joined to the tailnet as `douglas`
 #     llama-server        llama.cpp (Vulkan/RADV) on :8081, --metrics, OpenAI API
 #     llama-eyes          a small vision model on :8082, so Douglas can be shown
-#                         a picture (optional: enabled once its model is on disk)
+#                         a picture (optional: enabled once its model is on disk
+#                         and voice.env's EYES_URL points at it; a brain that
+#                         sees for itself needs none)
+#     douglas-draw        an image model on :8083, so Douglas can draw one
+#                         (optional: built and enabled once its model is on disk)
 #     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net)
 #     wyoming-whisper     faster-whisper STT on :10300
 #     wyoming-piper       Piper TTS on :10200 (the fallback voice)
@@ -27,6 +31,7 @@
 #     TS_AUTHKEY=tskey-...   join the tailnet unattended (else a login URL is printed)
 #     GTT_GB=110             unified memory the GPU may map for a model
 #     LLAMA_REF=master       llama.cpp git ref to build
+#     SD_REF=master-1117-0d71f96   stable-diffusion.cpp git ref to build (the image server)
 #     REBUILD_LLAMA=1        rebuild llama.cpp even if the ref has not moved
 #     MESA_PPA=1             add ppa:kisak/kisak-mesa if RADV is too old for gfx1151
 #     OPEN_WEBUI_HTTPS=0     skip `tailscale serve` (phones need HTTPS for the mic)
@@ -38,6 +43,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 GTT_GB="${GTT_GB:-110}"
 LLAMA_REF="${LLAMA_REF:-master}"
+SD_REF="${SD_REF:-master-1117-0d71f96}"
 OPEN_WEBUI_HTTPS="${OPEN_WEBUI_HTTPS:-1}"
 reboot_needed=0
 step() { printf '\n== %s\n' "$*"; }
@@ -160,27 +166,77 @@ CONF
 
 env=/etc/douglas/eyes.env
 [ -f "$env" ] || cat > "$env" <<'CONF'
-# llama-eyes: a small vision model beside Douglas's own, which reads only
-# text. A picture sent to him is put into words here first. Restart after
-# editing:  sudo systemctl restart llama-eyes
+# llama-eyes: a small vision model beside Douglas's own, for when his own
+# reads only text. A picture sent to him is put into words here first.
+# Restart after editing:  sudo systemctl restart llama-eyes
 #
-# Nothing is downloaded for you. A good fit beside a ~90 GB model is
-# Qwen3-VL-8B-Instruct at Q8_0, about 10 GB with its projector, from
-# https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF :
-#     Qwen3VL-8B-Instruct-Q8_0.gguf  and  mmproj-Qwen3VL-8B-Instruct-F16.gguf
-# Put both in /srv/models/eyes, re-run provision.sh (it enables the unit once
-# the model is there), then set EYES_URL=http://127.0.0.1:8082 in voice.env
-# and restart douglas-voice.
-EYES_MODEL_FILE=/srv/models/eyes/Qwen3VL-8B-Instruct-Q8_0.gguf
-EYES_MMPROJ=/srv/models/eyes/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+# If his own model can see (llama-server was given its --mmproj in
+# llama.env), he needs none of this: set EYES_URL=http://127.0.0.1:8081 in
+# voice.env and leave this unit off.
+#
+# Otherwise: nothing is downloaded for you. Any vision model llama.cpp serves
+# will do, at around 10 GB with its projector. Put the model and its mmproj
+# file in /srv/models/eyes, name them below, set
+# EYES_URL=http://127.0.0.1:8082 in voice.env and re-run provision.sh: it
+# enables the unit once the model is there and voice.env points at it.
+EYES_MODEL_FILE=/srv/models/eyes/model.gguf
+EYES_MMPROJ=/srv/models/eyes/mmproj.gguf
 # Loopback: only the voice pipeline on this machine talks to it.
 EYES_HOST=127.0.0.1
 EYES_PORT=8082
-# --image-min-tokens  Qwen-VL reads small pictures poorly below about 1024
+# --image-min-tokens  some vision models read small pictures poorly below
+#                     about 1024
 # --image-max-tokens  how much of the context one picture may take; a large
 #                     photo is scaled down to fit
 EYES_ARGS="-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes"
 CONF
+
+# ── a hand: an image model, built only once there is one to run ──────────
+env=/etc/douglas/draw.env
+[ -f "$env" ] || cat > "$env" <<'CONF'
+# douglas-draw: an image model, so that Douglas can make a picture when
+# asked. Restart after editing:  sudo systemctl restart douglas-draw
+#
+# Nothing is downloaded for you. FLUX.1 schnell (Black Forest Labs, Apache
+# 2.0; its text encoders are Google's T5-XXL and OpenAI's CLIP-L) fits beside
+# a 70 GB model and draws a 1024x1024 picture in about 25 seconds on this
+# machine's Radeon. It is four files, about 19 GB:
+#     flux1-schnell-q8_0.gguf
+#         from https://huggingface.co/leejet/FLUX.1-schnell-gguf
+#     t5xxl-Q8_0.gguf, clip_l.safetensors, ae.safetensors
+#         from https://huggingface.co/second-state/FLUX.1-schnell-GGUF
+# Put them in /srv/models/flux1-schnell and re-run provision.sh: it builds
+# stable-diffusion.cpp and enables the unit once the model is there. Then set
+# IMAGE_URL=http://127.0.0.1:8083 in voice.env and restart douglas-voice.
+DRAW_MODEL=/srv/models/flux1-schnell/flux1-schnell-q8_0.gguf
+DRAW_VAE=/srv/models/flux1-schnell/ae.safetensors
+DRAW_CLIP_L=/srv/models/flux1-schnell/clip_l.safetensors
+DRAW_T5XXL=/srv/models/flux1-schnell/t5xxl-Q8_0.gguf
+# Loopback: only the voice pipeline on this machine talks to it.
+DRAW_HOST=127.0.0.1
+DRAW_PORT=8083
+# Four steps and no guidance is how FLUX.1 schnell is meant to be run.
+DRAW_ARGS="--steps 4 --cfg-scale 1.0 -W 1024 -H 1024"
+CONF
+chown root:douglas "$env" && chmod 640 "$env"
+draw="$(envval "$env" DRAW_MODEL)"
+if [ -f "$draw" ]; then
+    # The same choice as for llama.cpp, and the same backend: Vulkan.
+    step "stable-diffusion.cpp @ ${SD_REF} (Vulkan)"
+    src=/opt/stable-diffusion.cpp
+    [ -d "$src/.git" ] || git clone --recursive https://github.com/leejet/stable-diffusion.cpp "$src"
+    git -C "$src" fetch --tags --force origin
+    git -C "$src" checkout -q --detach "${SD_REF}" 2>/dev/null \
+        || git -C "$src" checkout -q --detach "origin/${SD_REF}"
+    git -C "$src" submodule update --init --recursive
+    built="$src/build/.douglas-built-rev"
+    rev="$(git -C "$src" rev-parse HEAD)"
+    if [ ! -x "$src/build/bin/sd-server" ] || [ "$(cat "$built" 2>/dev/null)" != "$rev" ]; then
+        cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DSD_VULKAN=ON
+        cmake --build "$src/build" --config Release -j "$(nproc)" --target sd-server sd-cli
+        echo "$rev" > "$built"
+    fi
+fi
 
 # ── speech ───────────────────────────────────────────────────────────────
 step "Wyoming faster-whisper and Piper"
@@ -306,9 +362,13 @@ LLM_MAX_TOKENS=400
 # Where "the weather" means when no place is named, and US units for it.
 #DOUGLAS_HOME=Springfield, Illinois
 #DOUGLAS_UNITS=us
-# His eyes: the vision model llama-eyes serves (see eyes.env). Unset, he
-# cannot be shown a picture and says so.
+# His eyes: his own model if it can see (:8081), or the vision model
+# llama-eyes serves (:8082, see eyes.env). Unset, he cannot be shown a
+# picture and says so.
 #EYES_URL=http://127.0.0.1:8082
+# His hand: the image model douglas-draw serves (see draw.env). Unset, he
+# cannot draw and says so.
+#IMAGE_URL=http://127.0.0.1:8083
 # The owner's own records, on their jobContext server. JOBCONTEXT_AREAS
 # names the parts he may reach: "stories" is the owner's stories and writing
 # samples and nothing else; unset, he reaches all of it, a job search
@@ -335,16 +395,30 @@ chown root:douglas "$env" && chmod 640 "$env"
 # ── units ────────────────────────────────────────────────────────────────
 step "systemd units"
 units="llama-server open-webui wyoming-whisper wyoming-piper douglas-voice"
-for u in $units llama-eyes douglas-tts; do
+for u in $units llama-eyes douglas-tts douglas-draw; do
     install -m 644 "$here/$u.service" "/etc/systemd/system/$u.service"
 done
 systemctl daemon-reload
-# The eyes are optional: without their model the unit would only flap.
+# The eyes are optional: without their model the unit would only flap, and
+# with a brain that sees for itself (EYES_URL pointing at it) they are ten
+# gigabytes of memory nobody looks through.
 eyes="$(envval /etc/douglas/eyes.env EYES_MODEL_FILE)"
-if [ -f "$eyes" ]; then
+eyes_url="$(envval /etc/douglas/voice.env EYES_URL)"
+eyes_on=""
+if [ -f "$eyes" ] && [ "${eyes_url##*:}" = "$(envval /etc/douglas/eyes.env EYES_PORT)" ]; then
     units="$units llama-eyes"
+    eyes_on=1
+elif [ -f "$eyes" ]; then
+    echo "  llama-eyes left off: voice.env's EYES_URL (${eyes_url:-unset}) does not point at it"
 else
-    echo "  no vision model at $eyes - Douglas cannot be shown pictures (see /etc/douglas/eyes.env)"
+    echo "  no vision model at $eyes - see /etc/douglas/eyes.env if Douglas's own model cannot see"
+fi
+# So is the hand: without an image model and the program that runs it there
+# is nothing to start.
+if [ -f "$draw" ] && [ -x /opt/stable-diffusion.cpp/build/bin/sd-server ]; then
+    units="$units douglas-draw"
+else
+    echo "  no image model at $draw - Douglas cannot draw (see /etc/douglas/draw.env)"
 fi
 # So is the neural voice: without its model he speaks with Piper.
 kokoro="$(envval /etc/douglas/tts.env KOKORO_MODEL)"
@@ -384,10 +458,12 @@ fi
 step "status"
 sleep 3
 eyes_port=""
-[ -f "$eyes" ] && eyes_port="$(envval /etc/douglas/eyes.env EYES_PORT) llama-eyes"
+[ -n "$eyes_on" ] && eyes_port="$(envval /etc/douglas/eyes.env EYES_PORT) llama-eyes"
+draw_port=""
+[ -f "$draw" ] && draw_port="$(envval /etc/douglas/draw.env DRAW_PORT) douglas-draw"
 tts_port=""
 [ -f "$kokoro" ] && tts_port="$(envval /etc/douglas/tts.env TTS_LISTEN_PORT) douglas-tts"
-for p in "8081 llama-server" ${eyes_port:+"$eyes_port"} "8080 open-webui" "10300 wyoming-whisper" \
+for p in "8081 llama-server" ${eyes_port:+"$eyes_port"} ${draw_port:+"$draw_port"} "8080 open-webui" "10300 wyoming-whisper" \
          "10200 wyoming-piper" ${tts_port:+"$tts_port"} "10800 douglas-voice" "9111 douglas-agent"; do
     set -- $p
     if (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; then

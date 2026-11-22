@@ -19,6 +19,7 @@ following its journald output. flightsim-boot.sh is unmodified.
                                  "image":"<base64>" adds a picture to look at
     POST /api/douglas/hear       {"audio":"<base64 16-bit mono PCM>","rate":16000}
                                  a turn recorded on the phone's own microphone
+    GET  /api/douglas/picture    ?id=<a transcript line's "image">: a picture he drew
     GET  /api/douglas/speech     ?id=<the turn's id>: his reply as a WAV, for
                                  the phone to play
     GET  /                       the deck UI (the 2560x720 panel)
@@ -1592,6 +1593,30 @@ def douglas_status() -> dict:
     return got
 
 
+PICTURE_ID = re.compile(r"p-[0-9a-f]{12}")
+
+
+def douglas_picture(pid: str) -> tuple[int, bytes | dict, str]:
+    """A picture Douglas drew, by the id its line in his transcript carries
+    ("image"), for a screen to show: the bytes and their type."""
+    if not PICTURE_ID.fullmatch(pid or ""):
+        return 400, {"ok": False, "message": "no such picture"}, ""
+    if not DOUGLAS_AGENT_TOKEN:
+        return 502, {"ok": False, "message": "DOUGLAS_AGENT_TOKEN unset in boot.env"}, ""
+    url = (f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/picture"
+           f"?token={DOUGLAS_AGENT_TOKEN}&id={quote(pid)}")
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            kind, body = r.headers.get_content_type(), r.read(16_000_000)
+    except urllib.error.HTTPError as e:
+        return (404 if e.code == 404 else 502), {"ok": False, "message": "no such picture"}, ""
+    except (urllib.error.URLError, OSError):
+        return 502, {"ok": False, "message": "douglas-agent did not answer"}, ""
+    if kind not in ("image/jpeg", "image/png"):
+        return 502, {"ok": False, "message": "that is not a picture"}, ""
+    return 200, body, kind
+
+
 def douglas_ptt(action: str) -> tuple[bool, str]:
     """Press or release the push-to-talk. The panel has no microphone: this
     asks Douglas to have DougVoice listen, exactly as its own button does."""
@@ -1933,6 +1958,15 @@ class Handler(BaseHTTPRequestHandler):
             code, out = douglas_speech((query.get("id") or [""])[0])
             if isinstance(out, bytes):
                 return self._send(200, out, "audio/wav")
+            return self._json(code, out)
+
+        # A picture he drew, for the line of his it came with.
+        if path == "/api/douglas/picture":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            code, out, kind = douglas_picture((query.get("id") or [""])[0])
+            if isinstance(out, bytes):
+                return self._send(200, out, kind)
             return self._json(code, out)
 
         # Media and squadrons ride the same fast-poll pattern as /api/sim and

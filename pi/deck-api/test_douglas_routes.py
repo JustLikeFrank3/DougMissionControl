@@ -285,6 +285,49 @@ check("an id that is not one is not passed on", speech("../../etc")[0], 400)
 agent_srv.shutdown()
 d.DOUGLAS_AGENT_PORT = 1
 check("Douglas not answering", (speech("q-ready-0001")[0], json.loads(speech("q-ready-0001")[2])["state"]), (502, "failed"))
+
+print("-- a picture he drew, for a screen --")
+SEEN_IDS = []
+class Gallery(d.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        u = d.urlparse(self.path); q = d.parse_qs(u.query)
+        which = (q.get("id") or [""])[0]
+        SEEN_IDS.append((u.path, which, (q.get("token") or [""])[0]))
+        if which == "p-0123456789ab":
+            body, kind, code = b"\xff\xd8\xff\xe0 a picture", "image/jpeg", 200
+        elif which == "p-00000000beef":
+            body, kind, code = b"<html>oops</html>", "text/html", 200
+        else:
+            body, kind, code = b'{"error": "no such picture"}', "application/json", 404
+        self.send_response(code); self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+gallery = d.ThreadingHTTPServer(("127.0.0.1", 0), Gallery)
+threading.Thread(target=gallery.serve_forever, daemon=True).start()
+d.DOUGLAS_AGENT_PORT = gallery.server_address[1]
+def picture(which, token=""):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/douglas/picture?id={which}"
+                                    + (f"&token={token}" if token else ""), timeout=5) as r:
+            return r.status, r.headers.get_content_type(), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get_content_type(), e.read()
+check("the picture itself, with its type", picture("p-0123456789ab"), (200, "image/jpeg", b"\xff\xd8\xff\xe0 a picture"))
+check("asked of the agent's picture route, with the agent's token, never the deck's",
+      SEEN_IDS[-1], ("/picture", "p-0123456789ab", d.DOUGLAS_AGENT_TOKEN))
+check("an id he never gave out", picture("p-aaaaaaaaaaaa")[0], 404)
+n = len(SEEN_IDS)
+check("an id that is not one is not passed on at all",
+      ([picture(x)[0] for x in ("../../etc/passwd", "p-123", "q-ready-0001")], len(SEEN_IDS) - n), ([400, 400, 400], 0))
+check("something that is not a picture is not served as one", picture("p-00000000beef")[0], 502)
+d.DECK_TOKEN = "deck-token"
+check("a picture wants the deck token like the rest of him",
+      (get("/api/douglas/picture?id=p-0123456789ab", {"X-Forwarded-For": "100.64.0.9"}),
+       get("/api/douglas/picture?id=p-0123456789ab&token=deck-token", {"X-Forwarded-For": "100.64.0.9"})), (403, 200))
+d.DECK_TOKEN = ""
+gallery.shutdown()
+d.DOUGLAS_AGENT_PORT = 1
+check("Douglas not answering", picture("p-0123456789ab")[0], 502)
 d.DECK_TOKEN = ""
 
 server.shutdown()

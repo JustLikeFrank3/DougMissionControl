@@ -15,6 +15,9 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
                               "via":"phone","id":"..."}
                              a turn recorded on a phone's own microphone,
                              relayed to the pipeline's /hear
+    GET  /picture?token=<t>&id=<id>
+                             a picture Douglas drew, by the id its transcript
+                             line carries ("image"); relayed from the pipeline
     GET  /speech?token=<t>&id=<id>
                              the reply to that turn as a WAV, for the phone
                              to play; JSON saying where it stands until then
@@ -61,6 +64,8 @@ VOICE_STATE_FILE = os.environ.get("VOICE_STATE_FILE", "/run/douglas/voice.json")
 SAY_BODY_MAX = 12 * 1024 * 1024          # a typed turn may carry a picture
 HEAR_BODY_MAX = 6 * 1024 * 1024          # a recording from a phone, as base64
 SPEECH_MAX = 8 * 1024 * 1024             # a reply's audio on its way back
+PICTURE_MAX = 16 * 1024 * 1024           # a picture he drew, on its way to a screen
+PICTURE_ID = re.compile(r"p-[0-9a-f]{12}")
 VOICE_STALE_S = float(os.environ.get("VOICE_STALE_S", "30"))
 TRANSCRIPT_FILE = os.environ.get("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 TRANSCRIPT_TURNS = int(os.environ.get("TRANSCRIPT_TURNS", "40"))
@@ -281,10 +286,13 @@ def transcript() -> list[dict]:
         except ValueError:
             continue
         if isinstance(t, dict) and t.get("text"):
-            turns.append({"ts": t.get("ts"),
-                          "who": "user" if t.get("who") == "user" else "douglas",
-                          "text": str(t["text"])[:2000],
-                          "via": str(t.get("via") or "voice")})
+            turn = {"ts": t.get("ts"),
+                    "who": "user" if t.get("who") == "user" else "douglas",
+                    "text": str(t["text"])[:2000],
+                    "via": str(t.get("via") or "voice")}
+            if PICTURE_ID.fullmatch(str(t.get("image") or "")):
+                turn["image"] = t["image"]       # he drew one: GET /picture?id= has it
+            turns.append(turn)
     return turns[-TRANSCRIPT_TURNS:]
 
 
@@ -371,6 +379,26 @@ def _relay(url: str, payload: dict, done: str, timeout: float = 3) -> tuple[int,
     return 200, {"ok": ok, "message": done if ok else "the voice pipeline refused"}
 
 
+def picture(pid: str) -> tuple[int, bytes | dict, str]:
+    """A picture Douglas drew, from the pipeline that keeps it: the bytes
+    and their type. The pictures are the pipeline's alone to read, so this
+    asks it rather than the disk."""
+    if not PICTURE_ID.fullmatch(pid or "") or not VOICE_PTT_URL:
+        return 404, {"error": "no such picture"}, ""
+    url = VOICE_PTT_URL.replace("/ptt", "/picture", 1)
+    url += ("&" if "?" in url else "?") + "id=" + quote(pid)
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            kind, body = r.headers.get_content_type(), r.read(PICTURE_MAX)
+    except urllib.error.HTTPError as e:
+        return (404 if e.code == 404 else 502), {"error": "no such picture"}, ""
+    except (urllib.error.URLError, OSError):
+        return 502, {"error": "douglas-voice did not answer"}, ""
+    if kind not in ("image/jpeg", "image/png"):
+        return 502, {"error": "that is not a picture"}, ""
+    return 200, body, kind
+
+
 def status() -> dict:
     return {"ts": time.time(), "host": host_metrics(), "gpu": gpu_metrics(),
             "llm": llm_metrics(), "voice": voice_state(),
@@ -413,6 +441,11 @@ class Handler(BaseHTTPRequestHandler):
             ask_id = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
             code, out = speech(ask_id)
             return self._send(code, out, "audio/wav")
+        if path == "/picture":
+            if not self._authorised():
+                return self._send(403, {"error": "forbidden"})
+            code, out, kind = picture((parse_qs(urlparse(self.path).query).get("id") or [""])[0])
+            return self._send(code, out, kind)
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802

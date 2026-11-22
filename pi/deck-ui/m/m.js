@@ -467,7 +467,7 @@ function paintDouglas(d) {
   });
 
   // The last few turns only: the full conversation is Douglas's chat page.
-  var log = $('dgl-log');
+  var log = $('dgl-log'), shown = {};
   log.innerHTML = '';
   (agent ? (d.transcript || []).slice(-6) : []).forEach(function (t) {
     var me = t.who === 'user';
@@ -478,8 +478,33 @@ function paintDouglas(d) {
     div.querySelector('.who span').textContent = '· ' + (t.via || 'voice') +
       (t.ts ? ' · ' + fmtClock(t.ts) : '');
     div.querySelector('.txt').textContent = t.text || '';
+    if (!me && t.image) {
+      shown[t.image] = true;
+      div.appendChild(picture(t.image));
+    }
     log.appendChild(div);
   });
+  Object.keys(pics).forEach(function (id) { if (!shown[id]) delete pics[id]; });
+}
+
+// A picture Douglas drew comes as an id on his line. The log is rebuilt on
+// every poll, so the element is kept and moved into the new log, not made
+// again: made again it would be fetched again, a few hundred kilobytes each
+// time, over a link that is sometimes a relay. One that did not load is tried
+// again after a quarter of a minute. A tap fills the screen with it; another
+// puts it back.
+var pics = {};
+function picture(id) {
+  var p = pics[id];
+  if (p && (!p.failed || Date.now() - p.failed < 15000)) return p.el;
+  var img = new Image();
+  p = pics[id] = { el: img, failed: 0 };
+  img.className = 'pic';
+  img.alt = 'a picture Douglas drew';
+  img.onerror = function () { p.failed = Date.now(); img.alt = 'his picture did not load'; };
+  img.onclick = function () { img.classList.toggle('big'); };
+  img.src = api('/api/douglas/picture?id=' + encodeURIComponent(id));
+  return img;
 }
 
 // One missed poll is the link, not Douglas: the frame on screen stays through
