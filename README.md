@@ -1075,15 +1075,52 @@ seen that well enough already.
 Cutting needs something to cut with, and the pipeline is otherwise the
 standard library alone, so it is optional: with Pillow he zooms, without it
 he looks as before, the state says nothing of bigger photos and the phone
-sends 1280. A first look that zooms takes about 16 seconds where a plain one
-took 9 (the picture is read, six seconds; the question of where, one; then
-the part and the whole together, seven); a later one 8. On test photographs
-of a motorcycle seen from across a car park, with a faint name on a muffler
-an eighth of the picture wide, he read the name on the first look, said
-plainly that a blank one had none, with or without being told there was one,
-and no longer called a part with no name on it "stock". None of this has yet
-been tried on the photograph that started it: those test names were read
-even at 1280, which is to say they were easier than the real one.
+sends 1280. On test photographs of a motorcycle seen from across a car park,
+with a faint name on a muffler an eighth of the picture wide, he read the
+name on the first look, said plainly that a blank one had none, with or
+without being told there was one, and no longer called a part with no name on
+it "stock". Those test names were read even at 1280, which is to say they
+were easier than the real one.
+
+**What the photograph itself had to say.** It was sent a fourth time, at
+3072 pixels now, and with the owner's leave it was kept on Douglas for the
+evening: read out of the service's memory into a folder only root can open,
+shown to nobody and nothing but his own eyes, and deleted afterwards. It
+showed what the test photographs could not. The badge on the exhaust is
+about eighty-five pixels wide in a photo of 3072, and the name under it is
+too blurred to read at any size: asked plainly, the eyes said so at every
+magnification tried. Pressed, though ("spell out the letters under it, one at
+a time"), at the size the whole exhaust is shown they spelled out a name it
+was not, nine letters of it. Shown the badge by itself, four times the size
+and more, they said six times in six that they could not make out one
+letter. What is too small invites a guess; what is large and blurred does
+not. And what the model knows of whose badge is whose turned out to be wrong
+and sure of itself (asked outright, it gave this badge to another maker),
+which is the reason he keeps to what a look has read.
+
+So the closer look goes to the mark. Once the part is cut out, the eyes are
+asked a second question of where: if what would answer the message is a
+name, lettering, a logo or a badge, where on this part is it? Where there is
+one and it is small, a tighter part is cut around it from the photo as it
+was sent, enlarged no more than four and a half times (beyond that there is
+only blur), and that is what is looked at. And a look at the whole picture,
+taken again, no longer takes back what a closer one made out: told that such
+a look "counts for more", he had withdrawn a badge he had described one turn
+before, so it is now handed to him as adding to what he has seen.
+
+On that photograph, in a dry run of the afternoon's conversation, 14 turns of
+14: asked the make of the exhaust he says there is a white shield-shaped
+badge on it with a stylised letter and an arrow, that the lettering under it
+is too blurred to read, and that a closer photo would settle it; told there
+is a logo on the muffler he says he can see it now, and what it looks like;
+pressed to spell the name he says he cannot; asked which maker has such a
+badge he says he cannot tell; and told the make, that it fits the shield and
+the arrows. He does not name it himself, and with this photograph he should
+not. A look that goes to a mark takes 12 to 15 seconds once the picture has
+been read and about 20 on a first look, where a plain look took 9. One test
+picture still gets a made-up name: marks on a pipe that an image model drew
+in place of letters are read as a famous maker's, a different one by each
+look.
 
 ### DougVoice — Douglas's ears
 
@@ -1255,7 +1292,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), and the size of photo he asks a phone for; a turn's allowance of lookups |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

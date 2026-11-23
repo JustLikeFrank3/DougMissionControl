@@ -1721,29 +1721,48 @@ def see(image: bytes, question: str = "", earlier=(), part: bool = False) -> str
 # and looked at as a picture of its own. Without Pillow, or where the message
 # is about the picture as a whole, there is the one look, as before.
 
+SEE_BOX = ("four whole numbers from 0 to 1000 and nothing else, LEFT TOP RIGHT BOTTOM, the edges "
+           "of a box around it in thousandths of the picture's width and height, measured from "
+           "the left and from the top.")
 SEE_WHERE = ("Do not answer it. Say only where in the picture the thing it asks about is: "
-             "four whole numbers from 0 to 1000 and nothing else, LEFT TOP RIGHT BOTTOM, the "
-             "edges of a box around that thing in thousandths of the picture's width and "
-             "height, measured from the left and from the top. If the message is about the "
-             "picture as a whole, or the thing is not in the picture, answer WHOLE.")
+             + SEE_BOX + " If it asks about a mark or a small part of something, a name, a "
+             "logo, lettering, and that is too small to make out at this size, give the box "
+             "around the thing it is on. If the message is about the picture as a whole, or "
+             "the thing is not in the picture, answer WHOLE.")
+# The second question of where, put to the part once it is cut out. Asked the
+# make of an exhaust, the eyes box the exhaust; what answers the question is
+# a badge a tenth of its length, and at the size the whole exhaust is shown
+# the name under that badge is a few specks. They are honest about specks
+# until pressed ("spell out the letters under it"), and then they spelled out
+# a name it was not, nine letters of it. Shown the badge by itself, four times
+# the size, they said six times in six that they could not make out one
+# letter: what is too small invites a guess, what is large and blurred does
+# not. So the closer look goes to the mark that would answer, where there is
+# one and it is small.
+SEE_MARK = ("Do not answer it. If what would answer it is a name, lettering, a logo, a label "
+            "or a badge to be seen in this picture, say only where that is: " + SEE_BOX
+            + " If nothing of that kind would answer it, or none is to be seen, answer NONE.")
 CLOSER = ("Enlarged, the part of the picture the message is about shows this, which counts "
           "for more than the look at the whole: ")
 PART_GROW = 0.6             # room left around the thing, as a share of its own size
-PART_LEAST = 0.22           # the least of the picture a closer look takes in, each way
+PART_LEAST = 0.16           # the least of the picture a closer look takes in, each way
 PART_MOST = 0.5             # more of the picture than this, each way, is seen well enough whole
-PART_EDGE = 1024            # the long side a part is enlarged (or reduced) to
+PART_EDGE = 768             # the long side a part is enlarged (or reduced) to: three seconds to read
+PART_ZOOM = 4.5             # a mark is enlarged this many times at most: beyond it there is only blur
+MARK_GAIN = 1.5             # a cut around the mark is worth making if it enlarges this much more
 CUT_MOST = 50_000_000       # pixels: more than any camera here makes, and enough to hold
 
 
-def where(image: bytes, question: str, earlier=()) -> tuple | None:
+def where(image: bytes, question: str, earlier=(), mark: bool = False) -> tuple | None:
     """Where in a picture the thing a message asks about is: the edges of a
     box around it (left, top, right, bottom) as shares of the picture's
     width and height, or None if the message is about the whole of it, or
-    the eyes gave no box."""
+    the eyes gave no box. With `mark` it is the name, lettering or badge
+    that would answer the message that is asked for, not the thing."""
     q, said = said_so_far(question, earlier)
     if not q:
         return None
-    got = eyes_asked(image, said + f"Their message now: {q}\n" + SEE_WHERE, 24)
+    got = eyes_asked(image, said + f"Their message now: {q}\n" + (SEE_MARK if mark else SEE_WHERE), 24)
     n = [int(x) / 1000 for x in re.findall(r"\d{1,4}", got)[:4]]
     if len(n) != 4 or max(n) > 1 or n[0] >= n[2] or n[1] >= n[3]:
         return None
@@ -1790,23 +1809,52 @@ def fitted(image: bytes, edge: int = 0) -> bytes:
                              PILImage.LANCZOS))
 
 
-def part_of(im, box) -> bytes:
+def part_of(im, box, tight: bool = False) -> tuple[bytes, tuple]:
     """The part of an opened picture inside a box (shares of its width and
-    height), with room around it, as a JPEG with PART_EDGE on its long side.
-    Nothing if there is no box, or it takes in most of the picture anyway."""
+    height), with room around it, as a JPEG with PART_EDGE on its long side,
+    and where that part lies in the picture (left, top, width, height, as
+    shares). A part takes in a fair piece of the picture (PART_LEAST) unless
+    it is `tight`, cut around a mark: then it is as small as enlarging still
+    makes sense (PART_ZOOM). Nothing if there is no box, or it takes in most
+    of the picture anyway."""
     if im is None or not box:
-        return b""
-    wide = max((box[2] - box[0]) * (1 + PART_GROW), PART_LEAST)
-    high = max((box[3] - box[1]) * (1 + PART_GROW), PART_LEAST)
-    if max(wide, high) >= PART_MOST:
-        return b""
+        return b"", ()
     w, h = im.size
-    left = min(max(0.0, (box[0] + box[2]) / 2 - wide / 2), 1 - wide) * w
-    top = min(max(0.0, (box[1] + box[3]) / 2 - high / 2), 1 - high) * h
-    part = im.crop((round(left), round(top), round(left + wide * w), round(top + high * h)))
+    least = (PART_EDGE / PART_ZOOM / w, PART_EDGE / PART_ZOOM / h) if tight else (PART_LEAST, PART_LEAST)
+    wide = min(1.0, max((box[2] - box[0]) * (1 + PART_GROW), least[0]))
+    high = min(1.0, max((box[3] - box[1]) * (1 + PART_GROW), least[1]))
+    if max(wide, high) >= PART_MOST:
+        return b"", ()
+    left = min(max(0.0, (box[0] + box[2]) / 2 - wide / 2), 1 - wide)
+    top = min(max(0.0, (box[1] + box[3]) / 2 - high / 2), 1 - high)
+    part = im.crop((round(left * w), round(top * h), round((left + wide) * w), round((top + high) * h)))
     k = PART_EDGE / max(part.size)
-    return as_jpeg(part.resize((max(1, round(part.width * k)), max(1, round(part.height * k))),
-                               PILImage.LANCZOS))
+    return (as_jpeg(part.resize((max(1, round(part.width * k)), max(1, round(part.height * k))),
+                                PILImage.LANCZOS)), (left, top, wide, high))
+
+
+def closest(im, box, question: str, earlier, where) -> bytes:
+    """The part of a picture to look closer at for a message, given the box
+    around the thing it asks about: that part, or, where a name or a badge
+    on it is what would answer the message and is small, a tighter part
+    around that. Nothing if the box takes in most of the picture."""
+    part, lies = part_of(im, box)
+    if not part:
+        return b""
+    try:
+        mark = where(part, question, earlier, True)
+    except Exception as e:      # noqa: BLE001 - the part as it is, then
+        log(f"could not ask where on the part to look closer still: {type(e).__name__}: {e}")
+        mark = None
+    if mark:
+        # The mark's box is in shares of the part: put it in shares of the picture.
+        box = (lies[0] + mark[0] * lies[2], lies[1] + mark[1] * lies[3],
+               lies[0] + mark[2] * lies[2], lies[1] + mark[3] * lies[3])
+        nearer, at = part_of(im, box, True)
+        if nearer and max(lies[2] * im.width, lies[3] * im.height) >= MARK_GAIN * max(
+                at[2] * im.width, at[3] * im.height):
+            return nearer
+    return part
 
 
 def looked_at(image: bytes, question: str = "", earlier=(), full: bytes = b"",
@@ -1819,35 +1867,43 @@ def looked_at(image: bytes, question: str = "", earlier=(), full: bytes = b"",
     seen the whole already, only the part. `see` and `where` are the eyes,
     replaceable in tests."""
     see, where = see or globals()["see"], where or globals()["where"]
-    part = b""
+    whole: dict = {}
+
+    def all_of_it() -> None:
+        try:
+            whole["saw"] = see(image, question, earlier)
+        except Exception as e:  # noqa: BLE001 - said by whoever waits for it
+            whole["failed"] = e
+
     # The picture is opened before anything is asked: one that cannot be cut
     # is not asked about, and costs nothing.
     im = opened(full or image) if " ".join(str(question or "").split()) else None
-    if im is not None:
-        try:
-            part = part_of(im, where(image, question, earlier))
-        except Exception as e:  # noqa: BLE001 - not knowing where is no reason not to look
-            log(f"could not find the part of a picture to look closer at: {type(e).__name__}: {e}")
-    if not part:
+    if im is None:
         return see(image, question, earlier)
-    closer: dict = {}
-
-    def close() -> None:
-        try:
-            closer["saw"] = see(part, question, earlier, True)
-        except Exception as e:  # noqa: BLE001 - the look at the whole still stands
-            log(f"could not look closer at part of a picture: {type(e).__name__}: {e}")
-
-    if not first:
-        close()
-        return CLOSER + closer["saw"] if closer.get("saw") else see(image, question, earlier)
-    t = threading.Thread(target=close, daemon=True)
-    t.start()
+    # On a first look the whole is looked at while the part is being found.
+    # The question of where comes before either: it reads the picture, and
+    # the look at the whole then has it read already.
+    box = None
     try:
-        whole = see(image, question, earlier)
-    finally:
+        box = where(image, question, earlier)
+    except Exception as e:      # noqa: BLE001 - not knowing where is no reason not to look
+        log(f"could not find the part of a picture to look closer at: {type(e).__name__}: {e}")
+    t = threading.Thread(target=all_of_it, daemon=True)
+    if first:
+        t.start()
+    part, closer = b"", ""
+    try:
+        part = closest(im, box, question, earlier, where) if box else b""
+        if part:
+            closer = see(part, question, earlier, True)
+    except Exception as e:      # noqa: BLE001 - the look at the whole still stands
+        log(f"could not look closer at part of a picture: {type(e).__name__}: {e}")
+    if first:
         t.join(EYES_TIMEOUT_S)
-    return whole + (f"\n\n{CLOSER}{closer['saw']}" if closer.get("saw") else "")
+        if "saw" not in whole:
+            raise whole.get("failed") or TimeoutError("the look at the picture did not come back")
+        return whole["saw"] + (f"\n\n{CLOSER}{closer}" if closer else "")
+    return CLOSER + closer if closer else see(image, question, earlier)
 
 
 def tool_look(question: str = "") -> str:
@@ -2837,8 +2893,9 @@ LOOK_ASKED = (
     "the exchange before. A message that speaks of the picture or the photo and asks what "
     "is in it is about it, whatever the exchange before was about. It does not when the "
     "message asks for the picture to be changed or for a new picture, asks for something "
-    "to be looked up or searched for, asks what a thing costs, where to buy it or what its "
-    "reviews say, thanks, chats, or is about anything other than what the picture shows. "
+    "to be looked up or searched for, asks what a thing costs, where to buy it, what its "
+    "reviews say, or who makes or uses something that the message itself describes, thanks, "
+    "chats, or is about anything other than what the picture shows. "
     "Answer with the single word LOOK or the single word NO.")
 LOOKED = (
     "[This program has looked at the picture again for this message, with the person's own "
@@ -2847,6 +2904,16 @@ LOOKED = (
     "name no make, name or detail that the look did not read. Only if it does not show "
     "what the person asked about or says is there: tell them plainly that you cannot see "
     "that in this picture, and that a closer photo of that part would settle it.]")
+# The same, where the look was at the whole picture and not at a part of it
+# enlarged. Told that such a look counted for more, he took back a badge he
+# had made out in a closer look one turn before: "I cannot see that logo".
+LOOKED_WHOLE = (
+    "[This program has looked at the picture again for this message, with the person's own "
+    "words for the question: at the whole of it, no closer than your first look. What was "
+    "seen follows, as a look you took. It adds to what you have seen and takes nothing "
+    "back: whatever a closer look at a part made out earlier in this conversation still "
+    "stands. Answer in a sentence or two from all you have seen, and name no make, name or "
+    "detail that no look read.]")
 
 
 def last_exchange(history: list[dict]) -> tuple[str, str]:
@@ -3829,7 +3896,7 @@ class Pipeline:
                     log(f"asked about the picture: looked at again in {time.time() - began:.1f} s"
                         + (", closer at part of it" if CLOSER in found else "")
                         + ", before he answers")
-                    told = LOOKED
+                    told = LOOKED if CLOSER in found else LOOKED_WHOLE
                 remember(call, found)
                 msgs[-1] = put()
                 looked = [{"role": "assistant", "content": "", "tool_calls": [call]},

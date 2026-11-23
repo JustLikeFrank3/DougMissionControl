@@ -1381,12 +1381,12 @@ check("a picture's size is read from its header, whatever kind it is",
 
 print("-- a closer look: the part of a picture a message is about, enlarged --")
 ASKED_WHERE, LOOKED_AT = [], []
-ZOOM = {"box": (0.62, 0.36, 0.76, 0.46), "blind": False}
+ZOOM = {"box": (0.62, 0.36, 0.76, 0.46), "mark": None, "blind": False}
 
 
-def zoom_where(image, question, earlier=()):
-    ASKED_WHERE.append((voice.picture_size(image), question, list(earlier)))
-    return ZOOM["box"]
+def zoom_where(image, question, earlier=(), mark=False):
+    ASKED_WHERE.append((voice.picture_size(image), question, list(earlier)) + (("mark",) if mark else ()))
+    return ZOOM["mark"] if mark else ZOOM["box"]
 
 
 def zoom_see(image, question="", earlier=(), part=False):
@@ -1408,6 +1408,11 @@ for reply in ("620 365 750 465", "[620, 365, 750, 465]", "WHOLE", "", "The muffl
     answers.append(voice.where(PNG, "What is  on the muffler?", ["Nice bike", "What is on the muffler?"]))
 check("where the thing asked about is: a box in thousandths of the picture's width and height, or nothing for the whole of it or an answer that is no box",
       answers, [(0.62, 0.365, 0.75, 0.465), (0.62, 0.365, 0.75, 0.465), None, None, None, None, None, (0.062, 0.036, 0.076, 0.046)])
+voice.eyes_asked = lambda image, words, max_tokens=0: (SAID_TO_EYES.append((words, max_tokens)), "400 400 500 500")[1]
+check("asked for the mark that would answer, it is the name, lettering or badge that is asked for, or NONE",
+      (voice.where(PNG, "What make is it?", [], True), "If what would answer it is a name, lettering, a logo, a label or a badge to be seen in this picture, "
+       "say only where that is: four whole numbers from 0 to 1000" in SAID_TO_EYES[-1][0], SAID_TO_EYES[-1][0].endswith("answer NONE.")),
+      ((0.4, 0.4, 0.5, 0.5), True, True))
 check("it is asked of the same picture as the look, with what the person said before, not to be answered, and for a few words",
       (SAID_TO_EYES[0][0].startswith("What the person said before this, oldest first, only so that you know what their message is about:\n- Nice bike\n"
                                      "Their message now: What is on the muffler?\nDo not answer it. Say only where in the picture"),
@@ -1431,21 +1436,37 @@ else:
     check("a photo bigger than the eyes are shown at once is made smaller for them, and one that is not is left as it came",
           (voice.picture_size(voice.fitted(BIG)), voice.fitted(SMALL) == SMALL, voice.fitted(jpeg_of(4000, 3000)) == jpeg_of(4000, 3000),
            voice.picture_size(voice.fitted(BIG, 640))), ((1280, 960), True, True, (640, 480)))
-    part = voice.part_of(voice.opened(BIG), (0.62, 0.36, 0.76, 0.46))
-    check("the part is cut from the photo as it was sent, with room around it, and enlarged; a box that takes in most of the picture is no part of it",
-          (voice.picture_size(part), voice.part_of(voice.opened(BIG), (0.1, 0.2, 0.6, 0.7)), voice.part_of(voice.opened(BIG), None),
-           voice.part_of(None, (0.62, 0.36, 0.76, 0.46)), voice.opened(jpeg_of(2560, 1920)), voice.opened(jpeg_of(20000, 20000))),
-          ((1024, 754), b"", b"", b"", None, None))
+    part, lies = voice.part_of(voice.opened(BIG), (0.62, 0.36, 0.76, 0.46))
+    check("the part is cut from the photo as it was sent, with room around it, and enlarged, and where it lies in the photo is kept; "
+          "a box that takes in most of the picture is no part of it",
+          (voice.picture_size(part), [round(x, 3) for x in lies], voice.part_of(voice.opened(BIG), (0.1, 0.2, 0.6, 0.7)),
+           voice.part_of(voice.opened(BIG), None), voice.part_of(None, (0.62, 0.36, 0.76, 0.46)), voice.opened(jpeg_of(2560, 1920)),
+           voice.opened(jpeg_of(20000, 20000))),
+          ((768, 411), [0.578, 0.33, 0.224, 0.16], (b"", ()), (b"", ()), (b"", ()), None, None))
     edge = voice.part_of(voice.opened(BIG), (0.95, 0.0, 1.0, 0.04))
-    check("a thing at the edge of the picture gets its part from inside the picture", voice.picture_size(edge), (1024, 768))
+    check("a thing at the edge of the picture gets its part from inside the picture",
+          (voice.picture_size(edge[0]), [round(x, 3) for x in edge[1]]), ((768, 575), [0.84, 0.0, 0.16, 0.16]))
+    tight, at = voice.part_of(voice.opened(BIG), (0.668, 0.394, 0.69, 0.41), True)
+    check("a part cut around a mark is as small as enlarging still makes sense: four and a half times, and no more",
+          (voice.picture_size(tight), round(at[2] * 2560), round(at[3] * 1920)), ((768, 764), 171, 171))
     ASKED_WHERE.clear(); LOOKED_AT.clear()
     got = voice.looked_at(voice.fitted(BIG), "What is on the muffler?", ["Nice bike"], BIG, True, zoom_see, zoom_where)
     check("a first look: where is asked of the picture as the eyes are shown it, and the whole and the part are both looked at",
           (got, ASKED_WHERE, sorted(LOOKED_AT, key=lambda x: x[3])),
           ("A motorcycle in a car park.\n\nEnlarged, the part of the picture the message is about shows this, which counts for more "
            "than the look at the whole: A name on the muffler.",
-           [((1280, 960), "What is on the muffler?", ["Nice bike"])],
-           [((1280, 960), "What is on the muffler?", ["Nice bike"], False), ((1024, 754), "What is on the muffler?", ["Nice bike"], True)]))
+           [((1280, 960), "What is on the muffler?", ["Nice bike"]), ((768, 411), "What is on the muffler?", ["Nice bike"], "mark")],
+           [((1280, 960), "What is on the muffler?", ["Nice bike"], False), ((768, 411), "What is on the muffler?", ["Nice bike"], True)]))
+    ZOOM["mark"] = (0.4, 0.4, 0.5, 0.5)
+    ASKED_WHERE.clear(); LOOKED_AT.clear()
+    voice.looked_at(voice.fitted(BIG), "What is on the muffler?", [], BIG, False, zoom_see, zoom_where)
+    check("where what would answer the message is a small mark on the thing, a name or a badge, the look goes to a tighter part around the mark",
+          ([x[0] for x in ASKED_WHERE], [(x[0], x[3]) for x in LOOKED_AT]), ([(1280, 960), (768, 411)], [((768, 764), True)]))
+    ZOOM["mark"] = (0.05, 0.1, 0.95, 0.9)
+    LOOKED_AT.clear()
+    voice.looked_at(voice.fitted(BIG), "What is on the muffler?", [], BIG, False, zoom_see, zoom_where)
+    check("a mark that fills the part already is looked at in the part as it is", [(x[0], x[3]) for x in LOOKED_AT], [((768, 411), True)])
+    ZOOM["mark"] = None
     LOOKED_AT.clear()
     got = voice.looked_at(voice.fitted(BIG), "And now?", [], BIG, False, zoom_see, zoom_where)
     check("a later look: he has seen the whole, so only the part is looked at", (got, [x[3] for x in LOOKED_AT]),
@@ -1490,7 +1511,27 @@ else:
     got = voice.tool_look("Look again")
     voice.TURN.ctx = None
     check("a second look cuts its part from the photo as it was sent", (got, LOOKED_AT),
-          (voice.CLOSER + "A name on the muffler.", [((1024, 754), "Look again", ["What is on the muffler?"], True)]))
+          (voice.CLOSER + "A name on the muffler.", [((768, 411), "Look again", ["What is on the muffler?"], True)]))
+    # The program's own second look, when it was a closer one, is handed over as counting for more; a look at the whole is not.
+    zp.glance = lambda said, before="", replied="": True
+    voice.TOOLS["look"] = (voice.tool_look, "Look again at the last picture in this conversation.", {"question": {"type": "string"}}, ["question"])
+    voice.offer_tools()
+    zllm = lambda messages: SHOWN.append(messages) or "It says so on the muffler."
+    zp.llm = lambda m: voice.llm(m, lambda msgs, tools=None: (SHOWN.append(msgs), {"content": "It says so on the muffler."})[1])
+    notes = []
+    for ZOOM["box"] in ((0.62, 0.36, 0.76, 0.46), None):
+        before = len(lines())
+        zp.say("Look at the muffler again", "phone")
+        until(lambda: zp.state == "idle" and len(lines()) >= before + 2)
+        told = next(m["content"] for m in reversed(SHOWN[-1]) if m["role"] == "user")
+        notes.append(("it counts for more than what you saw before" in told, "takes nothing back" in told,
+                      SHOWN[-1][-1]["content"].startswith(voice.LOOKED_UP + voice.CLOSER)))
+    check("a second look the program took: one at a part enlarged counts for more than what he saw before, one at the whole adds to it "
+          "and takes nothing back", notes, [(True, False, True), (False, True, False)])
+    ZOOM["box"] = (0.62, 0.36, 0.76, 0.46)
+    zp.glance, zp.llm = None, seeing_llm
+    del voice.TOOLS["look"]
+    voice.offer_tools()
     before = len(lines())
     zp.say("What is on the muffler?", "phone", image=SMALL)
     until(lambda: zp.state == "idle" and len(lines()) >= before + 2)
@@ -2249,7 +2290,9 @@ check("a message about the picture in the conversation: the program looks again 
 check("he is handed what was seen as a look he took, told what to do with it, and the look stays in the conversation",
       (NOW["said"][-1]["role"], "in a red collar with a brass tag" in NOW["said"][-1]["content"],
        "[This program has looked at the picture again for this message" in told_this_turn(),
-       "name no make, name or detail that the look did not read" in told_this_turn(),
+       "at the whole of it, no closer than your first look" in told_this_turn()
+       and "It adds to what you have seen and takes nothing back" in told_this_turn()
+       and "name no make, name or detail that no look read" in told_this_turn(),
        [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in nowp.history[-4:]],
        "[This program has looked" in nowp.history[-4]["content"]),
       ("tool", True, True, True, [("user", ""), ("assistant", "look"), ("tool", ""), ("assistant", "")], False))
