@@ -54,7 +54,7 @@ image model on this machine (IMAGE_URL) he can draw: the picture is kept
 here and its id goes out with his line in the transcript.
 
 It honours the contract douglas-agent.py documents:
-    VOICE_STATE_FILE   {"state", "satellite", "eyes", "ts", "last_turn", "heard"},
+    VOICE_STATE_FILE   {"state", "satellite", "eyes", "shot", "ts", "last_turn", "heard"},
                        rewritten atomically on every change and every
                        HEARTBEAT_S. "heard" is the last listen: its length,
                        level and word count, never the words.
@@ -90,6 +90,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+try:                        # Pillow, if it is installed: it lets him cut a part out of a
+    from PIL import Image as PILImage   # picture and look at it enlarged. Without it he
+except ImportError:         # sees as before, the whole picture at once and no closer.
+    PILImage = None
 
 E = os.environ.get
 PTT_HOST = E("VOICE_PTT_HOST", "0.0.0.0")
@@ -184,6 +189,8 @@ EYES_URL = E("EYES_URL", "").rstrip("/")
 EYES_MODEL = E("EYES_MODEL", "eyes")
 EYES_TIMEOUT_S = float(E("EYES_TIMEOUT_S", "90"))
 EYES_MAX_TOKENS = int(E("EYES_MAX_TOKENS", "600"))
+EYES_EDGE = int(E("EYES_EDGE", "1280"))     # the long side of what the eyes are shown at once
+EYES_SHOT = int(E("EYES_SHOT", "3072"))     # the long side a phone is asked for, when he can zoom
 MAX_IMAGE_BYTES = int(E("VOICE_MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
 # His hand: an image model behind stable-diffusion.cpp's server on this
 # machine (douglas-draw.service). A picture he makes is kept in PICTURES_DIR,
@@ -315,11 +322,13 @@ class StateFile:
         self.satellite = False
         self.last_turn: float | None = None
         self.eyes = False               # a vision model is configured
+        self.shot = 0                   # the long side of a photo he can use, if more than a screen sends
         self.heard: dict | None = None  # the last time it listened: how long, how loud, how many words
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict:
         return {"state": self.state, "satellite": self.satellite, "eyes": self.eyes,
+                "shot": self.shot,
                 "ts": time.time(), "last_turn": self.last_turn, "heard": self.heard}
 
     def update(self, **kw) -> None:
@@ -869,7 +878,9 @@ def system_prompt() -> str:
             "about the person's own life unless they say it is theirs. What you saw is "
             "all you know of a picture: a make, a name or a detail that your look did "
             "not give, you do not know, so say you cannot make it out in the picture "
-            "rather than supply one from memory. If the person "
+            "rather than supply one from memory. And that no name can be read on a "
+            "thing tells you nothing about who made it: do not call it original, "
+            "standard or the maker's own on that account. If the person "
             "speaks of a picture and no brackets say one came, none has arrived: say so. "
             "A picture the brackets say you could not look at, you have not seen: say "
             "so, and never describe it, not even as a joke."
@@ -1546,7 +1557,8 @@ def tool_read_page(url: str, find: str = "") -> str:
 
 # ── eyes: a picture, put into words ──────────────────────────────────────
 
-SEEN = {"image": b""}       # the last picture sent, kept for a second look
+SEEN = {"image": b"", "full": b""}   # the last picture, kept for a second look: as the eyes
+                                     # are shown it, and as it was sent if that was bigger
 # Short on purpose: every word of the answer is generated at reading speed,
 # and the person is waiting. The question steers what gets looked at.
 #
@@ -1559,9 +1571,13 @@ SEEN = {"image": b""}       # the last picture sent, kept for a second look
 # really written there they read every time, down to letters ten pixels
 # high. So they are told that a name is something read, never something
 # recognised, and that what cannot be read is to be called that: no name for
-# the blank pipes in 8 looks of 8. (Lettering too small to read, about seven
-# pixels, they still sometimes turn into a well-known name; no wording
-# changed that.) And asked nothing in particular they leave out what is
+# the blank pipes in 8 looks of 8. Marks too small or too broken to be
+# letters they turned into a well-known name all the same ("Akrapovic", in
+# three looks of three at one enlarged part) until they were told what makes
+# lettering unread: that they would be guessing at letters. Then: "there is
+# lettering on the side of the exhaust, but it is too blurred to read", three
+# of three, and the real names still read. It is rarer since, not gone. And
+# asked nothing in particular they leave out what is
 # faint: the same logo was read when the question was about the exhaust and
 # missing from a general description. So a question that leans on what was
 # said before ("try again") is put with what was said.
@@ -1572,8 +1588,10 @@ SEE_PROMPT = (
     "and badges on things, numbers and signs, and say what each is on. Name a make, a brand "
     "or a model only where you can read it in the picture, and say where it is written; "
     "where nothing readable says whose it is, say that no name can be read on it, and do "
-    "not name one from how it looks. If something you are asked about is too small, "
-    "blurred, hidden or turned away to make out, say that.")
+    "not name one from how it looks. Lettering that is blurred or broken, so that you "
+    "would be guessing at letters, is not read: say that there is lettering there you "
+    "cannot read, and give no name for it. If something you are asked about is too small, "
+    "hidden or turned away to make out, say that.")
 SEE_EARLIER = 3             # of the person's earlier messages go with a look, at most
 # With a picture that has just arrived they go along only where the message
 # leans on them: it is the same picture sent again, or it says little more
@@ -1609,18 +1627,33 @@ def said_before(history: list[dict], limit: int = SEE_EARLIER) -> list[str]:
     return out[::-1]
 
 
-def see_words(question: str = "", earlier=()) -> str:
+def said_so_far(question: str = "", earlier=()) -> tuple[str, str]:
+    """A question as the eyes are given it: the question itself, and before
+    it what the person said earlier, oldest first, if anything."""
+    q = " ".join(str(question or "").split())
+    before = [w for w in (" ".join(str(e or "").split()) for e in earlier or ()) if w and w != q]
+    return q, ("What the person said before this, oldest first, only so that you know what "
+               "their message is about:\n" + "\n".join(f"- {w}" for w in before) + "\n"
+               if before else "")
+
+
+def see_words(question: str = "", earlier=(), part: bool = False) -> str:
     """What the eyes are asked about a picture they have in front of them.
     `question` is what is asked of it now, `earlier` what the person said
-    before that, oldest first."""
-    q = " ".join(str(question or "").split())
+    before that, oldest first. `part` says that what they have is one part
+    of the person's picture, enlarged."""
+    q, said = said_so_far(question, earlier)
     if not q:
         return ("Describe the picture: what it shows, where it seems to be, any people or "
                 "animals and what they are doing.")
-    before = [w for w in (" ".join(str(e or "").split()) for e in earlier or ()) if w and w != q]
-    said = ("What the person said before this, oldest first, only so that you know what "
-            "their message is about:\n" + "\n".join(f"- {w}" for w in before) + "\n"
-            if before else "")
+    if part:
+        return ("This is one part of the picture the person sent, enlarged: the part their "
+                "message is about.\n" + said + f"Their message now: {q}\nAnswer what it "
+                "asks from this part, without repeating their words: read out any lettering, "
+                "name, logo or badge on the thing itself, exactly as written, and say where on "
+                "it that is. If they say something is there, say plainly whether you can see "
+                "it: never agree because they said so. If you still cannot make it out, say "
+                "so. Leave the rest of the picture out.")
     return (said + f"Their message now: {q}\nFirst answer what it asks about the picture, "
             "without repeating their words. If they say something is in the picture, look "
             "for it and say plainly whether you can see it: never agree because they said "
@@ -1630,8 +1663,8 @@ def see_words(question: str = "", earlier=()) -> str:
 SEE_HAVE = "I have the picture in front of me."
 
 
-def see(image: bytes, question: str = "", earlier=()) -> str:
-    """What is in a picture, in words, from the vision model.
+def eyes_asked(image: bytes, words: str, max_tokens: int = 0) -> str:
+    """One question put to the vision model about one picture.
 
     It is asked in four messages: how to look (the same every time), the
     picture by itself, a word of the eyes' own, and then the question. The
@@ -1646,19 +1679,175 @@ def see(image: bytes, question: str = "", earlier=()) -> str:
         raise RuntimeError("no vision model is set up")
     if not kind:
         raise ValueError("not a picture that can be opened (JPEG, PNG, GIF or BMP)")
-    payload = {"model": EYES_MODEL, "max_tokens": EYES_MAX_TOKENS, "stream": False,
+    payload = {"model": EYES_MODEL, "max_tokens": max_tokens or EYES_MAX_TOKENS, "stream": False,
                "temperature": 0.2, "messages": [
                    {"role": "system", "content": SEE_PROMPT},
                    {"role": "user", "content": [{"type": "image_url", "image_url": {
                        "url": f"data:{kind};base64," + base64.b64encode(image).decode()}}]},
                    {"role": "assistant", "content": SEE_HAVE},
-                   {"role": "user", "content": see_words(question, earlier)}]}
+                   {"role": "user", "content": words}]}
     req = urllib.request.Request(f"{EYES_URL}/v1/chat/completions",
                                  data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=EYES_TIMEOUT_S) as r:
         out = json.loads(r.read())
     return unthought(str(out["choices"][0]["message"].get("content") or "")).strip()
+
+
+def see(image: bytes, question: str = "", earlier=(), part: bool = False) -> str:
+    """What is in a picture, in words, from the vision model."""
+    return eyes_asked(image, see_words(question, earlier, part))
+
+
+# ── a closer look: the part a message is about, enlarged ─────────────────
+#
+# The photograph the rest of this was learned from was sent a third time, and
+# he missed the name on the exhaust a third time: "a black muffler with a
+# silver tip, no lettering", even told what word to look for. The muffler was
+# a tenth of the picture's width. The phone had made the photo small enough to
+# send quickly, 1280 pixels on its long side, and at that size the name was no
+# longer in it: no way of asking finds what is not there. A person looking at
+# the same photo on the phone spreads two fingers.
+#
+# So he does the same, where Pillow is installed to cut pictures with. The
+# phone is told it may send a bigger photo (EYES_SHOT, by way of the state
+# file). The eyes are still shown the whole of it no bigger than before
+# (EYES_EDGE), since what they take in at once is paid for by the pixel: six
+# seconds for 1280 by 960, four times that for twice the size. But they are
+# first asked where in the picture the thing the message asks about is, which
+# this model answers with a box in thousandths of the width and height, in a
+# second or two and to within a few percent on every test picture; and that
+# part is cut out of the photo as it was sent, with room around it, enlarged,
+# and looked at as a picture of its own. Without Pillow, or where the message
+# is about the picture as a whole, there is the one look, as before.
+
+SEE_WHERE = ("Do not answer it. Say only where in the picture the thing it asks about is: "
+             "four whole numbers from 0 to 1000 and nothing else, LEFT TOP RIGHT BOTTOM, the "
+             "edges of a box around that thing in thousandths of the picture's width and "
+             "height, measured from the left and from the top. If the message is about the "
+             "picture as a whole, or the thing is not in the picture, answer WHOLE.")
+CLOSER = ("Enlarged, the part of the picture the message is about shows this, which counts "
+          "for more than the look at the whole: ")
+PART_GROW = 0.6             # room left around the thing, as a share of its own size
+PART_LEAST = 0.22           # the least of the picture a closer look takes in, each way
+PART_MOST = 0.5             # more of the picture than this, each way, is seen well enough whole
+PART_EDGE = 1024            # the long side a part is enlarged (or reduced) to
+CUT_MOST = 50_000_000       # pixels: more than any camera here makes, and enough to hold
+
+
+def where(image: bytes, question: str, earlier=()) -> tuple | None:
+    """Where in a picture the thing a message asks about is: the edges of a
+    box around it (left, top, right, bottom) as shares of the picture's
+    width and height, or None if the message is about the whole of it, or
+    the eyes gave no box."""
+    q, said = said_so_far(question, earlier)
+    if not q:
+        return None
+    got = eyes_asked(image, said + f"Their message now: {q}\n" + SEE_WHERE, 24)
+    n = [int(x) / 1000 for x in re.findall(r"\d{1,4}", got)[:4]]
+    if len(n) != 4 or max(n) > 1 or n[0] >= n[2] or n[1] >= n[3]:
+        return None
+    return tuple(n)
+
+
+def can_cut(image: bytes) -> bool:
+    """Is this a picture a part can be cut out of here? Pillow is there, and
+    the picture is of a size that is safe to open."""
+    w, h = picture_size(image) if PILImage is not None else (0, 0)
+    return 0 < w * h <= CUT_MOST
+
+
+def opened(image: bytes):
+    """A picture, opened for cutting: None where that cannot be done (no
+    Pillow, too big, or not a picture it can read to the end)."""
+    if not can_cut(image):
+        return None
+    try:
+        im = PILImage.open(io.BytesIO(image))
+        im.load()
+        return im
+    except Exception:           # noqa: BLE001 - whatever is wrong with it, it is not cut
+        return None
+
+
+def as_jpeg(im) -> bytes:
+    out = io.BytesIO()
+    im.convert("RGB").save(out, "JPEG", quality=88)
+    return out.getvalue()
+
+
+def fitted(image: bytes, edge: int = 0) -> bytes:
+    """A picture no bigger than the eyes are shown at once: itself if it is
+    small enough already, or cannot be opened here."""
+    edge = edge or EYES_EDGE
+    if max(picture_size(image)) <= edge:
+        return image
+    im = opened(image)
+    if im is None:
+        return image
+    k = edge / max(im.size)
+    return as_jpeg(im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))),
+                             PILImage.LANCZOS))
+
+
+def part_of(im, box) -> bytes:
+    """The part of an opened picture inside a box (shares of its width and
+    height), with room around it, as a JPEG with PART_EDGE on its long side.
+    Nothing if there is no box, or it takes in most of the picture anyway."""
+    if im is None or not box:
+        return b""
+    wide = max((box[2] - box[0]) * (1 + PART_GROW), PART_LEAST)
+    high = max((box[3] - box[1]) * (1 + PART_GROW), PART_LEAST)
+    if max(wide, high) >= PART_MOST:
+        return b""
+    w, h = im.size
+    left = min(max(0.0, (box[0] + box[2]) / 2 - wide / 2), 1 - wide) * w
+    top = min(max(0.0, (box[1] + box[3]) / 2 - high / 2), 1 - high) * h
+    part = im.crop((round(left), round(top), round(left + wide * w), round(top + high * h)))
+    k = PART_EDGE / max(part.size)
+    return as_jpeg(part.resize((max(1, round(part.width * k)), max(1, round(part.height * k))),
+                               PILImage.LANCZOS))
+
+
+def looked_at(image: bytes, question: str = "", earlier=(), full: bytes = b"",
+              first: bool = True, see=None, where=None) -> str:
+    """What is seen in a picture, for a message: the whole of it, and where
+    the message is about one part of it, that part enlarged. `image` is the
+    picture as the eyes are shown it at once, `full` the same picture as it
+    was sent, if that was bigger: the part is cut from that. On a `first`
+    look both are looked at, at the same time; on a later one, where he has
+    seen the whole already, only the part. `see` and `where` are the eyes,
+    replaceable in tests."""
+    see, where = see or globals()["see"], where or globals()["where"]
+    part = b""
+    # The picture is opened before anything is asked: one that cannot be cut
+    # is not asked about, and costs nothing.
+    im = opened(full or image) if " ".join(str(question or "").split()) else None
+    if im is not None:
+        try:
+            part = part_of(im, where(image, question, earlier))
+        except Exception as e:  # noqa: BLE001 - not knowing where is no reason not to look
+            log(f"could not find the part of a picture to look closer at: {type(e).__name__}: {e}")
+    if not part:
+        return see(image, question, earlier)
+    closer: dict = {}
+
+    def close() -> None:
+        try:
+            closer["saw"] = see(part, question, earlier, True)
+        except Exception as e:  # noqa: BLE001 - the look at the whole still stands
+            log(f"could not look closer at part of a picture: {type(e).__name__}: {e}")
+
+    if not first:
+        close()
+        return CLOSER + closer["saw"] if closer.get("saw") else see(image, question, earlier)
+    t = threading.Thread(target=close, daemon=True)
+    t.start()
+    try:
+        whole = see(image, question, earlier)
+    finally:
+        t.join(EYES_TIMEOUT_S)
+    return whole + (f"\n\n{CLOSER}{closer['saw']}" if closer.get("saw") else "")
 
 
 def tool_look(question: str = "") -> str:
@@ -1669,7 +1858,8 @@ def tool_look(question: str = "") -> str:
         return "No picture has been sent in this conversation."
     ctx = getattr(TURN, "ctx", None) or {}
     q = " ".join(str(question or "").split())
-    return see(SEEN["image"], q, [w for w in ctx.get("said") or () if w != q])
+    return looked_at(SEEN["image"], q, [w for w in ctx.get("said") or () if w != q],
+                     SEEN.get("full") or b"", first=False)
 
 
 # ── a hand: words, put into a picture ────────────────────────────────────
@@ -1886,7 +2076,7 @@ def tool_draw(prompt: str = "", shape: str = "square") -> str:
     finally:
         ARTIST.release()
     ctx["picture"] = keep_picture(data)
-    SEEN["image"] = data                    # what he made is what "look" looks at now
+    SEEN.update(image=data, full=b"")       # what he made is what "look" looks at now
     # How long and how big: never what was asked for.
     log(f"drew a picture in {time.time() - started:.0f} s ({len(data) // 1024} KB, {shape})")
     where = ("The person is at DougVoice, which has no screen: tell them it is on the phone "
@@ -3263,7 +3453,7 @@ class Pipeline:
     def __init__(self, state: StateFile, transcript: Transcript, *, send,
                  snd_format=lambda: (22050, 2, 1), stt=stt, llm=llm, tts=tts,
                  linked=lambda: True, speaker=None, see=see, judge=None,
-                 wanted=None, glance=None) -> None:
+                 wanted=None, glance=None, where=None) -> None:
         self.st, self.tr = state, transcript
         self.send, self.snd_format, self.linked = send, snd_format, linked
         self.speaker = speaker          # real speakers elsewhere, when they are up
@@ -3272,6 +3462,7 @@ class Pipeline:
         self.judge = judge              # "was a change to the picture asked for?"; wants_change
         self.wanted = wanted            # "is this asking for the weather, the news?"; lookup_wanted
         self.glance = glance            # "does this take another look at the picture?"; look_wanted
+        self.where = where              # "where in the picture is what this asks about?"; where
         self.history: list[dict] = []
         self.last_exchange = 0.0
         self._lock = threading.Lock()
@@ -3571,18 +3762,25 @@ class Pipeline:
                         "was dropped and nothing was saved.]")
         earlier = said_before(self.history)     # what the person has been saying, for a look
         if image:
-            again = image == SEEN["image"] or len(said.split()) < 3 or bool(AGAIN.search(said))
-            SEEN["image"] = image                # kept for a second look
+            again = (image == (SEEN["full"] or SEEN["image"]) or len(said.split()) < 3
+                     or bool(AGAIN.search(said)))
+            # A photo bigger than the eyes are shown at once is kept as it
+            # came, to cut a closer look out of. What he is shown, and what an
+            # edit works on, is the smaller one.
+            full, image = image, fitted(image)
+            SEEN.update(image=image, full=full if full != image else b"")
             began = time.time()
             try:
-                saw = self.see(image, said, earlier if again else [])
+                saw = looked_at(image, said, earlier if again else [], SEEN["full"],
+                                see=self.see, where=self.where)
             except Exception as e:               # noqa: BLE001 — the eyes are another service
                 log(f"could not look at the picture: {e}")
                 saw = ""
             else:
                 # How big it was and how long it took: never what was in it.
-                log("looked at a picture (%dx%d, %d KB) in %.1f s"
-                    % (*picture_size(image), len(image) // 1024, time.time() - began))
+                log("looked at a picture (%dx%d, %d KB) in %.1f s%s"
+                    % (*picture_size(full), len(full) // 1024, time.time() - began,
+                       ", and closer at part of it" if CLOSER in saw else ""))
             said += ("\n\n[A picture came with this message. What you see in it: "
                      f"{saw}{kept_note(True)}]" if saw else
                      "\n\n[A picture came with this message, but you could not look at "
@@ -3628,8 +3826,9 @@ class Pipeline:
                     "name": "look", "arguments": json.dumps({"question": asked})}}
                 found = run_tool("look", {"question": asked}, quiet=True, theirs=True)
                 if found.startswith(LOOKED_UP):
-                    log(f"asked about the picture: looked at again in {time.time() - began:.1f} s, "
-                        "before he answers")
+                    log(f"asked about the picture: looked at again in {time.time() - began:.1f} s"
+                        + (", closer at part of it" if CLOSER in found else "")
+                        + ", before he answers")
                     told = LOOKED
                 remember(call, found)
                 msgs[-1] = put()
@@ -3822,7 +4021,7 @@ class Pipeline:
             news = ("[The edit you started is finished and the edited picture is on the "
                     "person's screens. It is now the picture that look and edit work on.]")
             if CONVO["epoch"] == epoch:
-                SEEN["image"] = data
+                SEEN.update(image=data, full=b"")
         finally:
             ARTIST.release()
         if CONVO["epoch"] == epoch:              # the conversation that asked is still going
@@ -3833,7 +4032,7 @@ class Pipeline:
         """The end of a conversation: what was said, the picture, the records
         that were read and any change still waiting all go together."""
         self.history = []
-        SEEN["image"] = b""
+        SEEN.update(image=b"", full=b"")
         CONVO.update(private=False, pending=None, news="", epoch=CONVO["epoch"] + 1)
 
     def _hush(self) -> None:
@@ -3981,6 +4180,7 @@ def main() -> None:
                     speaker=Speaker(SPEAKER_URL) if SPEAKER_URL else None)
     sat = Satellite(SAT_HOST, SAT_PORT, PIPE.satellite_event, PIPE.link)
     state.eyes = bool(EYES_URL)
+    state.shot = EYES_SHOT if EYES_URL and PILImage is not None and EYES_SHOT > EYES_EDGE else 0
     state.heartbeat()
 
     def beat() -> None:

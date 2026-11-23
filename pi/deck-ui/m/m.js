@@ -369,7 +369,10 @@ function paintAsk() {
   if (polled) {
     // The camera is offered once he has said he can see, and stays through a
     // lost link: a photo can be taken now and go when node1 is back.
-    if (agent) eyes = !!voice.eyes;
+    if (agent) {
+      eyes = !!voice.eyes;
+      shotEdge = Math.min(4096, Math.max(SHOT_EDGE, +voice.shot || 0));
+    }
     $('dgl-cam').hidden = !eyes;
   }
   // What stands between a question and Douglas, if anything. Before the
@@ -537,13 +540,21 @@ function dglNote(msg, ms) {
 // on the phone: a 12-megapixel original is megabytes he has no use for, and
 // redrawing it also turns whatever the phone shot (HEIC included) into JPEG.
 
-var SHOT_EDGE = 1280;            // longest side sent, in pixels
+//
+// How far down: to 1280 pixels on its long side, unless Douglas has said he
+// can make use of more (voice.shot). He can where he is able to cut a part
+// out of a photo and look at it enlarged, and what he cuts it from is what
+// arrives: a name on a muffler that takes up a tenth of the frame is gone at
+// 1280, and no closer look brings it back.
+
+var SHOT_EDGE = 1280;            // longest side sent, in pixels, unless he asks for more
+var shotEdge = SHOT_EDGE;        // what he has asked for, kept through a lost link
 
 function shrink(file) {
   return new Promise(function (resolve, reject) {
     var url = URL.createObjectURL(file), img = new Image();
     img.onload = function () {
-      var k = Math.min(1, SHOT_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+      var k = Math.min(1, shotEdge / Math.max(img.naturalWidth, img.naturalHeight));
       var c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(img.naturalWidth * k));
       c.height = Math.max(1, Math.round(img.naturalHeight * k));
@@ -621,7 +632,8 @@ function trySend() {
   var mine = ask;
   mine.flying = true;
   mine.last = now;
-  // A photo gets longer: it is a few hundred kilobytes to push through
+  // A photo gets longer: it is a few hundred kilobytes (a few megabytes,
+  // where Douglas has asked for a bigger one) to push through
   // whatever link the phone has, and deck-api then gives Douglas twenty
   // seconds to take it.
   post(mine.kind === 'voice' ? '/api/douglas/hear' : '/api/douglas/say', mine.body,

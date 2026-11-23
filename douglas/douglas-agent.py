@@ -31,8 +31,8 @@ because "idle" and "unknown" are different facts on the panel.
 
 The voice pipeline contract (whatever implements DougVoice's brain):
     VOICE_STATE_FILE   JSON {"state": "idle|listening|thinking|speaking",
-                             "satellite": bool, "eyes": bool, "ts": <epoch>,
-                             "last_turn": <epoch>}
+                             "satellite": bool, "eyes": bool, "shot": <pixels>,
+                             "ts": <epoch>, "last_turn": <epoch>}
                        rewritten on every change and at least every 10 s;
                        older than VOICE_STALE_S reads as no pipeline.
     TRANSCRIPT_FILE    JSONL, one {"ts", "who": "user|douglas", "text",
@@ -254,10 +254,14 @@ def voice_state() -> dict:
         return {"state": "absent", "satellite": False}
     if time.time() - float(v.get("ts") or 0) > VOICE_STALE_S:
         return {"state": "absent", "satellite": False}
-    heard = v.get("heard")
+    heard, shot = v.get("heard"), v.get("shot")
     return {"state": str(v.get("state") or "absent"),
             "satellite": bool(v.get("satellite")),
             "eyes": bool(v.get("eyes")),          # he can be sent a picture
+            # The long side of a photo he can make use of, where that is more
+            # than a screen sends by itself: he looks closer by cutting a part
+            # out of it. A number in a sane range, or nothing.
+            "shot": shot if isinstance(shot, int) and 1280 < shot <= 4096 else 0,
             "last_turn": v.get("last_turn"),
             # The last time he listened: how long, how loud, how many words.
             # What lets a panel say "heard nothing" instead of saying nothing.

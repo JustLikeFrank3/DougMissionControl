@@ -613,9 +613,11 @@ check("the eyes are told that a name is something read and never something recog
       [w in voice.SEE_PROMPT + voice.see_words("what is it?") for w in (
           "Name a make, a brand or a model only where you can read it in the picture",
           "say that no name can be read on it, and do not name one from how it looks",
-          "too small, blurred, hidden or turned away to make out, say that",
+          "Lettering that is blurred or broken, so that you would be guessing at letters, is not read",
+          "say that there is lettering there you cannot read, and give no name for it",
+          "too small, hidden or turned away to make out, say that",
           "say plainly whether you can see it: never agree because they said so",
-          "without repeating their words")], [True] * 5)
+          "without repeating their words")], [True] * 7)
 check("what the person has been saying: their own words from the last three turns, oldest first, without this program's notes",
       voice.said_before([
           {"role": "user", "content": "One?\n\n[It is Monday.]"}, {"role": "assistant", "content": "1"},
@@ -1024,6 +1026,10 @@ voice.MAX_IMAGE_BYTES = 8 * 1024 * 1024
 check("the agent tells the deck whether he can see",
       (agent.voice_state()["eyes"], voice.PIPE.st.update(eyes=True), agent.voice_state()["eyes"]),
       (False, None, True))
+check("and how big a photo he can make use of, where that is more than a screen sends by itself: a number in a sane range, or nothing",
+      [(voice.PIPE.st.update(shot=n), agent.voice_state()["shot"])[1] for n in (0, 3072, 99999, 640, "big", 2560.5)],
+      [0, 3072, 0, 0, 0, 0])
+voice.PIPE.st.update(shot=0)
 voice.EYES_URL = ""
 
 print("-- a recording from a phone, answered on the phone --")
@@ -1372,6 +1378,130 @@ check("a picture's size is read from its header, whatever kind it is",
           b"GIF89a" + (320).to_bytes(2, "little") + (200).to_bytes(2, "little"),
           b"BM" + b"\x00" * 16 + (800).to_bytes(4, "little") + (600).to_bytes(4, "little"), JPEG, b"hello")],
       [(1280, 960), (640, 480), (320, 200), (800, 600), (0, 0), (0, 0)])
+
+print("-- a closer look: the part of a picture a message is about, enlarged --")
+ASKED_WHERE, LOOKED_AT = [], []
+ZOOM = {"box": (0.62, 0.36, 0.76, 0.46), "blind": False}
+
+
+def zoom_where(image, question, earlier=()):
+    ASKED_WHERE.append((voice.picture_size(image), question, list(earlier)))
+    return ZOOM["box"]
+
+
+def zoom_see(image, question="", earlier=(), part=False):
+    LOOKED_AT.append((voice.picture_size(image), question, list(earlier), part))
+    if part and ZOOM["blind"]:
+        raise OSError("connection refused")
+    return "A name on the muffler." if part else "A motorcycle in a car park."
+
+
+check("with no question, or a picture that cannot be opened here, nobody is asked where to look and it is looked at once, whole",
+      (voice.looked_at(jpeg_of(2560, 1920), "What is on the muffler?", [], b"", True, zoom_see, zoom_where),
+       voice.looked_at(JPEG, "What is on the muffler?", [], b"", False, zoom_see, zoom_where), ASKED_WHERE, [x[3] for x in LOOKED_AT]),
+      ("A motorcycle in a car park.", "A motorcycle in a car park.", [], [False, False]))
+real_asked, SAID_TO_EYES = voice.eyes_asked, []
+answers = []
+for reply in ("620 365 750 465", "[620, 365, 750, 465]", "WHOLE", "", "The muffler is on the left.", "620 365 1750 465", "750 365 620 465",
+              "62 36 76 46"):
+    voice.eyes_asked = lambda image, words, max_tokens=0, reply=reply: (SAID_TO_EYES.append((words, max_tokens)), reply)[1]
+    answers.append(voice.where(PNG, "What is  on the muffler?", ["Nice bike", "What is on the muffler?"]))
+check("where the thing asked about is: a box in thousandths of the picture's width and height, or nothing for the whole of it or an answer that is no box",
+      answers, [(0.62, 0.365, 0.75, 0.465), (0.62, 0.365, 0.75, 0.465), None, None, None, None, None, (0.062, 0.036, 0.076, 0.046)])
+check("it is asked of the same picture as the look, with what the person said before, not to be answered, and for a few words",
+      (SAID_TO_EYES[0][0].startswith("What the person said before this, oldest first, only so that you know what their message is about:\n- Nice bike\n"
+                                     "Their message now: What is on the muffler?\nDo not answer it. Say only where in the picture"),
+       "four whole numbers from 0 to 1000" in SAID_TO_EYES[0][0], SAID_TO_EYES[0][1], voice.where(PNG, "  ")), (True, True, 24, None))
+voice.eyes_asked = real_asked
+check("the words for a part say that it is a part, enlarged, and ask only about the thing itself",
+      [w in voice.see_words("What is on the muffler?", ["Nice bike"], True) for w in (
+          "This is one part of the picture the person sent, enlarged: the part their message is about.\nWhat the person said before this",
+          "- Nice bike\nTheir message now: What is on the muffler?\n", "read out any lettering, name, logo or badge on the thing itself",
+          "never agree because they said so", "Leave the rest of the picture out.")], [True] * 5)
+if voice.PILImage is None:
+    print("  SKIP  Pillow is not installed here: the closer look itself is not exercised")
+else:
+    def photo(w, h):
+        im = voice.PILImage.new("RGB", (w, h), (40, 90, 160))
+        for x in range(0, w, 64):                           # something in it, so that it is not one flat colour
+            im.paste((200, 200, 60), (x, h // 3, x + 20, h // 3 + 20))
+        return voice.as_jpeg(im)
+
+    BIG, SMALL = photo(2560, 1920), photo(1024, 768)
+    check("a photo bigger than the eyes are shown at once is made smaller for them, and one that is not is left as it came",
+          (voice.picture_size(voice.fitted(BIG)), voice.fitted(SMALL) == SMALL, voice.fitted(jpeg_of(4000, 3000)) == jpeg_of(4000, 3000),
+           voice.picture_size(voice.fitted(BIG, 640))), ((1280, 960), True, True, (640, 480)))
+    part = voice.part_of(voice.opened(BIG), (0.62, 0.36, 0.76, 0.46))
+    check("the part is cut from the photo as it was sent, with room around it, and enlarged; a box that takes in most of the picture is no part of it",
+          (voice.picture_size(part), voice.part_of(voice.opened(BIG), (0.1, 0.2, 0.6, 0.7)), voice.part_of(voice.opened(BIG), None),
+           voice.part_of(None, (0.62, 0.36, 0.76, 0.46)), voice.opened(jpeg_of(2560, 1920)), voice.opened(jpeg_of(20000, 20000))),
+          ((1024, 754), b"", b"", b"", None, None))
+    edge = voice.part_of(voice.opened(BIG), (0.95, 0.0, 1.0, 0.04))
+    check("a thing at the edge of the picture gets its part from inside the picture", voice.picture_size(edge), (1024, 768))
+    ASKED_WHERE.clear(); LOOKED_AT.clear()
+    got = voice.looked_at(voice.fitted(BIG), "What is on the muffler?", ["Nice bike"], BIG, True, zoom_see, zoom_where)
+    check("a first look: where is asked of the picture as the eyes are shown it, and the whole and the part are both looked at",
+          (got, ASKED_WHERE, sorted(LOOKED_AT, key=lambda x: x[3])),
+          ("A motorcycle in a car park.\n\nEnlarged, the part of the picture the message is about shows this, which counts for more "
+           "than the look at the whole: A name on the muffler.",
+           [((1280, 960), "What is on the muffler?", ["Nice bike"])],
+           [((1280, 960), "What is on the muffler?", ["Nice bike"], False), ((1024, 754), "What is on the muffler?", ["Nice bike"], True)]))
+    LOOKED_AT.clear()
+    got = voice.looked_at(voice.fitted(BIG), "And now?", [], BIG, False, zoom_see, zoom_where)
+    check("a later look: he has seen the whole, so only the part is looked at", (got, [x[3] for x in LOOKED_AT]),
+          (voice.CLOSER + "A name on the muffler.", [True]))
+    ZOOM["box"] = None
+    LOOKED_AT.clear()
+    got = voice.looked_at(voice.fitted(BIG), "Where was this taken?", [], BIG, True, zoom_see, zoom_where)
+    check("a message about the whole picture is answered from the whole of it", (got, [x[3] for x in LOOKED_AT]), ("A motorcycle in a car park.", [False]))
+    ZOOM.update(box=(0.62, 0.36, 0.76, 0.46), blind=True)
+    journal, real_err = io.StringIO(), sys.stderr
+    sys.stderr = journal
+    got = (voice.looked_at(voice.fitted(BIG), "What is on the muffler?", [], BIG, True, zoom_see, zoom_where),
+           voice.looked_at(voice.fitted(BIG), "What is on the muffler?", [], BIG, False, zoom_see, zoom_where),
+           voice.looked_at(voice.fitted(BIG), "What is on the muffler?", [], BIG, True, zoom_see, lambda *a: 1 / 0))
+    sys.stderr = real_err
+    check("a closer look that fails, or no answer about where, leaves the look at the whole standing, and the journal says which",
+          (got, journal.getvalue().count("could not look closer at part of a picture: OSError"),
+           journal.getvalue().count("could not find the part of a picture to look closer at: ZeroDivisionError")),
+          (("A motorcycle in a car park.",) * 3, 2, 1))
+    ZOOM["blind"] = False
+    # In a turn: the photo is kept as it came, he is shown the smaller one, and a second look cuts from the one that was kept.
+    voice.EYES_URL = "http://eyes.invalid"
+    zp = voice.Pipeline(st, voice.Transcript(transcript_file), send=sender, stt=fake_stt, llm=seeing_llm, tts=fake_tts,
+                        see=zoom_see, where=zoom_where)
+    kept_see, kept_where, voice.see, voice.where = voice.see, voice.where, zoom_see, zoom_where
+    journal, real_err = io.StringIO(), sys.stderr
+    sys.stderr = journal
+    before = len(lines())
+    zp.say("What is on the muffler?", "phone", image=BIG)
+    until(lambda: zp.state == "idle" and len(lines()) >= before + 2)
+    sys.stderr = real_err
+    check("a big photo in a turn: he is told what both looks saw, what an edit and a second look start from is the smaller picture, "
+          "and the one that was sent is kept beside it",
+          ("What you see in it: A motorcycle in a car park.\n\nEnlarged, the part of the picture the message is about shows this, which counts "
+           "for more than the look at the whole: A name on the muffler. The picture itself has arrived" in SHOWN[-1][-1]["content"],
+           voice.picture_size(voice.SEEN["image"]), voice.SEEN["full"] == BIG), (True, (1280, 960), True))
+    check("the journal says how big the photo was as it came, and that he looked closer: never at what",
+          ("looked at a picture (2560x1920, " in journal.getvalue(), ", and closer at part of it" in journal.getvalue(),
+           "muffler" in journal.getvalue().lower()), (True, True, False))
+    LOOKED_AT.clear()
+    voice.TURN.ctx = {"said": ["What is on the muffler?", "Look again"]}
+    got = voice.tool_look("Look again")
+    voice.TURN.ctx = None
+    check("a second look cuts its part from the photo as it was sent", (got, LOOKED_AT),
+          (voice.CLOSER + "A name on the muffler.", [((1024, 754), "Look again", ["What is on the muffler?"], True)]))
+    before = len(lines())
+    zp.say("What is on the muffler?", "phone", image=SMALL)
+    until(lambda: zp.state == "idle" and len(lines()) >= before + 2)
+    check("a photo that is small enough already is kept once", (voice.SEEN["image"] == SMALL, voice.SEEN["full"]), (True, b""))
+    zp.say("What is on the muffler?", "phone", image=BIG)
+    until(lambda: zp.state == "idle" and voice.SEEN["full"] == BIG)
+    zp.forget()
+    check("a new conversation forgets the photo in both sizes", (voice.SEEN["image"], voice.SEEN["full"]), (b"", b""))
+    voice.see, voice.where = kept_see, kept_where
+    voice.EYES_URL = ""
+check("the state file can say how big a photo he can use", (voice.StateFile(os.path.join(ddir, "shot.json")).snapshot()["shot"]), 0)
 check("an edit keeps the picture's shape, a megapixel at most, each side a multiple of sixteen",
       [voice.edit_size(*x) for x in ((1280, 960), (4032, 3024), (640, 480), (800, 300), (100, 100), (0, 0))],
       ["1024x768", "1024x768", "640x480", "800x304", "256x256", "1024x1024"])

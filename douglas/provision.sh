@@ -81,7 +81,7 @@ if [ "${SKIP_APT:-0}" != 1 ]; then
         spirv-headers glslang-tools \
         build-essential cmake git curl ca-certificates pkg-config \
         libcurl4-openssl-dev libssl-dev \
-        python3 python3-venv python3-pip \
+        python3 python3-venv python3-pip python3-pil \
         lm-sensors
 fi
 
