@@ -2000,7 +2000,11 @@ class FakeNet(BaseHTTPRequestHandler):
         NET["seen"].append(("GET", path, dict(self.headers), q))
         if path.startswith("/res/v1/"):
             if self.headers.get("X-Subscription-Token") != "k" * 20 or NET["mode"] == "bad key":
-                return self.reply(401, {"error": {"code": "SUBSCRIPTION_TOKEN_INVALID"}})
+                # Word for word what the real service answered a made-up key with, 422 and all.
+                return self.reply(422, {"error": {"code": "SUBSCRIPTION_TOKEN_INVALID", "detail": "The provided subscription token is invalid.",
+                                                  "meta": {"component": "authentication"}, "status": 422}, "type": "ErrorResponse"})
+            if NET["mode"] == "bad key, said plainly":
+                return self.reply(401, {})
             if NET["mode"] == "spent":
                 return self.reply(429, {"error": {"code": "RATE_LIMITED"}})
             if path.endswith("/llm/context"):
@@ -2096,9 +2100,13 @@ check("a key whose plan has no passages gets the ordinary results instead",
       (["/res/v1/llm/context", "/res/v1/web/search"], {"q": "sony wh-1000xm6 review", "count": "6", "extra_snippets": "true"},
        "1. XM6 review (plain.example, 2026-06-01) https://plain.example/xm6\n   A good pair. Comfortable for hours. The case is large."))
 NET["mode"] = "bad key"
+NET["seen"].clear()
 check("a key the service refuses is said to be refused, and he is told not to answer as if he had searched",
       voice.tool_search("x"), "The web could not be searched: it refused the key. Tell the person that, and do not answer "
                               "from memory as if you had searched.")
+check("the service says so with a 422 and a word of its own, and is not asked a second time", [x[1] for x in NET["seen"]], ["/res/v1/llm/context"])
+NET["mode"] = "bad key, said plainly"
+check("a plain 401 is a refused key too", "it refused the key." in voice.tool_search("x"), True)
 NET["mode"] = "spent"
 check("and one that has run out, that it has run out",
       "too many requests, or the allowance is used up" in voice.tool_search("x"), True)
@@ -2176,6 +2184,11 @@ sys.stderr = real_err
 check("the journal says that he searched, how much came back and how long it took",
       ("searched the web: 2 results in " in journal.getvalue(), "searched Reddit: 3 threads, 2 read, in " in journal.getvalue(),
        "read a Reddit thread: 4 comments in " in journal.getvalue()), (True, True, True))
+check("and when the search service said no, which no it was, in that service's own word",
+      [w in journal.getvalue() for w in ("the web search was refused: HTTP 422 SUBSCRIPTION_TOKEN_INVALID", "the web search was refused: HTTP 401\n",
+                                         "the web search was refused: HTTP 429 RATE_LIMITED",
+                                         "the web search gave no passages (HTTP 403 OPTION_NOT_IN_PLAN): the ordinary results, then")],
+      [True] * 4)
 check("never what for, and never a key",
       [w in journal.getvalue() for w in ("sony", "xm6", "zxqv", "k" * 20, "sec1", "tok1")], [False] * 6)
 net.shutdown()

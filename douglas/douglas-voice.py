@@ -1204,12 +1204,36 @@ def api_json(url: str, headers: dict, data: bytes | None = None, limit: int = 2_
         return json.loads(r.read(limit).decode(r.headers.get_content_charset() or "utf-8", "replace"))
 
 
-def refused(service: str, e: urllib.error.HTTPError) -> str:
+def error_code(e: urllib.error.HTTPError) -> str:
+    """A service's own word for what went wrong, where the body of its refusal
+    gives one ({"error": {"code": "SUBSCRIPTION_TOKEN_INVALID", ...}}). Cut
+    down to capitals: it is someone else's text, and it goes in the journal."""
+    try:
+        err = json.loads(e.read(4000).decode("utf-8", "replace")).get("error")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return re.sub(r"[^A-Z_]", "", str(err.get("code") or "").upper())[:40] if isinstance(err, dict) else ""
+
+
+def said_no(e: urllib.error.HTTPError, code: str = "") -> str:
+    """Which no it was: "key" (the key is not known), "limit" (too many
+    requests, or the allowance is spent), or "" for anything else. The search
+    service answers a key it does not know with 422, where 401 would be
+    expected, and says which no in the body: `code` is its word for it."""
+    if e.code == 401 or "TOKEN" in code or "SUBSCRIPTION" in code:
+        return "key"
+    if e.code == 429 or "RATE" in code or "QUOTA" in code:
+        return "limit"
+    return ""
+
+
+def refused(service: str, e: urllib.error.HTTPError, code: str = "") -> str:
     """What the model is told when a service that wants a key says no."""
-    why = {401: "it refused the key",
-           403: "it refused the key, or the key is not allowed to do this",
-           429: "it says there have been too many requests, or the allowance is used up",
-           }.get(e.code, f"it answered with error {e.code}")
+    why = {"key": "it refused the key",
+           "limit": "it says there have been too many requests, or the allowance is used up",
+           }.get(said_no(e, code)) or (
+               "it refused the key, or the key is not allowed to do this" if e.code == 403
+               else f"it answered with error {e.code}")
     return (f"{service} could not be searched: {why}. Tell the person that, and do not answer "
             "from memory as if you had searched.")
 
@@ -1232,15 +1256,20 @@ def tool_search(query: str = "") -> str:
                  for g in ((got.get("grounding") or {}).get("generic") or []) if isinstance(g, dict)]
         dates = got.get("sources") if isinstance(got.get("sources"), dict) else {}
     except urllib.error.HTTPError as e:
-        if e.code in (401, 429):
-            return refused("The web", e)
+        code = error_code(e)
+        if said_no(e, code):            # the key, or the allowance: asking again changes nothing
+            log(f"the web search was refused: HTTP {e.code} {code}".rstrip())
+            return refused("The web", e, code)
+        log(f"the web search gave no passages (HTTP {e.code} {code}".rstrip() + "): the ordinary results, then")
     if found is None:
         # A key whose plan has no such answer: the ordinary list of results.
         try:
             q = urllib.parse.urlencode({"q": query, "count": 6, "extra_snippets": "true"})
             got = api_json(f"{SEARCH_URL}/web/search?{q}", key)
         except urllib.error.HTTPError as e:
-            return refused("The web", e)
+            code = error_code(e)
+            log(f"the web search was refused: HTTP {e.code} {code}".rstrip())
+            return refused("The web", e, code)
         found = [(r.get("title"), r.get("url"),
                   [r.get("description")] + list(r.get("extra_snippets") or []))
                  for r in ((got.get("web") or {}).get("results") or []) if isinstance(r, dict)]
