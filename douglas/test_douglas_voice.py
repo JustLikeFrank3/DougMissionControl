@@ -515,8 +515,10 @@ check("the eyes are asked, with the question", SAW, [(len(JPEG), "What is this?"
 check("the model gets what was seen along with the words",
       SHOWN[-1][-1]["content"].startswith(
           "What is this?\n\n[A picture came with this message. What you see in it: "
-          "A tabby cat asleep on a laptop keyboard. The picture itself has arrived and is kept: "
-          "the look tool looks at it again.]\n\n[It is "), True)
+          "A tabby cat asleep on a laptop keyboard. That is all you know of the picture. Name no make, name or detail that is "
+          "not in it, and take no logo or badge for a maker's by its look: what you remember of whose logo looks like what is "
+          "often wrong. Say what it looks like, and that you cannot tell whose it is without a name to read. "
+          "The picture itself has arrived and is kept: the look tool looks at it again.]\n\n[It is "), True)
 check("he is told he can see, and how", "You can see pictures that are sent to you." in SHOWN[-1][0]["content"], True)
 check("the transcript marks the picture and keeps the reply", [(t["who"], t["text"]) for t in lines()[-2:]],
       [("user", "[picture] What is this?"), ("douglas", "That cat has claimed your laptop.")])
@@ -1501,7 +1503,7 @@ else:
     check("a big photo in a turn: he is told what both looks saw, what an edit and a second look start from is the smaller picture, "
           "and the one that was sent is kept beside it",
           ("What you see in it: A motorcycle in a car park.\n\nEnlarged, the part of the picture the message is about shows this, which counts "
-           "for more than the look at the whole: A name on the muffler. The picture itself has arrived" in SHOWN[-1][-1]["content"],
+           "for more than the look at the whole: A name on the muffler. That is all you know of the picture." in SHOWN[-1][-1]["content"],
            voice.picture_size(voice.SEEN["image"]), voice.SEEN["full"] == BIG), (True, (1280, 960), True))
     check("the journal says how big the photo was as it came, and that he looked closer: never at what",
           ("looked at a picture (2560x1920, " in journal.getvalue(), ", and closer at part of it" in journal.getvalue(),
@@ -1776,7 +1778,8 @@ check("a photo sent with a change he says he cannot make: what was meant is aske
        ART["edits"][-1]["prompt"].startswith("put the dog on clouds, keep the dog"), douglas_lines()[-2]["text"]),
       (True, 1, ["Put the dog on a bed of clouds."], True, "On its way: about two minutes."))
 check("what he is given with the photo says it has arrived and that edit works on it",
-      any("What you see in it: A dog on a porch. The picture itself has arrived and is kept: the edit tool "
+      any("What you see in it: A dog on a porch. That is all you know of the picture." in x
+          and "without a name to read. The picture itself has arrived and is kept: the edit tool "
           "changes it, and the look tool looks at it again.]" in x for x in DRAWN["said"][-3:]), True)
 until(lambda: not voice.ARTIST.locked() and ep.state == "idle")
 ep.forget()
@@ -2292,7 +2295,7 @@ check("he is handed what was seen as a look he took, told what to do with it, an
        "[This program has looked at the picture again for this message" in told_this_turn(),
        "at the whole of it, no closer than your first look" in told_this_turn()
        and "It adds to what you have seen and takes nothing back" in told_this_turn()
-       and "name no make, name or detail that no look read" in told_this_turn(),
+       and "name no make, name or detail that no look read, and take no logo or badge for a maker's by its look" in told_this_turn(),
        [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in nowp.history[-4:]],
        "[This program has looked" in nowp.history[-4]["content"]),
       ("tool", True, True, True, [("user", ""), ("assistant", "look"), ("tool", ""), ("assistant", "")], False))

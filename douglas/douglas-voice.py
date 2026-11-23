@@ -878,7 +878,9 @@ def system_prompt() -> str:
             "about the person's own life unless they say it is theirs. What you saw is "
             "all you know of a picture: a make, a name or a detail that your look did "
             "not give, you do not know, so say you cannot make it out in the picture "
-            "rather than supply one from memory. And that no name can be read on a "
+            "rather than supply one from memory. A logo or a badge with no name you "
+            "could read on it does not tell you whose it is, whatever it reminds you "
+            "of: describe it, and name no maker. And that no name can be read on a "
             "thing tells you nothing about who made it: do not call it original, "
             "standard or the maker's own on that account. If the person "
             "speaks of a picture and no brackets say one came, none has arrived: say so. "
@@ -2059,6 +2061,20 @@ def keep_picture(data: bytes) -> str:
     return pid
 
 
+# What goes with a look, in the turn that has it. His instructions say that
+# what a look did not give he does not know, and he keeps to that for names
+# he would have to make up whole. A badge is another matter: shown "a
+# stylised A in a rounded rectangle, lettering under it too blurred to read",
+# he answered "it looks like an Akrapovic exhaust, that is their badge", of an
+# exhaust by another maker. Asked outright, the model gives that badge to
+# that maker and is sure of it: what it remembers of logos is not to be
+# relied on, and he is told so where it matters.
+SEEN_ONLY = (" That is all you know of the picture. Name no make, name or detail that is "
+             "not in it, and take no logo or badge for a maker's by its look: what you "
+             "remember of whose logo looks like what is often wrong. Say what it looks like, "
+             "and that you cannot tell whose it is without a name to read.")
+
+
 def kept_note(seen: bool) -> str:
     """What a picture that came with a message is good for, said in the same
     brackets as what was seen in it. The model is given words, never the
@@ -2900,8 +2916,9 @@ LOOK_ASKED = (
 LOOKED = (
     "[This program has looked at the picture again for this message, with the person's own "
     "words for the question. What was seen this time follows, as a look you took, and it "
-    "counts for more than what you saw before. Answer from it in a sentence or two, and "
-    "name no make, name or detail that the look did not read. Only if it does not show "
+    "counts for more than what you saw before. Answer from it in a sentence or two, "
+    "name no make, name or detail that the look did not read, and take no logo or badge "
+    "for a maker's by its look. Only if it does not show "
     "what the person asked about or says is there: tell them plainly that you cannot see "
     "that in this picture, and that a closer photo of that part would settle it.]")
 # The same, where the look was at the whole picture and not at a part of it
@@ -2912,8 +2929,8 @@ LOOKED_WHOLE = (
     "words for the question: at the whole of it, no closer than your first look. What was "
     "seen follows, as a look you took. It adds to what you have seen and takes nothing "
     "back: whatever a closer look at a part made out earlier in this conversation still "
-    "stands. Answer in a sentence or two from all you have seen, and name no make, name or "
-    "detail that no look read.]")
+    "stands. Answer in a sentence or two from all you have seen, name no make, name or "
+    "detail that no look read, and take no logo or badge for a maker's by its look.]")
 
 
 def last_exchange(history: list[dict]) -> tuple[str, str]:
@@ -3849,7 +3866,7 @@ class Pipeline:
                     % (*picture_size(full), len(full) // 1024, time.time() - began,
                        ", and closer at part of it" if CLOSER in saw else ""))
             said += ("\n\n[A picture came with this message. What you see in it: "
-                     f"{saw}{kept_note(True)}]" if saw else
+                     f"{saw}{SEEN_ONLY}{kept_note(True)}]" if saw else
                      "\n\n[A picture came with this message, but you could not look at "
                      f"it: your eyes are not working right now.{kept_note(False)}]")
         if note:
