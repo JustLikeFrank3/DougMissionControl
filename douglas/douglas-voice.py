@@ -134,8 +134,9 @@ SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
     "Either way: no apologies, no flattery, do not repeat the question "
     "back, and never end by offering more help or asking what is next."))
 # What Douglas can look up. A language model has no internet of its own: it
-# can only use what this program hands it. These are small, read-only tools
-# with no keys to manage. DOUGLAS_TOOLS=0 turns them off and he says so.
+# can only use what this program hands it. These are small, read-only tools,
+# and all but the two searches need no key. DOUGLAS_TOOLS=0 turns them off
+# and he says so.
 TOOLS_ON = E("DOUGLAS_TOOLS", "1").lower() not in ("0", "", "off", "no", "false")
 HOME_PLACE = E("DOUGLAS_HOME", "")            # e.g. "Springfield, Illinois"
 UNITS_US = E("DOUGLAS_UNITS", "metric").lower() in ("us", "imperial")
@@ -150,11 +151,31 @@ USER_AGENT = E("DOUGLAS_USER_AGENT", "Douglas-home-assistant/1.0")
 # Headlines about one topic: a search feed, {q} replaced by the topic.
 NEWS_SEARCH = E("DOUGLAS_NEWS_SEARCH",
                 "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q={q}")
+# A search of the web and a search of Reddit, each through the service's own
+# API with a key the owner got from that service. Neither is offered without
+# one. Search engines and Reddit both turn an automated client away from their
+# pages, and this does not try to get past that: no key, no search.
+SEARCH_URL = E("SEARCH_URL", "https://api.search.brave.com/res/v1").rstrip("/")
+SEARCH_KEY = E("SEARCH_KEY", "")
+REDDIT_ID = E("REDDIT_CLIENT_ID", "")
+REDDIT_SECRET = E("REDDIT_CLIENT_SECRET", "")
+# Reddit asks every client to say what it is and whose it is, in this shape:
+# <platform>:<app ID>:<version> (by /u/<username>). REDDIT_USER is the Reddit
+# name the app is registered to; it goes nowhere but to Reddit.
+REDDIT_USER = E("REDDIT_USER", "")
+REDDIT_AGENT = E("REDDIT_USER_AGENT", f"linux:douglas-home-assistant:v1.0 (by /u/{REDDIT_USER})"
+                 if REDDIT_USER else "")
+REDDIT_AUTH_URL = E("REDDIT_AUTH_URL", "https://www.reddit.com/api/v1/access_token")
+REDDIT_API_URL = E("REDDIT_API_URL", "https://oauth.reddit.com").rstrip("/")
 TOOL_ROUNDS = 4                               # look, read, read again, answer
 # All the results of one turn's lookups, in characters. The model reads a
 # fixed number of tokens and the instructions take a good part of them: past
 # this a result is cut short rather than the whole turn lost.
 TURN_RESULTS_MAX = int(E("DOUGLAS_TURN_RESULTS_MAX", "9000"))
+# And how long one turn may go on looking things up, in seconds, before he
+# has to answer from what he has. A search that comes back poor is searched
+# again in other words, and again: without this, for most of a minute.
+TURN_LOOKUP_S = float(E("DOUGLAS_TURN_LOOKUP_S", "20"))
 # His eyes: a small vision model on its own port (llama-eyes.service). His
 # own model reads only text, so a picture is first put into words by this
 # one. Empty means he cannot see, and he says so.
@@ -458,15 +479,21 @@ THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
 MARKUP = re.compile(r"[*_`#>]+|\[(.*?)\]\([^)]*\)")
 
 
+TOOL_MARKUP = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)", re.S | re.I)
+
+
 def unthought(text: str) -> str:
     """What the model wrote, without its reasoning. A reasoning model keeps
     that between <think> tags, mostly. Sometimes only the closing tag shows:
     the server had already written the opening one, or the model thought out
     loud with thinking switched off, and everything before that tag is
-    reasoning too. Sometimes only the opening one, cut off mid-thought."""
+    reasoning too. Sometimes only the opening one, cut off mid-thought.
+    Nor is a tool call it wrote out as words part of what it said: wanting
+    one more lookup than the turn allows, it has put the call itself in its
+    reply, markup and all."""
     text = THINK.sub("", text)
     text = re.split(r"</think>", text, flags=re.I)[-1]
-    return re.sub(r"<think>.*", "", text, flags=re.S | re.I)
+    return TOOL_MARKUP.sub(" ", re.sub(r"<think>.*", "", text, flags=re.S | re.I))
 
 
 def speakable(text: str) -> str:
@@ -742,8 +769,10 @@ def system_prompt() -> str:
     if TOOLS_ON:
         parts.append(
             "You can look things up on the internet with your tools: the weather, news "
-            "headlines (the top stories, or the latest on any topic), Wikipedia, and "
-            "reading a web page whose address you have. Anything about the present, such "
+            "headlines (the top stories, or the latest on any topic), Wikipedia, "
+            + ("a search of the web, " if "search" in TOOLS else "")
+            + ("a search of Reddit, " if "reddit" in TOOLS else "")
+            + "and reading a web page whose address you have. Anything about the present, such "
             "as the news, the weather, sports results or what has happened lately, you "
             "must look up before you answer, every time it comes up: never answer it "
             "from memory or from earlier in the conversation, and never say what the "
@@ -752,10 +781,26 @@ def system_prompt() -> str:
             "what came back: add no detail it did not give, and if part of the question "
             "is not answered by it, look again or say that part is missing rather than "
             "filling it in. If a lookup fails or finds nothing, say so, and never say "
-            "you could not find something you did not look for. You have no general web "
-            "search: for something that is not in the news or on Wikipedia, with no "
-            "address to read, say you have no way to look it up. The tools cannot see "
-            "this home or control anything in it."
+            "you could not find something you did not look for. "
+            + ("With the search tool you can search the web. Use it for product reviews and "
+               "recommendations, prices, how to do something, and whatever else you are not "
+               "sure of or that may have changed: search first, then answer from what the "
+               "pages say, and say which site said it. A search result is what a page "
+               "claims, not a fact you checked. "
+               + ("" if "reddit" in TOOLS else
+                  "You cannot search Reddit itself, but a web search finds Reddit threads: "
+                  "asked what people on Reddit think, search the web with the word reddit "
+                  "in it. ") if "search" in TOOLS else "")
+            + ("With the reddit tool you can search Reddit for what people there say about a "
+               "product, a problem or a place. Those are the opinions of anonymous users: "
+               "pass them on as what people on Reddit say, never as fact, and name no one. "
+               if "reddit" in TOOLS else "")
+            + ("" if "search" in TOOLS else
+               "You have no general web search: for something that is not "
+               + ("on Reddit, " if "reddit" in TOOLS else "")
+               + "in the news or on Wikipedia, with no address to read, say you have no way "
+               "to look it up. ")
+            + "The tools cannot see this home or control anything in it."
             + (f" Home is {HOME_PLACE}: use it when a question about the weather "
                "names no place." if HOME_PLACE else ""))
     else:
@@ -1120,6 +1165,203 @@ def tool_news(topic: str = "") -> str:
         return ("The news feeds could not be reached." if failed == len(NEWS_FEEDS)
                 else f"No current headlines mention {topic!r}.")
     return "Current headlines: " + " | ".join(items[:8])
+
+
+def clip(text, limit: int) -> str:
+    """One line of text, no longer than `limit`, cut at a word."""
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " ..."
+
+
+def api_json(url: str, headers: dict, data: bytes | None = None, limit: int = 2_000_000):
+    """JSON from a service that wants a key: the same opener as every other
+    lookup (a redirect to anything but a public address is refused), with
+    that service's own headers."""
+    req = urllib.request.Request(url, data=data, headers={"Accept": "application/json", **headers})
+    with WEB.open(req, timeout=TOOL_TIMEOUT_S) as r:
+        return json.loads(r.read(limit).decode(r.headers.get_content_charset() or "utf-8", "replace"))
+
+
+def refused(service: str, e: urllib.error.HTTPError) -> str:
+    """What the model is told when a service that wants a key says no."""
+    why = {401: "it refused the key",
+           403: "it refused the key, or the key is not allowed to do this",
+           429: "it says there have been too many requests, or the allowance is used up",
+           }.get(e.code, f"it answered with error {e.code}")
+    return (f"{service} could not be searched: {why}. Tell the person that, and do not answer "
+            "from memory as if you had searched.")
+
+
+def tool_search(query: str = "") -> str:
+    """A web search: the best few pages for the query, with what each says."""
+    query = " ".join(str(query or "").split())[:300]
+    if not query:
+        return "Nothing was searched for: say what to search for."
+    key, started = {"X-Subscription-Token": SEARCH_KEY}, time.time()
+    found = dates = None
+    try:
+        # Passages lifted from the pages themselves: the form of answer the
+        # service offers to assistants.
+        q = urllib.parse.urlencode({"q": query, "count": 8, "maximum_number_of_urls": 6,
+                                    "maximum_number_of_tokens": 2048,
+                                    "maximum_number_of_tokens_per_url": 512})
+        got = api_json(f"{SEARCH_URL}/llm/context?{q}", key)
+        found = [(g.get("title"), g.get("url"), g.get("snippets") or [])
+                 for g in ((got.get("grounding") or {}).get("generic") or []) if isinstance(g, dict)]
+        dates = got.get("sources") if isinstance(got.get("sources"), dict) else {}
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 429):
+            return refused("The web", e)
+    if found is None:
+        # A key whose plan has no such answer: the ordinary list of results.
+        try:
+            q = urllib.parse.urlencode({"q": query, "count": 6, "extra_snippets": "true"})
+            got = api_json(f"{SEARCH_URL}/web/search?{q}", key)
+        except urllib.error.HTTPError as e:
+            return refused("The web", e)
+        found = [(r.get("title"), r.get("url"),
+                  [r.get("description")] + list(r.get("extra_snippets") or []))
+                 for r in ((got.get("web") or {}).get("results") or []) if isinstance(r, dict)]
+        dates = {r.get("url"): {"age": [None, r.get("age") or r.get("page_age")]}
+                 for r in ((got.get("web") or {}).get("results") or []) if isinstance(r, dict)}
+    lines = []
+    for title, url, snippets in found[:6]:
+        said = clip(text_of(" ".join(str(x) for x in snippets if x)), 480)
+        if not (url and said):
+            continue
+        host = urllib.parse.urlsplit(str(url)).hostname or ""
+        age = (dates.get(url) or {}).get("age") if isinstance(dates.get(url), dict) else None
+        when = age[1] if isinstance(age, list) and len(age) > 1 and age[1] else ""
+        lines.append(f"{len(lines) + 1}. {clip(text_of(str(title or host)), 100)} "
+                     f"({host}{', ' + str(when)[:10] if when else ''}) {url}\n   {said}")
+    # How many and how long: never what was searched for.
+    log(f"searched the web: {len(lines)} results in {time.time() - started:.1f} s")
+    if not lines:
+        return f"The search found nothing for {query!r}."
+    return (f"Web search results for {query!r}, the best first. This is what those pages say, "
+            "not something you checked: say which site a claim comes from.\n" + "\n".join(lines))
+
+
+REDDIT_TOKEN = {"value": "", "until": 0.0}
+REDDIT_LOCK = threading.Lock()
+
+
+def reddit_token(fresh: bool = False) -> str:
+    """A token to read Reddit with, as the app itself and no user: asked for
+    with the app's id and secret, and kept until shortly before it runs out."""
+    with REDDIT_LOCK:
+        if REDDIT_TOKEN["value"] and time.time() < REDDIT_TOKEN["until"] and not fresh:
+            return REDDIT_TOKEN["value"]
+        basic = base64.b64encode(f"{REDDIT_ID}:{REDDIT_SECRET}".encode()).decode()
+        got = api_json(REDDIT_AUTH_URL, {
+            "Authorization": "Basic " + basic, "User-Agent": REDDIT_AGENT,
+            "Content-Type": "application/x-www-form-urlencoded"}, data=b"grant_type=client_credentials")
+        token = str(got.get("access_token") or "") if isinstance(got, dict) else ""
+        if not token:
+            raise RuntimeError("Reddit gave no token")
+        try:
+            lasts = float(got.get("expires_in") or 3600)
+        except (TypeError, ValueError):
+            lasts = 3600.0
+        REDDIT_TOKEN.update(value=token, until=time.time() + max(60.0, min(lasts, 86400.0) - 120))
+        return token
+
+
+def reddit_get(path: str, **params):
+    """One read from Reddit's API. A token that has stopped working is
+    replaced once."""
+    url = f"{REDDIT_API_URL}{path}?{urllib.parse.urlencode(dict(params, raw_json=1))}"
+    for again in (False, True):
+        try:
+            return api_json(url, {"Authorization": "bearer " + reddit_token(fresh=again),
+                                  "User-Agent": REDDIT_AGENT})
+        except urllib.error.HTTPError as e:
+            if e.code != 401 or again:
+                raise
+
+
+def reddit_things(listing, kind: str) -> list[dict]:
+    """The posts ("t3") or comments ("t1") in one of Reddit's listings."""
+    kids = ((listing or {}).get("data") or {}).get("children") if isinstance(listing, dict) else None
+    return [k["data"] for k in kids or []
+            if isinstance(k, dict) and k.get("kind") == kind and isinstance(k.get("data"), dict)]
+
+
+def ago(when) -> str:
+    """How long ago a moment was, roughly, in words."""
+    try:
+        days = max(0.0, (time.time() - float(when)) / 86400)
+    except (TypeError, ValueError):
+        return "undated"
+    for size, name in ((365, "year"), (30, "month"), (1, "day")):
+        if days >= size:
+            n = int(days // size)
+            return f"{n} {name}{'s' if n != 1 else ''} ago"
+    return "today"
+
+
+def reddit_comments(thread: str, count: int, limit: int) -> tuple[dict, list[str]]:
+    """A thread's post and its best comments, as lines. No names: who wrote
+    a comment is nothing he needs, and nothing that should travel."""
+    got = reddit_get(f"/comments/{thread}", limit=count + 4, depth=1, sort="top")
+    post = (reddit_things(got[0], "t3") or [{}])[0] if isinstance(got, list) and got else {}
+    lines = []
+    for c in reddit_things(got[1], "t1") if isinstance(got, list) and len(got) > 1 else []:
+        body = clip(c.get("body"), limit)
+        if c.get("stickied") or body in ("", "[deleted]", "[removed]"):
+            continue
+        lines.append(f"   - ({c.get('score', 0)} points) {body}")
+        if len(lines) >= count:
+            break
+    return post, lines
+
+
+def tool_reddit(query: str = "", subreddit: str = "", thread: str = "") -> str:
+    """What people on Reddit say: the best threads for a query, with the top
+    comments of the first two, or more of one thread's comments."""
+    query = " ".join(str(query or "").split())[:300]
+    subreddit = re.sub(r"[^A-Za-z0-9_]", "", re.sub(r"^/?r/", "", str(subreddit or "").strip()))[:40]
+    thread = re.sub(r"[^a-z0-9]", "", re.sub(r"^t3_", "", str(thread or "").strip().lower()))[:12]
+    started = time.time()
+    try:
+        if thread:
+            post, lines = reddit_comments(thread, 8, 380)
+            log(f"read a Reddit thread: {len(lines)} comments in {time.time() - started:.1f} s")
+            if not post:
+                return "Reddit has no thread with that id."
+            return (f"A Reddit thread in r/{post.get('subreddit', '?')}, {post.get('score', 0)} points, "
+                    f"{ago(post.get('created_utc'))}: {clip(post.get('title'), 200)}\n"
+                    + (f"   {clip(post.get('selftext'), 600)}\n" if post.get("selftext") else "")
+                    + ("Its top comments, the opinions of anonymous users:\n" + "\n".join(lines)
+                       if lines else "It has no comments to read."))
+        if not query:
+            return "Nothing was searched for: say what to search Reddit for."
+        path = f"/r/{subreddit}/search" if subreddit else "/search"
+        asked = {"q": query, "limit": 10, "sort": "relevance", "t": "year", "type": "link",
+                 **({"restrict_sr": 1} if subreddit else {})}
+        posts = reddit_things(reddit_get(path, **asked), "t3")
+        if len(posts) < 3:                       # little in the last year: any time, then
+            posts = reddit_things(reddit_get(path, **dict(asked, t="all")), "t3") or posts
+        posts = [p for p in posts if not p.get("over_18")][:6]
+        lines, read = [], 0
+        for n, p in enumerate(posts, 1):
+            lines.append(f"{n}. [{p.get('id', '')}] r/{p.get('subreddit', '?')}, "
+                         f"{p.get('score', 0)} points, {p.get('num_comments', 0)} comments, "
+                         f"{ago(p.get('created_utc'))}: {clip(p.get('title'), 160)}"
+                         + (f"\n   {clip(p.get('selftext'), 220)}" if p.get("selftext") else ""))
+            if read < 2 and p.get("num_comments") and p.get("id"):
+                lines += reddit_comments(str(p["id"]), 3, 260)[1]
+                read += 1
+    except urllib.error.HTTPError as e:
+        return refused("Reddit", e)
+    # How many and how long: never what was searched for.
+    log(f"searched Reddit: {len(posts)} threads, {read} read, in {time.time() - started:.1f} s")
+    if not posts:
+        return f"Reddit has nothing for {query!r}" + (f" in r/{subreddit}." if subreddit else ".")
+    return (f"What people on Reddit wrote about {query!r}, the best threads first, with the top "
+            "comments of the first two. These are the opinions of anonymous users, not checked "
+            "facts: pass them on as what people on Reddit say. For more of one thread, call "
+            "reddit again with thread set to the id in its brackets.\n" + "\n".join(lines))
 
 
 def tool_read_page(url: str, find: str = "") -> str:
@@ -1892,6 +2134,13 @@ def names_things(reply: str) -> bool:
 # what?), which it answers reliably; on anything but a no the program calls
 # the tool and he answers from what came back. That is one pass of the model
 # where his own lookup takes two, so it is also the quicker way round.
+#
+# A search of the web goes the same way. Asked what the reviews say of a
+# thing, or which one to buy, he reached for the search about half the time,
+# and otherwise said he had "not seen any reviews" or named a model from
+# memory. Reddit he searches unprompted when Reddit is named; it is looked up
+# here all the same, so that it too is one pass. With only one of the two
+# searches switched on, the one that is there stands in for the other.
 NOW_WORDS = {
     "weather": re.compile(
         r"\b(weather|forecast|rain(s|y|ing|ed)?|snow(s|y|ing|ed)?|sleet|hail|storms?|stormy|"
@@ -1903,6 +2152,14 @@ NOW_WORDS = {
         r"\b(news|headlines?|top stories|what'?s (been )?(happening|going on)|"
         r"what is (happening|going on)|what happened|latest (on|about|with|from|in)|who won|"
         r"did (the |they )?[\w' ]{0,30}\bwin|scores?|standings)\b", re.I),
+    "reddit": re.compile(r"\b(reddit|subreddits?|redditors?)\b|(^|\s)/?r/\w{2,}", re.I),
+    "search": re.compile(
+        r"\b(search(es|ed|ing)?|google|look(ed|ing)? (it |that |this |them |those )?up|find out|"
+        r"reviews?|reviewed|ratings?|rated|worth (buying|getting|it|the money|the price)|"
+        r"should i (buy|get|upgrade)|(which|what) [\w' -]{0,40}\b(buy|get|choose|pick)\b|best|"
+        r"a good [\w' -]{1,40}\b(under|for|around|below)\b|recommend\w*|compar(e|es|ed|ing|ison)|"
+        r"versus|vs\.?|prices?|priced|costs?|how much (is|are|does|do|for)|"
+        r"where (can|do|could|should) i (buy|get|find)|on sale)\b", re.I),
 }
 NOW_ASKED = {
     "weather": ("Is the message below asking what the weather is or will be somewhere: a "
@@ -1915,27 +2172,51 @@ NOW_ASKED = {
              "that has happened lately? If it is, answer with the few words to search the news "
              "for and nothing else, or with the single word TOP if it asks for the news in "
              "general. If it is not, answer with the single word NO.\n\nThe message: "),
+    "reddit": ("Is the message below asking what people on Reddit say or think about "
+               "something, or asking to search Reddit? If it is, answer with the words to "
+               "search Reddit for and nothing else: the thing itself, without the word "
+               "Reddit. If it is not, answer with the single word NO.\n\nThe message: "),
+    "search": ("Does the message below need a web search to answer well: is it asking for "
+               "reviews of a product, which product to buy, what something costs or where to "
+               "buy it, a comparison of products, or asking outright to search for or look "
+               "something up? If it does, answer with the words to type into a search engine "
+               "and nothing else. If it does not (small talk, a joke, a story, something "
+               "anyone knows, a question about this conversation), answer with the single "
+               "word NO.\n\nThe message: "),
 }
-NOW_ARG = {"weather": ("location", "HOME"), "news": ("topic", "TOP")}
+NO_SEARCH = ("[Answering this well takes a web search, and you have none. Say plainly that you "
+             "cannot look it up. If you remember something about it, you may add it, as what you "
+             "remember and may be out of date: never as if you had just looked.]")
+NOW_ARG = {"weather": ("location", "HOME"), "news": ("topic", "TOP"),
+           "reddit": ("query", ""), "search": ("query", "")}
 
 
-def lookup_wanted(tool: str, said: str, ask=None) -> dict | None:
-    """Is a message asking for the weather, or for the news? The arguments to
-    call that tool with if it is, None if it is not. `ask` is the call to the
-    model server, replaceable in tests."""
+def now_tool(kind: str) -> str:
+    """The tool that answers one kind of question with what is switched on:
+    its own, or for the two searches the other one if only that is there."""
+    wants = {"search": ("search", "reddit"), "reddit": ("reddit", "search")}.get(kind, (kind,))
+    return next((t for t in wants if t in TOOLS), "")
+
+
+def lookup_wanted(kind: str, said: str, ask=None) -> dict | None:
+    """Is a message asking for the weather, the news, or a search? What to
+    look up if it is (the place, the topic, the words to search for), None if
+    it is not. `ask` is the call to the model server, replaceable in tests."""
     said = " ".join(str(said).split())[:600]
     if not said:
         return None
     try:
-        m = (ask or complete)([{"role": "user", "content": NOW_ASKED[tool] + said}], None, 16, 0.0)
+        m = (ask or complete)([{"role": "user", "content": NOW_ASKED[kind] + said}], None, 24, 0.0)
     except Exception as e:      # noqa: BLE001 - no answer is a no: his own reply stands
-        log(f"could not ask whether the {tool} was wanted: {type(e).__name__}: {e}")
+        log(f"could not ask whether the {kind} was wanted: {type(e).__name__}: {e}")
         return None
     got = " ".join(unthought(str(m.get("content") or "")).split()).strip(" .!\"'*`")
-    if not got or len(got) > 80 or re.match(r"no\b", got, re.I):
+    if not got or len(got) > 120 or re.match(r"no\b", got, re.I):
         return None
-    arg, default = NOW_ARG[tool]
-    return {arg: "" if got.upper() in (default, "YES") else got}
+    arg, default = NOW_ARG[kind]
+    if got.upper() == "YES":                     # a yes with nothing to look up
+        return {arg: "" if default else said[:200]}
+    return {arg: "" if default and got.upper() == default else got}
 
 
 # A photo arrives with a request and no edit is started. Was a change to the
@@ -2138,6 +2419,27 @@ def offer_tools() -> None:
                                 "the house and the people unchanged\"."}}, ["instruction"])
     else:
         TOOLS.pop("edit", None)
+    if SEARCH_KEY:
+        TOOLS["search"] = (
+            tool_search, "Search the web: the best few pages for a query, with what each "
+            "says. Use it for product reviews and recommendations, prices, how to do "
+            "something, and anything you are not sure of or that may have changed.", {
+                "query": {"type": "string", "description": "What to search for, as typed "
+                          "into a search engine."}}, ["query"])
+    else:
+        TOOLS.pop("search", None)
+    if REDDIT_ID and REDDIT_SECRET and REDDIT_AGENT:
+        TOOLS["reddit"] = (
+            tool_reddit, "Search Reddit for what people there say about a product, a "
+            "problem, a place or a question: the best threads, with the top comments of the "
+            "first two. With thread set instead, more of that one thread's comments.", {
+                "query": {"type": "string", "description": "What to search Reddit for."},
+                "subreddit": {"type": "string", "description": "Optional: one community to "
+                              "search in, without the r/."},
+                "thread": {"type": "string", "description": "Optional: the id of a thread "
+                           "from an earlier result, to read more of its comments."}}, [])
+    else:
+        TOOLS.pop("reddit", None)
     if JC["areas"]:
         TOOLS["jobcontext"] = (
             tool_jobcontext, "Read the person's own records on their jobContext server, or "
@@ -2230,7 +2532,7 @@ def run_tool(name: str, args) -> str:
     if name == "jobcontext":             # it says what it did itself: names, never values
         keep = args
     else:
-        if name not in ("draw", "edit"):     # nor is what he is asked to draw the journal's
+        if name not in ("draw", "edit", "search", "reddit"):    # those say what they did, never the words
             log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
         keep = {k: v for k, v in args.items() if k in props}
     try:
@@ -2261,6 +2563,10 @@ def complete(messages: list[dict], tools: list | None = None,
 
 
 TRACE_RESULT_MAX = 300       # characters of a lookup's result kept in the conversation
+LAST_LOOKUP = (" [That was the last lookup this turn. Answer now from what you have, and call "
+               "no more tools.]")
+NO_MORE_LOOKUPS = ("[Nothing more can be looked up in this turn. Answer in plain words now, from "
+                   "what you already have; if that is not enough to answer, say so.]")
 
 
 def remember(call: dict, found: str) -> None:
@@ -2297,8 +2603,19 @@ def llm(messages: list[dict], ask=None) -> str:
     ask = ask or complete
     if not TOOLS_ON:
         return str(ask(messages).get("content") or "")
-    msgs, room = list(messages), TURN_RESULTS_MAX
-    for _ in range(TOOL_ROUNDS):
+    # What the turn was handed before he spoke (a lookup the program made for
+    # him) is part of its allowance, of rounds and of reading.
+    used = looked = 0
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            break
+        if m.get("role") == "tool":
+            used, looked = used + len(str(m.get("content") or "")), looked + 1
+    msgs, room = list(messages), TURN_RESULTS_MAX - used
+    began = float((getattr(TURN, "ctx", None) or {}).get("began") or time.time())
+    for n in range(max(1, TOOL_ROUNDS - looked)):
+        if n and time.time() - began > TURN_LOOKUP_S:
+            break                       # long enough: he answers from what he has
         m = ask(msgs, TOOL_SPECS)
         calls = m.get("tool_calls") or []
         if not calls:
@@ -2316,7 +2633,15 @@ def llm(messages: list[dict], ask=None) -> str:
             remember(c, found)
             if held():
                 return ""       # a change waits for a yes: its read-back is the reply
-    return str(ask(msgs).get("content") or "")      # enough looking up: answer
+    # Enough looking up: answer. He is told so with the last result, since
+    # otherwise he may write one more call out as words.
+    last = dict(msgs[-1])
+    if last.get("role") == "tool":
+        last["content"] = str(last.get("content") or "") + LAST_LOOKUP
+    reply = str(ask(msgs[:-1] + [last]).get("content") or "")
+    if not unthought(reply).strip():    # a call written out as words and nothing else: once more
+        reply = str(ask(msgs[:-1] + [last, {"role": "user", "content": NO_MORE_LOOKUPS}]).get("content") or "")
+    return reply
 
 
 def tts(text: str) -> tuple[bytes, tuple[int, int, int]]:
@@ -2783,7 +3108,7 @@ class Pipeline:
                 + [{"role": "user", "content": f"{said}\n\n{here}"}])
         ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0,
                           "picture": "", "editing": False, "trace": [], "sent": bool(image),
-                          "called": set()}
+                          "called": set(), "began": time.time()}
 
         def later(image: bytes, instruction: str) -> None:
             ctx["editing"] = True
@@ -2798,13 +3123,23 @@ class Pipeline:
                 # word, and handed to him as a call he made. (A message that
                 # brings a picture is about the picture: "make it snow" is no
                 # question about the weather.)
-                for tool, words in NOW_WORDS.items():
-                    if tool not in TOOLS or not words.search(asked):
+                for kind, words in NOW_WORDS.items():
+                    tool = now_tool(kind)
+                    if not words.search(asked) or not (tool or kind == "search"):
                         continue
-                    args = (self.wanted or lookup_wanted)(tool, asked)
+                    args = (self.wanted or lookup_wanted)(kind, asked)
                     if args is None:
                         continue
-                    log(f"asked for the {tool}: looked up before he answers")
+                    if not tool:
+                        # A search is what this wants and there is none to make.
+                        # Left to himself he has answered "I can't find that
+                        # model", as if he had looked: he is told to say so.
+                        msgs[-1] = {"role": "user", "content": f"{said}\n\n{NO_SEARCH}\n\n{here}"}
+                        break
+                    if kind == "reddit" and tool == "search":    # Reddit, by way of the web
+                        args = {"query": f"{args['query']} reddit"}
+                    log(f"asked for {'a search' if kind in ('search', 'reddit') else 'the ' + kind}"
+                        ": looked up before he answers")
                     call = {"id": tool, "type": "function", "function": {
                         "name": tool, "arguments": json.dumps(args)}}
                     found = run_tool(tool, args)

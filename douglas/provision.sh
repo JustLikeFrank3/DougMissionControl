@@ -376,6 +376,19 @@ LLM_MAX_TOKENS=400
 # Where "the weather" means when no place is named, and US units for it.
 #DOUGLAS_HOME=Springfield, Illinois
 #DOUGLAS_UNITS=us
+# A search of the web: a key from a search service's API (Brave Search,
+# https://api-dashboard.search.brave.com). Without one he has no web search
+# and says so: search engines turn an automated client away from their pages,
+# and nothing here tries to get past that. The words searched for go to that
+# service.
+#SEARCH_KEY=
+# A search of Reddit: the id and secret of an app registered with Reddit, and
+# the Reddit name it is registered to (Reddit wants it in every request).
+# Reddit approves each use of its API first: see its Responsible Builder
+# Policy. Without these he cannot search Reddit and says so.
+#REDDIT_CLIENT_ID=
+#REDDIT_CLIENT_SECRET=
+#REDDIT_USER=
 # His eyes: his own model if it can see (:8081), or the vision model
 # llama-eyes serves (:8082, see eyes.env). Unset, he cannot be shown a
 # picture and says so.
