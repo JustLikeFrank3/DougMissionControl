@@ -756,6 +756,27 @@ comes with a photo is `edit`'s work, and a `draw` in such a turn is turned
 back once with the reason: `draw` never sees the photo, and would make a
 different picture from a description of it.
 
+**A photo he is sure he never got.** A picture reaches him as words, what
+was seen in it, and he took the missing picture for a failure. Sent a photo
+of a dog and asked to put the dog on a bed of clouds, he answered that he
+could not pull the dog out of the photo and offered to draw one; in a probe
+of fourteen kinds of request he also said the photo "did not come through",
+that he had no way to edit photos, and that the edit was on its way: 22
+first moves right in 42. Three things changed. The words that come with a
+picture now say that it has arrived, that it is kept, and that `edit` works
+on it. His instructions say what an edit can do (a new place or background,
+things added or taken out, colours, clothes, weather, a style) and no longer
+hand him a sentence to say: told to "say it is on its way", he said it in
+place of making the call, so now the call comes first and the tool's answer
+tells him what to say. And the program checks: when a picture comes with a
+message and no edit is started, it asks the model one more thing on its own,
+with one word for an answer (is a change to the picture being asked for?),
+which the model gets right where its choice of tool wavers (24 of 24 sample
+messages, half a second). On a yes he is told to call `edit`; if he still
+does not, the program starts the edit with the person's own words. In a dry
+run of whole turns, every one that asked for a change ended in an edit (30
+of 30) and none that only asked about a photo did (9 of 9).
+
 **Saying is not doing.** The first edits never started. He answered "It's on
 its way" and called nothing, most of the time. The cause was in what he was
 shown of his own past: the conversation kept his replies and not the tool
@@ -939,7 +960,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, and a picture promised without a call asked for again |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

@@ -495,7 +495,8 @@ check("the eyes are asked, with the question", SAW, [(len(JPEG), "What is this?"
 check("the model gets what was seen along with the words",
       SHOWN[-1][-1]["content"].startswith(
           "What is this?\n\n[A picture came with this message. What you see in it: "
-          "A tabby cat asleep on a laptop keyboard.]\n\n[It is "), True)
+          "A tabby cat asleep on a laptop keyboard. The picture itself has arrived and is kept: "
+          "the look tool looks at it again.]\n\n[It is "), True)
 check("he is told he can see, and how", "You can see pictures that are sent to you." in SHOWN[-1][0]["content"], True)
 check("the transcript marks the picture and keeps the reply", [(t["who"], t["text"]) for t in lines()[-2:]],
       [("user", "[picture] What is this?"), ("douglas", "That cat has claimed your laptop.")])
@@ -1300,11 +1301,18 @@ voice.offer_tools()
 check("with one he has, and is told it takes minutes and arrives by itself",
       ("edit" in [t["function"]["name"] for t in voice.TOOL_SPECS],
        "You can change a picture as well, with the edit tool" in voice.system_prompt(),
-       "you do not wait for it" in voice.system_prompt()), (True, True, True))
+       "goes on after your reply" in voice.system_prompt()), (True, True, True))
 check("and that changing or restyling a picture is edit's work, never draw's",
-      ("is always edit and never draw: draw cannot see the picture" in voice.system_prompt(),
+      ("never offer to draw a new picture in its place: draw cannot see their picture" in voice.system_prompt(),
        "It cannot see any picture" in voice.TOOLS["draw"][1], "turn it into another style" in voice.TOOLS["edit"][1]),
       (True, True, True))
+check("he is told what an edit can do, so that he does not turn one down as too hard",
+      ("puts the person or animal in the picture somewhere else entirely" in voice.system_prompt(),
+       "whatever the change, call edit and pass it on" in voice.system_prompt(),
+       "put the subject somewhere else or on a new background" in voice.TOOLS["edit"][1]), (True, True, True))
+check("he is not handed words to say before the tool has answered",
+      ("on its way" in voice.system_prompt(), "on its way" in voice.turn_note("phone", False),
+       "Call edit before you say anything about it" in voice.system_prompt()), (False, False, True))
 
 
 def ecall(instruction, cid="e1"):
@@ -1324,6 +1332,13 @@ def douglas_lines():
 
 
 voice.EYES_URL = "http://eyes.invalid"
+check("and that words in the brackets are the picture arriving: it is never 'not come through'",
+      ("it did arrive, you have looked at it" in voice.system_prompt(),
+       "never say that it did not come through" in voice.system_prompt()), (True, True))
+check("a picture that comes with a message is said to have arrived, and what can be done with it",
+      (voice.kept_note(True), voice.kept_note(False)),
+      (" The picture itself has arrived and is kept: the edit tool changes it, and the look tool looks at it again.",
+       " The picture itself has arrived and is kept: the edit tool changes it."))
 ep = voice.Pipeline(voice.StateFile(d_state), voice.Transcript(d_lines), send=lambda *a: True,
                     snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, editor), tts=fake_tts,
                     see=lambda image, question="": "A dog on a porch.")
@@ -1495,9 +1510,95 @@ voice.IMAGE_EDIT = "flux1-kontext diffusion_models/flux1-kontext-dev-Q8_0.gguf"
 voice.offer_tools()
 del DRAWN["after"]
 ep.forget()
-check("the note with every message says only the tool starts a picture",
-      "A picture is made or changed only by calling draw or edit: saying one is on its way starts nothing."
-      in voice.turn_note("phone", False), True)
+JUDGED, ASKED_FOR = [], {"change": True}
+ep.judge = lambda said: (JUDGED.append(said), ASKED_FOR["change"])[1]
+until(lambda: not voice.ARTIST.locked())
+k, n = arrived(), len(ART["edits"])
+DRAWN["script"] = lambda text: (
+    {"content": "", "tool_calls": [ecall("put the dog on clouds, keep the dog", "e3")]}
+    if "The person is asking for a change to the picture" in text
+    else {"content": "I can't pull the dog out of the photo. I can draw you a dog on clouds, if you want."})
+ep.say("Put the dog on a bed of clouds.", "phone", image=PHOTO)
+check("a photo sent with a change he says he cannot make: what was meant is asked, and he is told to edit",
+      (until(lambda: arrived() > k, 5), len(ART["edits"]) - n, JUDGED,
+       ART["edits"][-1]["prompt"].startswith("put the dog on clouds, keep the dog"), douglas_lines()[-2]["text"]),
+      (True, 1, ["Put the dog on a bed of clouds."], True, "On its way: about two minutes."))
+check("what he is given with the photo says it has arrived and that edit works on it",
+      any("What you see in it: A dog on a porch. The picture itself has arrived and is kept: the edit tool "
+          "changes it, and the look tool looks at it again.]" in x for x in DRAWN["said"][-3:]), True)
+until(lambda: not voice.ARTIST.locked() and ep.state == "idle")
+ep.forget()
+k, n = arrived(), len(ART["edits"])
+DRAWN["script"] = lambda text: {"content": "I can't edit photos."}
+ep.say("Take the car out of this.", "phone", image=PHOTO)
+check("if he will not, twice, the edit is started with the person's own words, and the reply says it is coming",
+      (until(lambda: arrived() > k, 5), len(ART["edits"]) - n,
+       ART["edits"][-1]["prompt"].startswith("Take the car out of this."), ART["edits"][-1]["image[]"] == PHOTO,
+       douglas_lines()[-2]["text"]), (True, 1, True, True, "It's on its way. It takes about two minutes."))
+until(lambda: not voice.ARTIST.locked() and ep.state == "idle")
+check("and the conversation keeps that edit was called",
+      [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in ep.history[-4:]],
+      [("user", ""), ("assistant", "edit"), ("tool", ""), ("assistant", "")])
+ep.forget()
+ASKED_FOR["change"] = False
+JUDGED.clear()
+n, calls = len(ART["edits"]), len(DRAWN["said"])
+DRAWN["script"] = lambda text: {"content": "A terrier mix, though I can't say for sure."}
+ep.say("What breed is this?", "phone", image=PHOTO)
+until(lambda: douglas_lines()[-1]["text"].startswith("A terrier mix") and ep.state == "idle")
+check("a question about a photo is answered once, and nothing is edited",
+      (JUDGED, len(DRAWN["said"]) - calls, len(ART["edits"]) - n), (["What breed is this?"], 1, 0))
+JUDGED.clear()
+DRAWN["script"] = lambda text: {"content": "The best."}
+ep.say("Is he a good dog?", "phone")
+until(lambda: douglas_lines()[-1]["text"] == "The best." and ep.state == "idle")
+check("a message that brings no picture is not put to the question", JUDGED, [])
+ASKED_FOR["change"] = True
+voice.ARTIST.acquire()
+DRAWN["script"] = lambda text: {"content": "", "tool_calls": [ecall("make it snow")]}
+n = len(douglas_lines())
+ep.say("Make it snow.", "phone", image=PHOTO)
+until(lambda: len(douglas_lines()) > n and ep.state == "idle")
+check("when he did call edit and it could not start, he is not second-guessed",
+      (JUDGED, "busy with another picture" in DRAWN["said"][-1]), ([], True))
+DRAWN["script"] = lambda text: {"content": "I can't edit photos."}
+n = len(ART["edits"])
+ep.say("Make it rain.", "phone", image=PHOTO)
+until(lambda: douglas_lines()[-1]["text"].startswith("The image model is busy") and ep.state == "idle")
+check("the program's own start is refused like any other while a picture is being made, and the person is told",
+      (douglas_lines()[-1]["text"], len(ART["edits"]) - n),
+      ("The image model is busy with another picture. Ask me again in a couple of minutes.", 0))
+voice.ARTIST.release()
+ep.judge = None
+ep.forget()
+PUT, REPLY = [], ["Yes."]
+
+
+def fake_ask(msgs, tools=None, max_tokens=0, temperature=None):
+    PUT.append((msgs, tools, max_tokens, temperature))
+    return {"content": REPLY[0]}
+
+
+check("the question is put on its own: the person's words, no tools, one word wanted, nothing left to chance",
+      (voice.wants_change("Put the dog   on clouds.", fake_ask), len(PUT[0][0]),
+       PUT[0][0][0]["content"].endswith("Answer with one word, yes or no.\n\nThe message: Put the dog on clouds."),
+       PUT[0][1:]), (True, 1, True, (None, 4, 0.0)))
+answers = []
+for REPLY[0] in ("No.", "no", "Maybe, yes.", "", "</think>\n\nYes", "**Yes**"):
+    answers.append(voice.wants_change("Make it snow.", fake_ask))
+check("only a yes is a yes", answers, [False, False, False, False, True, True])
+n = len(PUT)
+check("with no words there is nothing to ask", (voice.wants_change("  ", fake_ask), len(PUT) - n), (False, 0))
+
+
+def no_answer(*a):
+    raise OSError("the model server is down")
+
+
+check("and no answer is a no: the turn goes on as it was", voice.wants_change("Make it snow.", no_answer), False)
+check("the note with every message says the call comes before the words",
+      "Asked for a picture, or for a change to one, call draw or edit before you write a word: nothing is made "
+      "or changed without the call." in voice.turn_note("phone", False), True)
 LONG = {"id": "x1", "type": "function", "function": {"name": "wikipedia", "arguments": json.dumps({"query": "q" * 900})}}
 voice.TURN.ctx = {"trace": []}
 voice.remember(LONG, "r" * 2000)
@@ -1516,7 +1617,11 @@ sys.stderr = real_err
 check("the journal says how long an edit took and how big it is, never what was asked for",
       ("edited a picture in " in journal.getvalue(), "an edit failed after " in journal.getvalue(),
        any(w in journal.getvalue() for w in ("winter", "snow", "autumn", "spring", "watercolour", "cat", "parrot",
-                                             "cartoon"))), (True, True, False))
+                                             "cartoon", "clouds", "breed", "rain"))), (True, True, False))
+check("and when a change to a photo was asked for and he did not start it",
+      ("a change to the picture that came with the message was asked for and not started: asked again" in journal.getvalue(),
+       "and not started again: the edit is started with the person's own words" in journal.getvalue(),
+       "could not ask whether a change to the picture was wanted: OSError" in journal.getvalue()), (True, True, True))
 check("and when a picture was promised and not started",
       ("a picture was promised and none started: asked again" in journal.getvalue(),
        "and promised again without starting one: the reply says so" in journal.getvalue()), (True, True))

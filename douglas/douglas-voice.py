@@ -796,13 +796,18 @@ def system_prompt() -> str:
     if EYES_URL:
         parts.append(
             "You can see pictures that are sent to you. When one comes with a message, "
-            "what you saw in it follows the person's words in square brackets. Talk "
+            "what you saw in it follows the person's words in square brackets. That is "
+            "how every picture reaches you: as what you saw in it, in words. So when the "
+            "brackets say a picture came, it did arrive, you have looked at it, and it is "
+            "kept for the rest of the conversation: never say that it did not come "
+            "through, that you cannot see it, or that it must be sent again. Talk "
             "about it as something you looked at yourself, and never mention the "
             "brackets or a description. You see only what is in the picture: do not "
             "guess at what is outside it, and do not take what it shows for a fact "
-            "about the person's own life unless they say it is theirs. A picture that "
-            "did not come, or that you could not load, you have not seen: say so, and "
-            "never describe it, not even as a joke."
+            "about the person's own life unless they say it is theirs. If the person "
+            "speaks of a picture and no brackets say one came, none has arrived: say so. "
+            "A picture the brackets say you could not look at, you have not seen: say "
+            "so, and never describe it, not even as a joke."
             + (" If you need a closer look at something in it, use the look tool."
                if TOOLS_ON else ""))
     else:
@@ -817,13 +822,23 @@ def system_prompt() -> str:
             "saying what you drew. You do not see what you made unless you look at it, so "
             "claim nothing about how it turned out"
             + ("; asked how it looks, look at it and say." if EYES_URL else ".")
-            + (" You can change a picture as well, with the edit tool: the last picture in "
-               "the conversation, a photo the person sent or one you drew. Say what should "
-               "change and what should stay. Changing a picture, or turning it into another "
-               "style, is always edit and never draw: draw cannot see the picture and would "
-               "make a different one. An edit takes about two minutes, so you do not wait "
-               "for it: tell the person it is on its way, and the edited picture appears on "
-               "their screens when it is ready." if IMAGE_EDIT else ""))
+            + (" You can change a picture as well, with the edit tool. It works on the "
+               "last picture in the conversation: a photo the person sent, which is kept "
+               "for you from the moment it arrives, or one you drew. It is an image model "
+               "that remakes the picture as you instruct and keeps what you tell it to "
+               "keep, so it does what a photo editor does: it puts the person or animal in "
+               "the picture somewhere else entirely, changes the background, the weather, "
+               "the light or the season, adds things, takes things out, changes colours, "
+               "hair and clothes, or turns the whole picture into another style. So "
+               "whenever the person asks for a change to a picture, whatever the change, "
+               "call edit and pass it on: say what should change and what should stay. "
+               "Never tell them a change cannot be done, and never offer to draw a new "
+               "picture in its place: draw cannot see their picture and would make a "
+               "different one. An edit takes about two minutes and goes on after your "
+               "reply; the edited picture appears on the person's screens by itself when it "
+               "is ready. Call edit before you say anything about it: only its answer tells "
+               "you whether the edit has started and what to tell the person."
+               if IMAGE_EDIT else ""))
     elif TOOLS_ON:
         parts.append("You cannot make pictures: no image model is set up.")
     extra = read_instructions()
@@ -856,9 +871,10 @@ def turn_note(via: str, spoken: bool) -> str:
                  "jobcontext tool, called in this turn: if you have not called it, you do "
                  "not know. ")
     if TOOLS_ON and IMAGE_URL:
-        note += ("A picture is made" + (" or changed only by calling draw or edit"
-                                        if IMAGE_EDIT else " only by calling draw")
-                 + ": saying one is on its way starts nothing. ")
+        note += ("Asked for a picture, or for a change to one, call draw or edit before you "
+                 "write a word: nothing is made or changed without the call. " if IMAGE_EDIT else
+                 "Asked for a picture, call draw before you write a word: nothing is made "
+                 "without the call. ")
     return f"[{note}{STYLE[bool(spoken)]}]"
 
 
@@ -1319,6 +1335,21 @@ def keep_picture(data: bytes) -> str:
         except OSError:
             pass
     return pid
+
+
+def kept_note(seen: bool) -> str:
+    """What a picture that came with a message is good for, said in the same
+    brackets as what was seen in it. The model is given words, never the
+    picture, and left to work it out it has answered that the picture "did
+    not come through", or that it has no way to change a photo."""
+    can = []
+    if TOOLS_ON and IMAGE_URL and IMAGE_EDIT:
+        can.append("the edit tool changes it")
+    if TOOLS_ON and EYES_URL and seen:
+        can.append("the look tool looks at it again")
+    if not can:
+        return ""
+    return " The picture itself has arrived and is kept: " + ", and ".join(can) + "."
 
 
 BUSY_DRAWING = ("The image model is busy with another picture, so this one was not started. Tell "
@@ -1851,6 +1882,37 @@ def names_things(reply: str) -> bool:
     return False
 
 
+# A photo arrives with a request and no edit is started. Was a change to the
+# photo what was asked for? The model is good at saying what a message means
+# and unreliable about which tool that calls for (asked to put a dog on a
+# cloud it has said the photo "did not come through", that it cannot edit
+# photos, and that the edit was on its way), so the meaning is asked as a
+# question of its own, one word for an answer, and the program acts on it.
+CHANGE_ASKED = ("Someone sent a picture to an assistant together with the message below. Is the "
+                "message asking for the picture itself to be changed: edited, something added "
+                "or taken out, a new background or setting, different colours, or turned into "
+                "another style? Answer with one word, yes or no.\n\nThe message: ")
+CHANGE_WANTED = ("[The person is asking for a change to the picture that came with this "
+                 "message. The picture is here and the edit tool can make that change: call "
+                 "edit now, with what they asked for.]")
+ON_ITS_WAY = "It's on its way. It takes about two minutes."
+BUSY_NOW = "The image model is busy with another picture. Ask me again in a couple of minutes."
+
+
+def wants_change(said: str, ask=None) -> bool:
+    """Is a message that came with a picture a request to change the picture?
+    `ask` is the call to the model server, replaceable in tests."""
+    said = " ".join(str(said).split())[:600]
+    if not said:
+        return False
+    try:
+        m = (ask or complete)([{"role": "user", "content": CHANGE_ASKED + said}], None, 4, 0.0)
+    except Exception as e:      # noqa: BLE001 - no answer is a no: the turn goes on as it was
+        log(f"could not ask whether a change to the picture was wanted: {type(e).__name__}: {e}")
+        return False
+    return bool(re.match(r"\W*yes\b", unthought(str(m.get("content") or "")), re.I))
+
+
 # A reply that says a picture is coming, in a turn that started none. The
 # model is asked once more; if it says so again and still starts nothing, and
 # a picture is what the talk is about, the person is told the truth instead.
@@ -2008,10 +2070,13 @@ def offer_tools() -> None:
     if IMAGE_URL and IMAGE_EDIT:
         TOOLS["edit"] = (
             tool_edit, "Change the last picture in this conversation, the photo the person "
-            "sent or the picture you drew, and show the result: alter what is in it, or turn "
-            "it into another style (a watercolour, a sketch, a cartoon). It works on the "
-            "picture itself, so what is in it stays. Use it only when asked to change a "
-            "picture. It takes about two minutes; the result arrives by itself.", {
+            "sent (with this message or an earlier one) or the picture you drew, and show "
+            "the result. It remakes the picture as instructed and keeps what you say to "
+            "keep: put the subject somewhere else or on a new background, add or remove "
+            "things, change colours, clothes, weather, light or season, or turn it into "
+            "another style (a watercolour, a sketch, a cartoon). Use it for any change to a "
+            "picture that the person asks for, and only then. It takes about two minutes; "
+            "the result arrives by itself.", {
                 "instruction": {"type": "string", "description": "What to change, plainly, "
                                 "and what must stay as it is: \"make the sky a sunset, keep "
                                 "the house and the people unchanged\"."}}, ["instruction"])
@@ -2099,6 +2164,7 @@ def run_tool(name: str, args) -> str:
     ctx = getattr(TURN, "ctx", None)
     if ctx is not None:
         ctx["lookups"] += 1              # this turn did go and look, whatever comes of it
+        ctx.setdefault("called", set()).add(name)
     if name == "read_page" and CONVO["private"]:
         log("tool read_page refused: the owner's records are in this conversation")
         return ("Not fetched. The person's records have been read in this conversation, and "
@@ -2123,12 +2189,14 @@ def run_tool(name: str, args) -> str:
 
 
 def complete(messages: list[dict], tools: list | None = None,
-             max_tokens: int = LLM_MAX_TOKENS) -> dict:
+             max_tokens: int = LLM_MAX_TOKENS, temperature: float | None = None) -> dict:
     """One call to the model server; the assistant message it returns."""
     payload = {"model": LLM_MODEL, "messages": messages,
                "max_tokens": max_tokens, "stream": False}
     if tools:
         payload["tools"] = tools
+    if temperature is not None:
+        payload["temperature"] = temperature
     req = urllib.request.Request(f"{LLM_URL}/v1/chat/completions",
                                  data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -2332,12 +2400,13 @@ class Pipeline:
 
     def __init__(self, state: StateFile, transcript: Transcript, *, send,
                  snd_format=lambda: (22050, 2, 1), stt=stt, llm=llm, tts=tts,
-                 linked=lambda: True, speaker=None, see=see) -> None:
+                 linked=lambda: True, speaker=None, see=see, judge=None) -> None:
         self.st, self.tr = state, transcript
         self.send, self.snd_format, self.linked = send, snd_format, linked
         self.speaker = speaker          # real speakers elsewhere, when they are up
         self._remote = False            # an utterance is playing there now
         self.stt, self.llm, self.tts, self.see = stt, llm, tts, see
+        self.judge = judge              # "was a change to the picture asked for?"; wants_change
         self.history: list[dict] = []
         self.last_exchange = 0.0
         self._lock = threading.Lock()
@@ -2643,9 +2712,9 @@ class Pipeline:
                 log(f"could not look at the picture: {e}")
                 saw = ""
             said += ("\n\n[A picture came with this message. What you see in it: "
-                     f"{saw}]" if saw else
+                     f"{saw}{kept_note(True)}]" if saw else
                      "\n\n[A picture came with this message, but you could not look at "
-                     "it: your eyes are not working right now.]")
+                     f"it: your eyes are not working right now.{kept_note(False)}]")
         if note:
             said += "\n\n" + note
         if CONVO["news"]:                   # what finished while nobody was talking to him
@@ -2655,7 +2724,8 @@ class Pipeline:
         msgs = ([{"role": "system", "content": system_prompt()}] + self.history
                 + [{"role": "user", "content": f"{said}\n\n{here}"}])
         ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0,
-                          "picture": "", "editing": False, "trace": [], "sent": bool(image)}
+                          "picture": "", "editing": False, "trace": [], "sent": bool(image),
+                          "called": set()}
 
         def later(image: bytes, instruction: str) -> None:
             ctx["editing"] = True
@@ -2681,16 +2751,37 @@ class Pipeline:
                         log("and answered again without looking: the reply says so")
                         answer = f"{answer.rstrip()} {NOT_LOOKED}"
             if (TOOLS_ON and IMAGE_URL and not ctx["picture"] and not ctx["editing"]
-                    and not ctx["held"] and PICTURE_PROMISE.search(clean(answer))):
-                log("a picture was promised and none started: asked again")
-                again = self.llm(msgs[:-1] + [{"role": "user", "content":
-                                               f"{said}\n\n{NOT_STARTED}\n\n{here}"}])
-                started = ctx["picture"] or ctx["editing"]
-                about = SEEN["image"] or PICTURE_WORDS.search(asked) or PICTURE_WORDS.search(again)
-                if not started and about and PICTURE_PROMISE.search(clean(again)):
-                    log("and promised again without starting one: the reply says so")
-                    again = NO_PICTURE
-                answer = again or answer
+                    and not ctx["held"]):
+                # A picture came with the message and edit was not called: was
+                # a change to it what was asked for?
+                wanted = bool(IMAGE_EDIT and ctx["sent"] and "edit" not in ctx["called"]
+                              and (self.judge or wants_change)(asked))
+                if wanted or PICTURE_PROMISE.search(clean(answer)):
+                    log("a change to the picture that came with the message was asked for "
+                        "and not started: asked again" if wanted else
+                        "a picture was promised and none started: asked again")
+                    note = CHANGE_WANTED if wanted else NOT_STARTED
+                    again = self.llm(msgs[:-1] + [{"role": "user", "content":
+                                                   f"{said}\n\n{note}\n\n{here}"}])
+                    started = ctx["picture"] or ctx["editing"]
+                    about = (SEEN["image"] or PICTURE_WORDS.search(asked)
+                             or PICTURE_WORDS.search(again))
+                    if wanted and not started and "edit" not in ctx["called"]:
+                        # Asked twice, not done twice. What the person wants is
+                        # known and in their own words, which is all the editor
+                        # needs: the program starts the edit itself.
+                        log("and not started again: the edit is started with the person's "
+                            "own words")
+                        call = {"id": "edit", "function": {
+                            "name": "edit", "arguments": json.dumps({"instruction": asked})}}
+                        found = run_tool("edit", {"instruction": asked})
+                        remember(call, found)
+                        again = (ON_ITS_WAY if ctx["editing"] else
+                                 BUSY_NOW if BUSY_DRAWING in found else again)
+                    elif not started and about and PICTURE_PROMISE.search(clean(again)):
+                        log("and promised again without starting one: the reply says so")
+                        again = NO_PICTURE
+                    answer = again or answer
             reply = clean(answer)
         finally:
             TURN.ctx = None
