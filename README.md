@@ -85,6 +85,8 @@ Flight Deck — the touchscreen front-end (v0.1):
 pi/display-check.sh      read-only: is the XENEON Edge's video + touch sound?
 pi/setup-display.sh      cage + chromium kiosk on the Edge, mode pinning
 pi/setup-deck.sh         installs deck-api, repoints fauxmo at it
+pi/pin-fleet.sh          pins Douglas and DougVoice in the Pi's hosts file, so the
+                         deck finds them without DNS
 pi/deck-api/deck_api.py  one entry point for every trigger; state + SSE
 pi/deck-api/test_phases.py   phase mapping vs the orchestrator's real log lines
 pi/deck-ui/              the panel itself — index.html, deck.css, deck.js, selftest.html
@@ -517,6 +519,14 @@ mints the token that goes into the Pi's `boot.env` as `DOUGLAS_AGENT_TOKEN`.
 The Pi reaches Douglas and DougVoice by MagicDNS name (`douglas`,
 `dougvoice`), so the Pi must be on the tailnet with `--accept-dns`, or
 `DOUGLAS_HOST` / `VOICE_HOST` must be set to full names.
+
+Those names resolve only while the Pi's `/etc/resolv.conf` is the one
+Tailscale wrote, and on a Pi that is on Wi-Fi it is not always (see
+Troubleshooting). `sudo ./pi/pin-fleet.sh`, run on the Pi, pins both names in
+its hosts file at the addresses Tailscale gives, so the deck goes on finding
+them whatever has happened to DNS. Nothing needs restarting, and `off` undoes
+it. A machine that is removed from the tailnet and added again gets a new
+address: run the script again and the pin follows it.
 
 #### Provisioning Douglas
 
@@ -1043,6 +1053,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
+| `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
 | `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; a turn's allowance of lookups |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
@@ -1137,6 +1148,20 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   confuse with the Pi's own.
 - **Machine wakes but nothing is spoken.** Nobody logged on — the greeting
   is a logon task. See auto sign-in above.
+- **Douglas and DougVoice both read OFFLINE, and both are up.** The Pi has
+  lost their names, not the machines. On the Pi, `getent hosts douglas`
+  finds nothing while `tailscale ping douglas` answers, and
+  `/etc/resolv.conf` begins `# Generated by NetworkManager`. The Wi-Fi
+  dropped and rejoined; NetworkManager rewrites that file on every rejoin and
+  Tailscale writes its own lines back, but after several rejoins in a row it
+  can lose the last round (`journalctl -u tailscaled | grep trample` shows
+  each one). `sudo tailscale set --accept-dns=false`, then
+  `--accept-dns=true`, has Tailscale write the file again, and the deck shows
+  both within seconds. `sudo ./pi/pin-fleet.sh` takes DNS out of it: the two
+  names go into `/etc/hosts`, and into cloud-init's template where cloud-init
+  rebuilds that file at every boot. With the pins in place, a machine that
+  reads OFFLINE after it was added to the tailnet again has a stale pin: run
+  the script once more.
 - Logs: `journalctl -t flightsim-boot` on the Pi (plus
   `~/flightsim-boot.log` for detached runs).
 
