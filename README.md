@@ -1115,12 +1115,26 @@ is too blurred to read, and that a closer photo would settle it; told there
 is a logo on the muffler he says he can see it now, and what it looks like;
 pressed to spell the name he says he cannot; asked which maker has such a
 badge he says he cannot tell; and told the make, that it fits the shield and
-the arrows. He does not name it himself, and with this photograph he should
-not. A look that goes to a mark takes 12 to 15 seconds once the picture has
-been read and about 20 on a first look, where a plain look took 9. One test
-picture still gets a made-up name: marks on a pipe that an image model drew
-in place of letters are read as a famous maker's, a different one by each
-look.
+the arrows.
+
+Live, it went wrong once more, and differently. Sent the photograph and the
+question in one message, he said it looked like another maker's exhaust:
+"the stylized A in a rounded rectangle is their badge". His eyes had said no
+such thing. The name was his own, from what the model remembers of logos,
+and the dry run had not shown it because there the look came with the
+program's note for a second look. So it is now said wherever a look is
+handed to him, first or second, and once in his instructions: a logo or a
+badge with no name to read on it is described, and no maker is named for it
+by its look. On the photograph sent with its question, three conversations
+each: the wrong maker in two of three before, in none of twelve turns after,
+and his eyes found and described the badge in eight looks of eight.
+
+He does not name the maker himself, and with this photograph he should not:
+the name is not legible in it. A look that goes to a mark takes 12 to 15
+seconds once the picture has been read and about 20 on a first look, where a
+plain look took 9. One test picture still gets a made-up name: marks on a
+pipe that an image model drew in place of letters are read as a famous
+maker's, a different one by each look.
 
 ### DougVoice — Douglas's ears
 
