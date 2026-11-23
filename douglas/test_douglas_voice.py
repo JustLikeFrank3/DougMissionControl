@@ -61,6 +61,12 @@ def load(name, file):
 
 voice = load("voice", "douglas-voice.py")
 agent = load("agent", "douglas-agent.py")      # the reader of what we write
+# The two questions the program puts to the model on its own are stood in for
+# here, so that no turn in these tests reaches for a model server by itself;
+# the real ones are tested where they are named.
+real_wants_change, real_lookup_wanted = voice.wants_change, voice.lookup_wanted
+voice.wants_change = lambda said, ask=None: False
+voice.lookup_wanted = lambda tool, said, ask=None: None
 
 
 def on_disk():
@@ -1580,22 +1586,22 @@ def fake_ask(msgs, tools=None, max_tokens=0, temperature=None):
 
 
 check("the question is put on its own: the person's words, no tools, one word wanted, nothing left to chance",
-      (voice.wants_change("Put the dog   on clouds.", fake_ask), len(PUT[0][0]),
+      (real_wants_change("Put the dog   on clouds.", fake_ask), len(PUT[0][0]),
        PUT[0][0][0]["content"].endswith("Answer with one word, yes or no.\n\nThe message: Put the dog on clouds."),
        PUT[0][1:]), (True, 1, True, (None, 4, 0.0)))
 answers = []
 for REPLY[0] in ("No.", "no", "Maybe, yes.", "", "</think>\n\nYes", "**Yes**"):
-    answers.append(voice.wants_change("Make it snow.", fake_ask))
+    answers.append(real_wants_change("Make it snow.", fake_ask))
 check("only a yes is a yes", answers, [False, False, False, False, True, True])
 n = len(PUT)
-check("with no words there is nothing to ask", (voice.wants_change("  ", fake_ask), len(PUT) - n), (False, 0))
+check("with no words there is nothing to ask", (real_wants_change("  ", fake_ask), len(PUT) - n), (False, 0))
 
 
 def no_answer(*a):
     raise OSError("the model server is down")
 
 
-check("and no answer is a no: the turn goes on as it was", voice.wants_change("Make it snow.", no_answer), False)
+check("and no answer is a no: the turn goes on as it was", real_wants_change("Make it snow.", no_answer), False)
 check("the note with every message says the call comes before the words",
       "Asked for a picture, or for a change to one, call draw or edit before you write a word: nothing is made "
       "or changed without the call." in voice.turn_note("phone", False), True)
@@ -1635,6 +1641,129 @@ art.shutdown()
 voice.IMAGE_URL = voice.IMAGE_EDIT = voice.EYES_URL = ""
 voice.offer_tools()
 voice.SEEN["image"] = b""
+
+print("-- the weather and the news: looked up by the program when he does not --")
+NOW = {"script": None, "said": [], "asked": [], "answer": {"weather": {"location": ""}, "news": {"topic": ""}}, "calls": []}
+
+
+def now_llm(msgs, tools=None):
+    NOW["said"].append(msgs[-1])
+    return NOW["script"](msgs)
+
+
+def now_wanted(tool, said):
+    NOW["asked"].append((tool, said))
+    return NOW["answer"][tool]
+
+
+n_state, n_lines = os.path.join(ddir, "now.json"), os.path.join(ddir, "now.jsonl")
+nowp = voice.Pipeline(voice.StateFile(n_state), voice.Transcript(n_lines), send=lambda *a: True,
+                      snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, now_llm), tts=fake_tts,
+                      see=lambda image, question="": "A dog on a porch.", wanted=now_wanted)
+kept_tools = dict(voice.TOOLS)
+voice.TOOLS["weather"] = (lambda location="": (NOW["calls"].append(("weather", location)),
+                                               "Weather for Springfield. Tomorrow, Monday 23 November: rain, high 48, low 39 F.")[1],
+                          ) + kept_tools["weather"][1:]
+voice.TOOLS["news"] = (lambda topic="": (NOW["calls"].append(("news", topic)), "Current headlines: Bridge reopens (Wire).")[1],
+                       ) + kept_tools["news"][1:]
+
+
+def now_says(text, image=b""):
+    try:
+        with open(n_lines, encoding="utf-8") as f:
+            n = len(f.readlines())
+    except OSError:
+        n = 0
+    nowp.forget()
+    nowp.say(text, "phone", image=image)
+
+    def mine():
+        with open(n_lines, encoding="utf-8") as f:
+            return [json.loads(x) for x in f][n:]
+    until(lambda: os.path.exists(n_lines) and len(mine()) >= 2 and nowp.state == "idle")
+    return mine()[-1]["text"]
+
+
+journal, real_err = io.StringIO(), sys.stderr
+sys.stderr = journal
+NOW["script"] = lambda msgs: ({"content": "Rain tomorrow, high of 48."} if msgs[-1]["role"] == "tool"
+                              else {"content": "Sunny tomorrow, high around 63."})
+got = now_says("What's the weather doing tomorrow?")
+check("asked about the weather, the program looks before he says a word, and he answers from that in one go",
+      (got, NOW["asked"], NOW["calls"], len(NOW["said"])),
+      ("Rain tomorrow, high of 48.", [("weather", "What's the weather doing tomorrow?")], [("weather", "")], 1))
+check("he is given the forecast as the result of a call he made",
+      (NOW["said"][-1]["role"], "high 48, low 39 F" in NOW["said"][-1]["content"],
+       [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in nowp.history[-4:]]),
+      ("tool", True, [("user", ""), ("assistant", "weather"), ("tool", ""), ("assistant", "")]))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["answer"]["weather"] = {"location": "Paris"}
+got = now_says("Do I need a coat in Paris tomorrow?")
+check("for the place that was asked about", (got, NOW["calls"]), ("Rain tomorrow, high of 48.", [("weather", "Paris")]))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["answer"]["weather"] = None
+calls = len(NOW["said"])
+got = now_says("Do you like rainy days?")
+check("a message that only uses the word is asked about, and left alone",
+      (got, NOW["asked"], NOW["calls"], len(NOW["said"]) - calls),
+      ("Sunny tomorrow, high around 63.", [("weather", "Do you like rainy days?")], [], 1))
+NOW["asked"].clear()
+NOW["script"] = lambda msgs: {"content": "Paris."}
+got = now_says("What's the capital of France?")
+check("one that uses no such word is not asked about at all", (got, NOW["asked"]), ("Paris.", []))
+NOW["script"] = lambda msgs: ({"content": "Rain there tomorrow, high of 48."} if msgs[-1]["role"] == "tool" else {
+    "content": "", "tool_calls": [{"id": "w1", "type": "function", "function": {"name": "weather", "arguments": "{\"location\": \"Oslo\"}"}}]})
+got = now_says("Will it rain there tomorrow?")
+check("where the question says no, he can still look for himself, and it is looked up once",
+      (got, NOW["asked"], NOW["calls"]),
+      ("Rain there tomorrow, high of 48.", [("weather", "Will it rain there tomorrow?")], [("weather", "Oslo")]))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["answer"]["weather"] = {"location": ""}
+NOW["script"] = lambda msgs: ({"content": "A bridge has reopened."} if msgs[-1]["role"] == "tool"
+                              else {"content": "I don't have a news feed."})
+NOW["answer"]["news"] = {"topic": "bridge"}
+got = now_says("What's the latest on the bridge?")
+check("the news is looked up the same way, about what was asked",
+      (got, NOW["asked"], NOW["calls"]), ("A bridge has reopened.", [("news", "What's the latest on the bridge?")], [("news", "bridge")]))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["script"] = lambda msgs: {"content": "Snow would suit it."}
+voice.EYES_URL = "http://eyes.invalid"
+got = now_says("Make it snow.", image=jpeg_of(640, 480))
+voice.EYES_URL = ""
+check("a message that brings a picture is about the picture, not the weather",
+      (got, NOW["asked"], NOW["calls"]), ("Snow would suit it.", [], []))
+voice.TOOLS_ON = False
+NOW["script"] = lambda msgs: {"content": "I cannot look that up."}
+got = now_says("What's the weather doing tomorrow?")
+check("with his lookups switched off there is nothing to look with", (got, NOW["asked"]), ("I cannot look that up.", []))
+voice.TOOLS_ON = True
+sys.stderr = real_err
+check("the journal says when the program looked, and for what",
+      (journal.getvalue().count("asked for the weather: looked up before he answers"),
+       journal.getvalue().count("asked for the news: looked up before he answers")), (2, 1))
+voice.TOOLS.update(kept_tools)
+PUT.clear()
+answers = []
+for REPLY[0] in ("HOME", "Home.", "NO", "No.", "Paris", "\"San Luis Obispo, California\"", "yes", "", "x" * 90, "</think>\n\nHOME"):
+    answers.append(real_lookup_wanted("weather", "Do I need   a coat?", fake_ask))
+check("the weather question's answer is a place, HOME, or a no",
+      answers, [{"location": ""}, {"location": ""}, None, None, {"location": "Paris"},
+                {"location": "San Luis Obispo, California"}, {"location": ""}, None, None, {"location": ""}])
+check("and it is put on its own: the person's words, no tools, a few words wanted, nothing left to chance",
+      (len(PUT[0][0]), PUT[0][0][0]["content"].endswith("answer with the single word NO.\n\nThe message: Do I need a coat?"),
+       PUT[0][1:]), (1, True, (None, 16, 0.0)))
+answers = []
+for REPLY[0] in ("TOP", "Falcons game", "NO"):
+    answers.append(real_lookup_wanted("news", "Did the Falcons win?", fake_ask))
+check("the news question's answer is what to search for, TOP, or a no", answers, [{"topic": ""}, {"topic": "Falcons game"}, None])
+check("no answer is a no, and so are no words", (real_lookup_wanted("weather", "Rain?", no_answer), real_lookup_wanted("news", " ", fake_ask)), (None, None))
+check("the words that bring the question on",
+      ([bool(voice.NOW_WORDS["weather"].search(x)) for x in (
+          "Is it going to rain today?", "Do I need a jacket?", "how cold is it outside", "What's the forecast",
+          "Tell me a joke.", "How do I cool a room?")],
+       [bool(voice.NOW_WORDS["news"].search(x)) for x in (
+           "What's in the news?", "Did the Falcons win?", "Who won last night?", "Who painted the Mona Lisa?", "Draw me a cat.")]),
+      ([True, True, True, True, False, False], [True, True, True, False, False]))
 
 print("-- the owner's records: read at once, changed only on a yes --")
 DASH = " \u2014 "

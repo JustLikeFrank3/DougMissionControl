@@ -610,6 +610,25 @@ instructions. Lookups are the one thing that leaves the house: the words of
 the question go to the service asked. `DOUGLAS_TOOLS=0` turns them off, and he
 then says he has no internet.
 
+**The weather and the news are looked up before he speaks.** Told to look
+things up, he mostly does. On the first message of a conversation he often
+did not: asked whether it would rain today, he gave a forecast with numbers
+in it that he had made up, or said he had no way to check, as often as four
+times in ten. No wording cured it, a lower temperature did not, and the model
+server cannot be made to call a tool (it accepts `tool_choice` and ignores
+it). So the program looks. A message that uses a weather or news word is put
+to the model as a question of its own, with a word or two for an answer: is
+this asking for the weather, and where? for the news, and about what? That
+it answers reliably, in about half a second. On anything but a no, the
+program calls the tool and hands him the result as a call he made, and he
+answers from it. It is also the quicker way round, one pass of the model
+where his own lookup takes two: in a dry run every one of 30 weather
+questions and 12 about the news was answered from a lookup, in about two
+seconds where it had been four to seven. A message that only uses the word
+("do you like rainy days?") gets a no and goes to him as it is, and one that
+points at a place named earlier ("is it raining there?") is left to him,
+since he knows where "there" is.
+
 **The owner's own records.** With `JOBCONTEXT_URL` and `JOBCONTEXT_TOKEN` set,
 he has one more tool: the owner's records on their own jobContext server (an
 MCP server: the stories they have told about themselves and samples of how
@@ -960,7 +979,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

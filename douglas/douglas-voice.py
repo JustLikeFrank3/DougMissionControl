@@ -1882,6 +1882,62 @@ def names_things(reply: str) -> bool:
     return False
 
 
+# The weather and the news he never knows, and on the first message of a
+# conversation he has answered such a question without looking as often as
+# four times in ten: a forecast with numbers in it, made up, or "I have no way
+# to check the weather". No wording cured it, and the model server cannot be
+# made to call a tool, so the program does the looking, and does it first. A
+# message that uses one of these words is put to the model as a question of
+# its own (is this asking for the weather, and where? for the news, and about
+# what?), which it answers reliably; on anything but a no the program calls
+# the tool and he answers from what came back. That is one pass of the model
+# where his own lookup takes two, so it is also the quicker way round.
+NOW_WORDS = {
+    "weather": re.compile(
+        r"\b(weather|forecast|rain(s|y|ing|ed)?|snow(s|y|ing|ed)?|sleet|hail|storms?|stormy|"
+        r"thunder\w*|sunny|sunshine|cloudy|overcast|windy|humid(ity)?|temperature|degrees|"
+        r"umbrella|raincoat|freez(e|ing)|frost|heat ?wave|tornado(es)?|hurricanes?|"
+        r"(hot|cold|warm|chilly|cool|nice|wet|dry) (is it|will it|out|outside)|"
+        r"how (hot|cold|warm|chilly|nice)|need (a|an|my) (coat|jacket|sweater))\b", re.I),
+    "news": re.compile(
+        r"\b(news|headlines?|top stories|what'?s (been )?(happening|going on)|"
+        r"what is (happening|going on)|what happened|latest (on|about|with|from|in)|who won|"
+        r"did (the |they )?[\w' ]{0,30}\bwin|scores?|standings)\b", re.I),
+}
+NOW_ASKED = {
+    "weather": ("Is the message below asking what the weather is or will be somewhere: a "
+                "forecast, rain, snow, the temperature, whether a coat or an umbrella is "
+                "needed? If it is, answer with the name of the place it asks about and nothing "
+                "else, or with the single word HOME if it names no place. If it is not, or if "
+                "it points at a place named earlier (\"there\", \"that city\"), answer with "
+                "the single word NO.\n\nThe message: "),
+    "news": ("Is the message below asking for news, headlines, a sports result, or something "
+             "that has happened lately? If it is, answer with the few words to search the news "
+             "for and nothing else, or with the single word TOP if it asks for the news in "
+             "general. If it is not, answer with the single word NO.\n\nThe message: "),
+}
+NOW_ARG = {"weather": ("location", "HOME"), "news": ("topic", "TOP")}
+
+
+def lookup_wanted(tool: str, said: str, ask=None) -> dict | None:
+    """Is a message asking for the weather, or for the news? The arguments to
+    call that tool with if it is, None if it is not. `ask` is the call to the
+    model server, replaceable in tests."""
+    said = " ".join(str(said).split())[:600]
+    if not said:
+        return None
+    try:
+        m = (ask or complete)([{"role": "user", "content": NOW_ASKED[tool] + said}], None, 16, 0.0)
+    except Exception as e:      # noqa: BLE001 - no answer is a no: his own reply stands
+        log(f"could not ask whether the {tool} was wanted: {type(e).__name__}: {e}")
+        return None
+    got = " ".join(unthought(str(m.get("content") or "")).split()).strip(" .!\"'*`")
+    if not got or len(got) > 80 or re.match(r"no\b", got, re.I):
+        return None
+    arg, default = NOW_ARG[tool]
+    return {arg: "" if got.upper() in (default, "YES") else got}
+
+
 # A photo arrives with a request and no edit is started. Was a change to the
 # photo what was asked for? The model is good at saying what a message means
 # and unreliable about which tool that calls for (asked to put a dog on a
@@ -2400,13 +2456,15 @@ class Pipeline:
 
     def __init__(self, state: StateFile, transcript: Transcript, *, send,
                  snd_format=lambda: (22050, 2, 1), stt=stt, llm=llm, tts=tts,
-                 linked=lambda: True, speaker=None, see=see, judge=None) -> None:
+                 linked=lambda: True, speaker=None, see=see, judge=None,
+                 wanted=None) -> None:
         self.st, self.tr = state, transcript
         self.send, self.snd_format, self.linked = send, snd_format, linked
         self.speaker = speaker          # real speakers elsewhere, when they are up
         self._remote = False            # an utterance is playing there now
         self.stt, self.llm, self.tts, self.see = stt, llm, tts, see
         self.judge = judge              # "was a change to the picture asked for?"; wants_change
+        self.wanted = wanted            # "is this asking for the weather, the news?"; lookup_wanted
         self.history: list[dict] = []
         self.last_exchange = 0.0
         self._lock = threading.Lock()
@@ -2734,7 +2792,28 @@ class Pipeline:
 
         ctx["later"] = later
         try:
-            answer = self.llm(msgs)
+            looked = []
+            if TOOLS_ON and not ctx["sent"]:
+                # The weather or the news: looked up here, before he says a
+                # word, and handed to him as a call he made. (A message that
+                # brings a picture is about the picture: "make it snow" is no
+                # question about the weather.)
+                for tool, words in NOW_WORDS.items():
+                    if tool not in TOOLS or not words.search(asked):
+                        continue
+                    args = (self.wanted or lookup_wanted)(tool, asked)
+                    if args is None:
+                        continue
+                    log(f"asked for the {tool}: looked up before he answers")
+                    call = {"id": tool, "type": "function", "function": {
+                        "name": tool, "arguments": json.dumps(args)}}
+                    found = run_tool(tool, args)
+                    remember(call, found)
+                    looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
+                              {"role": "tool", "tool_call_id": tool, "name": tool,
+                               "content": found}]
+                    break
+            answer = self.llm(msgs + looked)
             if (TOOLS_ON and JC["areas"] and not ctx["lookups"]
                     and about_records(asked, CONVO["private"])
                     and (not JOBCONTEXT_VIA or via in JOBCONTEXT_VIA)):
