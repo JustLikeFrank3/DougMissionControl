@@ -3615,10 +3615,14 @@ class Pipeline:
         try:
             looked = []
             if (TOOLS_ON and not ctx["sent"] and "look" in TOOLS and SEEN["image"]
+                    and not ARTIST.locked()
                     and (self.glance or look_wanted)(asked, *last_exchange(self.history))):
                 # About the picture in the conversation: it is looked at again
                 # here, with the person's words for the question (see
-                # LOOK_ASKED). How long it took: never what was asked.
+                # LOOK_ASKED). How long it took: never what was asked. Not
+                # while an edit is under way: the picture that is kept is
+                # still the one from before it, and "how does it look?" would
+                # be answered with that.
                 began = time.time()
                 call = {"id": "look", "type": "function", "function": {
                     "name": "look", "arguments": json.dumps({"question": asked})}}

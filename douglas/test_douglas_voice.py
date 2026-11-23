@@ -2143,6 +2143,10 @@ check("eyes down: he is handed that the look failed, and is not told that he loo
       ("I could not look just now.", True, False, 1))
 NOW["blind"] = False
 NOW["glanced"].clear(); LOOKS.clear()
+voice.ARTIST.acquire()
+now_says("How does it look?", goes_on=True)
+voice.ARTIST.release()
+check("while an edit is under way the picture that is kept is the old one, so nobody is asked and it is not looked at", (NOW["glanced"], LOOKS), ([], []))
 voice.TOOLS_ON = False
 now_says("Is there a name on the tag?", goes_on=True)
 voice.TOOLS_ON = True
