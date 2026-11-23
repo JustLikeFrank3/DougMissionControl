@@ -168,6 +168,7 @@ REDDIT_AGENT = E("REDDIT_USER_AGENT", f"linux:douglas-home-assistant:v1.0 (by /u
 REDDIT_AUTH_URL = E("REDDIT_AUTH_URL", "https://www.reddit.com/api/v1/access_token")
 REDDIT_API_URL = E("REDDIT_API_URL", "https://oauth.reddit.com").rstrip("/")
 TOOL_ROUNDS = 4                               # look, read, read again, answer
+RESULT_MAX = 4000                             # characters of one lookup's result handed to the model
 # All the results of one turn's lookups, in characters. The model reads a
 # fixed number of tokens and the instructions take a good part of them: past
 # this a result is cut short rather than the whole turn lost.
@@ -800,15 +801,17 @@ def system_prompt() -> str:
             "is not answered by it, look again or say that part is missing rather than "
             "filling it in. If a lookup fails or finds nothing, say so, and never say "
             "you could not find something you did not look for. "
-            + ("With the search tool you can search the web. Use it for product reviews and "
+            # What the search is for, and no more. "Search first, then answer
+            # from what the pages say" stood here, and he took to saying he
+            # had: "I looked it up", in a turn that looked nothing up. What to
+            # do with results is said in the turn that has them (SEARCHED).
+            + ("With the search tool you can search the web: it is for product reviews and "
                "recommendations, prices, how to do something, and whatever else you are not "
-               "sure of or that may have changed: search first, then answer from what the "
-               "pages say, and say which site said it. A search result is what a page "
-               "claims, not a fact you checked. "
+               "sure of or that may have changed since you learned it. A search result is "
+               "what a page claims, not a fact you checked. "
                + ("" if "reddit" in TOOLS else
-                  "You cannot search Reddit itself, but a web search finds Reddit threads: "
-                  "asked what people on Reddit think, search the web with the word reddit "
-                  "in it. ") if "search" in TOOLS else "")
+                  "You cannot search Reddit itself, but a web search with the word reddit "
+                  "in it finds Reddit threads. ") if "search" in TOOLS else "")
             + ("With the reddit tool you can search Reddit for what people there say about a "
                "product, a problem or a place. Those are the opinions of anonymous users: "
                "pass them on as what people on Reddit say, never as fact, and name no one. "
@@ -1217,13 +1220,18 @@ def error_code(e: urllib.error.HTTPError) -> str:
 
 def said_no(e: urllib.error.HTTPError, code: str = "") -> str:
     """Which no it was: "key" (the key is not known), "limit" (too many
-    requests, or the allowance is spent), or "" for anything else. The search
-    service answers a key it does not know with 422, where 401 would be
-    expected, and says which no in the body: `code` is its word for it."""
+    requests, or the allowance is spent), "plan" (the key is good, and what
+    it pays for does not include this), or "" for anything else. The search
+    service says which no in the body, and its status alone does not: a key
+    it does not know gets 422, where 401 would be expected, and so does a
+    request it cannot make sense of; what a plan leaves out gets 400. `code`
+    is its word for it."""
     if e.code == 401 or "TOKEN" in code or "SUBSCRIPTION" in code:
         return "key"
-    if e.code == 429 or "RATE" in code or "QUOTA" in code:
+    if e.code == 429 or "LIMIT" in code or "QUOTA" in code:
         return "limit"
+    if "PLAN" in code:
+        return "plan"
     return ""
 
 
@@ -1231,11 +1239,86 @@ def refused(service: str, e: urllib.error.HTTPError, code: str = "") -> str:
     """What the model is told when a service that wants a key says no."""
     why = {"key": "it refused the key",
            "limit": "it says there have been too many requests, or the allowance is used up",
+           "plan": "the key is good, but what it pays for does not include this",
            }.get(said_no(e, code)) or (
                "it refused the key, or the key is not allowed to do this" if e.code == 403
                else f"it answered with error {e.code}")
     return (f"{service} could not be searched: {why}. Tell the person that, and do not answer "
             "from memory as if you had searched.")
+
+
+def title_words(text) -> set:
+    """The words that tell one headline from another: no "a", no "of"."""
+    return set(re.findall(r"[a-z]{3,}|\d+", str(text).lower()))
+
+
+def says_the_title(text, title) -> bool:
+    """Whether a heading says only what the page's title says already: three
+    quarters of its words are in the title."""
+    words = title_words(text)
+    return bool(words) and len(words & title_words(title)) * 4 >= len(words) * 3
+
+
+def data_words(thing, name: str = "") -> list[str]:
+    """What a passage that arrived as data says, a part at a time ("comment:
+    ...", "ratingValue: 4.6"), without the addresses and the data's own
+    labels."""
+    if isinstance(thing, dict):
+        return [w for k, v in thing.items() if not str(k).startswith("@")
+                for w in data_words(v, name if k in ("text", "value") else str(k))]
+    if isinstance(thing, list):
+        return [w for v in thing for w in data_words(v, name)]
+    text = "" if thing is None or isinstance(thing, bool) else " ".join(str(thing).split())
+    if not text or re.match(r"(?i)https?://", text):
+        return []
+    return [f"{name}: {text}" if name else text]
+
+
+def passage(snippet, title: str = "", forum: bool = False) -> str:
+    """A passage of a page as the search service hands it over, in plain
+    words. It arrives as Markdown, a heading to a line, with lists, bold and
+    tables; what a page describes as data (a video and the comments under it)
+    arrives as JSON. Cut to size as it comes, a third of a page's share went
+    on its headline said twice and on the marks. So the headline is dropped
+    where the title says it already, a heading ends in a colon, a table's row
+    is its cells, and the marks go. On a forum the lesser headings are the
+    names of those who wrote, and go as well: who wrote a comment is nothing
+    he needs."""
+    snippet = str(snippet or "").strip()
+    if snippet[:1] in ("{", "["):
+        try:
+            said = data_words(json.loads(snippet))
+        except (ValueError, RecursionError):
+            said = None                 # only looked like data: read it as text
+        if said is not None:
+            return "; ".join(s for s in said
+                             if not (s.startswith("name: ") and says_the_title(s[6:], title)))
+    out = []
+    for row in snippet.splitlines():
+        row = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", row.strip())     # a picture
+        row = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", row)          # a link: its words
+        row = re.sub(r"^\*\s+", "- ", re.sub(r"^(>\s*)+", "", row))   # a quotation's mark; a bullet
+        row = re.sub(r"\*+|\^\d+|▢", "", row).strip()                # bold, a footnote's number, a tick box
+        head = re.match(r"(#{1,6})(?:\s+|$)(.*)", row)
+        if head:
+            level, row = len(head.group(1)), head.group(2).rstrip("# ").strip()
+            if forum and level > 1:
+                row = "-"                                            # a new comment, and not who wrote it
+            elif not row or (level == 1 and says_the_title(row, title)):
+                continue
+            elif row[-1] not in ".:!?":
+                row += ":"
+        elif re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?", row):
+            continue                                                 # the rule under a table's head
+        elif row.startswith("|"):
+            row = ", ".join(c.strip() for c in row.strip("|").split("|") if c.strip()) + ";"
+        if row:
+            out.append(row)
+    return " ".join(out)
+
+
+# How the result of a web search that found something begins.
+SEARCH_RESULTS = "Web search results for "
 
 
 def tool_search(query: str = "") -> str:
@@ -1257,7 +1340,7 @@ def tool_search(query: str = "") -> str:
         dates = got.get("sources") if isinstance(got.get("sources"), dict) else {}
     except urllib.error.HTTPError as e:
         code = error_code(e)
-        if said_no(e, code):            # the key, or the allowance: asking again changes nothing
+        if said_no(e, code) in ("key", "limit"):    # asking again changes nothing
             log(f"the web search was refused: HTTP {e.code} {code}".rstrip())
             return refused("The web", e, code)
         log(f"the web search gave no passages (HTTP {e.code} {code}".rstrip() + "): the ordinary results, then")
@@ -1273,24 +1356,47 @@ def tool_search(query: str = "") -> str:
         found = [(r.get("title"), r.get("url"),
                   [r.get("description")] + list(r.get("extra_snippets") or []))
                  for r in ((got.get("web") or {}).get("results") or []) if isinstance(r, dict)]
-        dates = {r.get("url"): {"age": [None, r.get("age") or r.get("page_age")]}
+        # "page_age" is the date as a date; "age" is the same in words ("August 14, 2026").
+        dates = {r.get("url"): {"age": [None, r.get("page_age") or r.get("age")]}
                  for r in ((got.get("web") or {}).get("results") or []) if isinstance(r, dict)}
-    lines = []
+    head = (f"{SEARCH_RESULTS}{query!r}, the best first. This is what those pages say, "
+            "not something you checked: say which site a claim comes from.")
+    lines, room = [], RESULT_MAX - len(head)
     for title, url, snippets in found[:6]:
-        said = clip(text_of(" ".join(str(x) for x in snippets if x)), 480)
+        host = urllib.parse.urlsplit(str(url or "")).hostname or ""
+        title = clip(text_of(str(title or "")), 100)
+        parts = []
+        for snippet in snippets:
+            part = text_of(passage(snippet, title, host == "reddit.com" or host.endswith(".reddit.com")))
+            # The ordinary results give a page's description, and often the
+            # same words again, and more, as the first of its further passages.
+            twin = [i for i, p in enumerate(parts)
+                    if p[:min(60, len(part))].lower() == part[:min(60, len(p))].lower()]
+            if part and not twin:
+                parts.append(part)
+            elif part and len(part) > len(parts[twin[0]]):
+                parts[twin[0]] = part
+        said = " ".join(parts)
         if not (url and said):
             continue
-        host = urllib.parse.urlsplit(str(url)).hostname or ""
         age = (dates.get(url) or {}).get("age") if isinstance(dates.get(url), dict) else None
-        when = age[1] if isinstance(age, list) and len(age) > 1 and age[1] else ""
-        lines.append(f"{len(lines) + 1}. {clip(text_of(str(title or host)), 100)} "
-                     f"({host}{', ' + str(when)[:10] if when else ''}) {url}\n   {said}")
+        when = str(age[1]) if isinstance(age, list) and len(age) > 1 and age[1] else ""
+        when = when[:10] if re.match(r"\d{4}-\d\d-\d\d", when) else clip(when, 24)
+        line = f"{len(lines) + 1}. {title or host} ({host}{', ' + when if when else ''}) {url}\n   "
+        # Real titles and addresses are long, and six pages at full length ran
+        # past what one lookup may hand over: the last was cut off mid-word.
+        # A page gets its share while there is room, a smaller one in what is
+        # left, and is left out when that is too little to say anything in.
+        fits = min(480, room - len(line) - len(" ...") - 1)
+        if fits < 120:
+            break
+        lines.append(line + clip(said, fits))
+        room -= len(lines[-1]) + 1
     # How many and how long: never what was searched for.
     log(f"searched the web: {len(lines)} results in {time.time() - started:.1f} s")
     if not lines:
         return f"The search found nothing for {query!r}."
-    return (f"Web search results for {query!r}, the best first. This is what those pages say, "
-            "not something you checked: say which site a claim comes from.\n" + "\n".join(lines))
+    return head + "\n" + "\n".join(lines)
 
 
 REDDIT_TOKEN = {"value": "", "until": 0.0}
@@ -2252,6 +2358,79 @@ NOW_ASKED = {
                "does not (small talk, a joke, a story, something anyone knows, a question "
                "about this conversation), answer with the single word NO.\n\nThe message: "),
 }
+# With a real web search switched on, a question need not use one of those
+# words to want it: "Who runs Intel these days?", "Tell me about the Steam
+# Deck." Left to himself he answered seven such questions in eight from what
+# he knew two years ago ("Apple hasn't announced an iPhone 17 yet"), and once
+# added "I looked it up". So whatever asks is put to a wider question, and
+# what only chats is not, and costs nothing. A typed question often has no
+# question mark, so a sentence that opens like one counts; "Have a nice day"
+# opens like one too, is asked about, and gets its no in half a second.
+ASKS = re.compile(
+    r"\?|(^|[.!;:]\s+)\W*(who|whom|whose|what|when|where|which|why|how|is|are|was|were|do|does|"
+    r"did|can|could|will|would|should|has|have|tell me|show me|give me|find|check|explain|"
+    r"describe|list)\b", re.I)
+NOW_ASKED["web"] = (
+    "You are shown one message that someone sent to an assistant. What that assistant knows "
+    "of the world ends about two years ago, and it can search the web. Decide whether "
+    "answering the message well takes a web search. "
+    "It does when the message asks about a product, device, app, game, film, show, book, "
+    "company or service, by name or by kind: what it is, its reviews, its price, its "
+    "features, what is new in it, which to buy, how to set it up, use it or fix it. It does "
+    "when it asks who holds a job, a title or an office (a president, a chief executive, a "
+    "champion), whether or not it says \"now\", or about anything latest, newest, current, "
+    "recent or upcoming, or anything else that may have changed in two years. And it "
+    "does when it asks outright to search for or look something up. It does not when the "
+    "message is small talk, a joke, a request to write or make something up, or a question "
+    "about the assistant, about this conversation, about the time or the date, or about the "
+    "person, their home or their own things; when it asks for knowledge that does not change "
+    "(history, science, language, arithmetic, how to cook); or when it points at something "
+    "named earlier without naming it (\"it\", \"that one\"). If it does, answer with the "
+    "words to type into a search engine and nothing else: a few words taken from the "
+    "message, with no year, no name and no fact added that the message does not give. If it "
+    "does not, answer with the single word NO.\n\nThe message: ")
+# "And how much is the regular one?" names nothing, and gets a no. Left to
+# himself he then said he had not checked, or gave a price from two years ago
+# as "according to the same lookup". So a message that points back is first
+# said again so that it stands alone, with what the person said just before
+# to go by ("And how much is the regular PlayStation 5?"), and that is what
+# is asked about. It is a step of its own because the question above would
+# not take it on: given the earlier message and told to use it, three
+# wordings in turn stopped searching for who holds an office, or searched for
+# the last question again when asked "What time is it?".
+POINTS = re.compile(
+    r"\b(it|its|they|them|their|he|she|him|her|his|which one)\b"
+    r"|\b(one|ones|that|this|those|these)(?=\W*$|[?.!,;])|\b(that|this) one\b"
+    r"|^\W*(and|but|or|so|what about|how about)\b", re.I)
+RESTATE = (
+    "You are shown two messages that one person sent to an assistant, one after the other. "
+    "Write the second message out again so that it can be understood without the first. If "
+    "the second points at something in the first without naming it (\"it\", \"they\", "
+    "\"he\", \"that one\", \"the regular one\", \"what about ...\"), put in its name, in "
+    "the first message's own words. If the second does not point at anything in the first "
+    "(\"What time is it?\", \"How is it going?\", a new subject), write it out unchanged. "
+    "Change nothing else, add no facts, answer no question, and reply with the one rewritten "
+    "message and nothing else.")
+
+
+def restated(before: str, said: str, ask=None) -> str:
+    """A message that points back at the one before it, said again so that
+    it stands alone. Only the person's own words may come out of this: a
+    rewriting with a word of four letters or more that is in neither message
+    is thrown away, and the message stands as it was."""
+    try:
+        m = (ask or complete)([{"role": "system", "content": RESTATE},
+                               {"role": "user", "content": f"First message: {before}\n\n"
+                                                           f"Second message: {said}"}], None, 60, 0.0)
+    except Exception as e:      # noqa: BLE001 - no answer: the message as it was
+        log(f"could not say a message again by itself: {type(e).__name__}: {e}")
+        return said
+    got = " ".join(unthought(str(m.get("content") or "")).split()).strip(" \"'*`")
+    theirs = set(re.findall(r"[a-z0-9]+", f"{before} {said}".lower()))
+    if not got or len(got) > 400 or any(
+            len(w) > 3 and w not in theirs for w in re.findall(r"[a-z0-9]+", got.lower())):
+        return said
+    return got
 NO_SEARCH = ("[Answering this well takes a web search, and you have none. Say plainly that you "
              "cannot look it up. If you remember something about it, you may add it, as what you "
              "remember and may be out of date: never as if you had just looked.]")
@@ -2267,8 +2446,25 @@ HEADLINES_ONLY = (
     "Say plainly that headlines are all you can see without a web search key. If you "
     "remember something about it, you may add it, as what you remember and may be out of "
     "date: never as if you had just looked.]")
+# After a search the program made, the search is all the looking up the turn
+# has. Told only that the results were his, he went on to read pages, search
+# again or look into the owner's records in one such turn in six, and with
+# this model the server reads the whole turn again for every further round
+# of lookups: twenty seconds and more, and the same again in the turn after.
+# One spoken answer took 54 seconds. Told to say which site said each thing,
+# he read the results out page by page, a thousand characters of it. So what
+# to do with a result is said in the turn that has it, as with the headlines:
+# short, from what is there, and what is missing said, for the person to ask
+# again.
+SEARCHED = (
+    "[This program has searched the web for this already. What it found follows, as a lookup "
+    "you made: what the best few pages say. It is all the looking up there is in this turn. "
+    "Answer from it now, in two or three sentences: the few things that bear most on the "
+    "question, not page by page, with the site that says each, and nothing that is not "
+    "there. If it does not answer the question, say what it does say and what is missing: "
+    "the person can have you search again in other words.]")
 NOW_ARG = {"weather": ("location", "HOME"), "news": ("topic", "TOP"),
-           "reddit": ("query", ""), "search": ("query", "")}
+           "reddit": ("query", ""), "search": ("query", ""), "web": ("query", "")}
 
 
 def now_tool(kind: str) -> str:
@@ -2281,15 +2477,32 @@ def now_tool(kind: str) -> str:
     return next((t for t in wants if t in TOOLS), "")
 
 
-def lookup_wanted(kind: str, said: str, ask=None) -> dict | None:
+def lookup_wanted(kind: str, said: str, ask=None, before: str = "") -> dict | None:
     """Is a message asking for the weather, the news, or a search? What to
     look up if it is (the place, the topic, the words to search for), None if
-    it is not. `ask` is the call to the model server, replaceable in tests."""
+    it is not. `ask` is the call to the model server, replaceable in tests.
+    `before` is what the person said in the turn before, for the wider
+    question: a message that points back at it is first said again so that
+    it stands alone. It is the person's own words and nothing else, never his
+    replies or what a lookup returned, so nothing but what the person said
+    can end up in the words searched for."""
     said = " ".join(str(said).split())[:600]
+    before = " ".join(str(before).split())[:300]
     if not said:
         return None
+    if kind == "web" and before and POINTS.search(said):
+        said = restated(before, said, ask)
+    question, _, lead = NOW_ASKED[kind].rpartition("\n\n")
+    # The wider question is put as instructions, and the message as the
+    # message. The model server keeps what it has read only up to a message's
+    # start: put in one piece, the 280 tokens of the question were read again
+    # for every message (1.4 s for a no), and put this way they are read once
+    # and kept (0.5 s). The older questions are still put in one piece: they
+    # were measured that way, and are asked far less often.
+    msgs = ([{"role": "system", "content": question}, {"role": "user", "content": lead + said}]
+            if kind == "web" else [{"role": "user", "content": NOW_ASKED[kind] + said}])
     try:
-        m = (ask or complete)([{"role": "user", "content": NOW_ASKED[kind] + said}], None, 24, 0.0)
+        m = (ask or complete)(msgs, None, 24, 0.0)
     except Exception as e:      # noqa: BLE001 - no answer is a no: his own reply stands
         log(f"could not ask whether the {kind} was wanted: {type(e).__name__}: {e}")
         return None
@@ -2640,7 +2853,7 @@ def run_tool(name: str, args, quiet: bool = False) -> str:
         return f"The {name} lookup failed: {str(e)[:120] or type(e).__name__}"
     # What comes back is someone else's text. It is information, not orders.
     # (The records tool has cut its own answer to size, and said so in it.)
-    return LOOKED_UP + str(result)[:JC_RESULT_MAX + 700 if name == "jobcontext" else 4000]
+    return LOOKED_UP + str(result)[:JC_RESULT_MAX + 700 if name == "jobcontext" else RESULT_MAX]
 
 
 def complete(messages: list[dict], tools: list | None = None,
@@ -2709,8 +2922,22 @@ def llm(messages: list[dict], ask=None) -> str:
         if m.get("role") == "tool":
             used, looked = used + len(str(m.get("content") or "")), looked + 1
     msgs, room = list(messages), TURN_RESULTS_MAX - used
-    began = float((getattr(TURN, "ctx", None) or {}).get("began") or time.time())
-    for n in range(max(1, TOOL_ROUNDS - looked)):
+    ctx = getattr(TURN, "ctx", None) or {}
+    began = float(ctx.get("began") or time.time())
+    if ctx.get("rounds") and int(ctx["rounds"]) <= looked:
+        # The program has looked, and that is all the looking this turn has.
+        # He is still shown his tools: left out, the server would read his
+        # instructions over again to find them gone. A call he makes all the
+        # same is not run, and he is asked once more for words.
+        last = dict(msgs[-1])
+        if last.get("role") == "tool":
+            last["content"] = str(last.get("content") or "") + LAST_LOOKUP
+        reply = str(ask(msgs[:-1] + [last], TOOL_SPECS).get("content") or "")
+        if not unthought(reply).strip():
+            reply = str(ask(msgs[:-1] + [last, {"role": "user", "content": NO_MORE_LOOKUPS}],
+                            TOOL_SPECS).get("content") or "")
+        return reply
+    for n in range(max(1, int(ctx.get("rounds") or TOOL_ROUNDS) - looked)):
         if n and time.time() - began > TURN_LOOKUP_S:
             break                       # long enough: he answers from what he has
         m = ask(msgs, TOOL_SPECS)
@@ -3229,7 +3456,9 @@ class Pipeline:
                 # question about the weather.)
                 for kind, words in NOW_WORDS.items():
                     tool = now_tool(kind)
-                    if not words.search(asked) or not (tool or kind == "search"):
+                    # With a web search to make, whatever asks may want one.
+                    wide = kind == "search" and tool == "search" and ASKS.search(asked)
+                    if not (words.search(asked) or wide) or not (tool or kind == "search"):
                         continue
                     if (kind != "weather" and records_named(asked)
                             and (not JOBCONTEXT_VIA or via in JOBCONTEXT_VIA)):
@@ -3237,7 +3466,20 @@ class Pipeline:
                         # the person's own records, whatever word it uses:
                         # those come first, and he is held to looking there.
                         continue
-                    args = (self.wanted or lookup_wanted)(kind, asked)
+                    if kind == "search" and tool == "search":
+                        # The person's last message goes with it, their words
+                        # only, without the notes this program put under
+                        # them. Not where the records have been read or were
+                        # asked about, and not after the weather or the news:
+                        # what goes on from those is not for a web search.
+                        before = next((str(m.get("content") or "").split("\n\n[", 1)[0]
+                                       for m in reversed(self.history) if m.get("role") == "user"), "")
+                        if (CONVO["private"] or records_named(before)
+                                or NOW_WORDS["weather"].search(before) or NOW_WORDS["news"].search(before)):
+                            before = ""
+                        args = (self.wanted or lookup_wanted)("web", asked, before=before)
+                    else:
+                        args = (self.wanted or lookup_wanted)(kind, asked)
                     if args is None:
                         continue
                     found = ""
@@ -3276,6 +3518,10 @@ class Pipeline:
                     call = {"id": tool, "type": "function", "function": {
                         "name": tool, "arguments": json.dumps(args)}}
                     found = found or run_tool(tool, args)
+                    if tool == "search" and found.startswith(LOOKED_UP + SEARCH_RESULTS):
+                        # He answers from the results, and looks no further
+                        # this turn (see SEARCHED).
+                        told, ctx["rounds"] = SEARCHED, 1
                     remember(call, found)
                     msgs[-1] = put()
                     looked = [{"role": "assistant", "content": "", "tool_calls": [call]},

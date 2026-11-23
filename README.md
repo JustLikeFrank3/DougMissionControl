@@ -645,11 +645,12 @@ since he knows where "there" is.
 thing, he had nothing to look with: he said he had "not seen any reviews", or
 named a model from memory. Both searches go through the service's own API,
 each with a key the owner gets from that service, and neither is offered
-without one. `search` (`SEARCH_KEY`, a Brave Search API key) asks for
+without one. `search` (`SEARCH_KEY`, a Brave Search API key; the service
+charges by the search, about half a cent each at the time of writing) asks for
 passages from the best few pages, the form of answer that service offers to
 assistants, and falls back to its ordinary result list on a plan that has
-none; he gets each page's title, site, date and address and what it says, and
-is told to say which site a claim comes from. `reddit` (`REDDIT_CLIENT_ID`,
+none; he gets each page's title, site, date and address and what it says, in
+plain words, and is told to say which site a claim comes from. `reddit` (`REDDIT_CLIENT_ID`,
 `REDDIT_CLIENT_SECRET`, `REDDIT_USER`) reads Reddit as an app with no user
 behind it: the best threads for a query from the last year, with the top
 comments of the first two, or more of one thread's comments. Nobody's name
@@ -669,6 +670,59 @@ in: a question about Reddit becomes a web search with the word reddit in it,
 and a question about reviews goes to Reddit. A message in the words of the
 owner's own records ("which of my stories is best?") is never taken to a
 search: the records come first.
+
+With a real web search switched on, a question need not use a word like
+"review" or "price" to want it. Left to himself he answered seven of eight
+such questions from what he knew two years ago ("Apple hasn't announced an
+iPhone 17 yet"), and once added "I looked it up" in a turn that had looked
+nothing up. So whatever asks (a question mark, or a sentence that opens like
+a question) is put to a wider question: does answering this take a web
+search, for an assistant whose knowledge ends two years ago? A named product
+or service, who holds an office, anything latest or current: yes. Small talk,
+the time, the person's own things, knowledge that does not change: no. The
+answer is the words to search for, taken from the message with no year or
+name added from memory; asked without that it searched for "iPhone 16" and
+for "Emmanuel Macron". Tried on 143 messages, twice each, it was right on all
+of them. It is put to the model as instructions, with the message as the
+message: the model server keeps what it has read only up to where a message
+starts, so the question in one piece was read again for every message (1.4
+seconds for a no) and this way is read once and kept (half a second).
+
+A question that points back ("And how much is the regular one?") names
+nothing and got a no; he then said he had not checked, or gave a two-year-old
+price as "according to the same lookup". Such a message is first said again
+so that it stands alone, with what the person said just before to go by ("And
+how much is the regular PlayStation 5?"), and that is what is asked about: 27
+of 30 pairs came out right, "What time is it?" after a question about a
+console among them. Only the person's own words go into this, never his
+replies or what a lookup returned: a rewriting with a word in it that the
+person did not say is thrown away, and in a conversation that has read the
+owner's records, or after a question about the weather or the news, nothing
+said earlier is used at all. It is a step of its own, a second on a
+follow-up, because the one question would not take the job on: three
+wordings that gave it the earlier message each broke something else.
+
+After a search the program made, that search is all the looking up the turn
+has, and he is told so with the results: answer from them in two or three
+sentences, the few things that bear on the question with the site that says
+each, nothing that is not there, and if they do not answer it, say what is
+missing, so that the person can have him search again. Left his allowance, in
+one such turn in six he read pages, searched again or looked into the owner's
+records, and with this model the server reads the whole turn again for every
+further round of lookups, twenty seconds and more, and once again in the turn
+after: one spoken answer took 54 seconds. He is still shown his tools in that
+turn (left out, the server would read his instructions over again), and a
+call he makes all the same is not run. And his standing instructions now say
+only what the search is for: "search first, then answer from what the pages
+say" is what he had recited as done.
+In a dry run of whole turns on the real model and the real search, the program
+searched for all 24 questions that wanted it (reviews, prices, what to buy,
+"who runs Intel these days", "what is new in the latest iPhone", three that
+pointed back, two that named Reddit), one lookup each, and they were answered
+in 8 to 16 seconds, most of that the writing; 12 that wanted none were left
+alone, with the question costing them about half a second, a question in the
+records' words went to the records, and in none of 39 turns did he say he had
+looked when he had not.
 
 With neither search, the news stands in. The news search needs no key, and
 searched for a product it finds what news and review sites have run about it:
@@ -699,10 +753,34 @@ of results, and twenty seconds (`DOUGLAS_TURN_LOOKUP_S`), after which he has
 to answer from what he has and is told so. A search that comes back poor is
 otherwise searched again in other words for most of a minute. A tool call he
 writes out as words when he has no lookups left is not part of his reply.
-Neither search has been run against the real service yet: they are written
-to the services' documentation and tested against stand-ins, and the first
-call with a real key is the first real test. What was searched for is never
-written to the journal, only that a search was made and how much came back.
+What was searched for is never written to the journal, only that a search
+was made and how much came back.
+
+The web search has met the real service (November 2026); the Reddit search
+has not, and is still as written to Reddit's documentation and tested against
+a stand-in. The field names were as documented and an answer takes half a
+second to a second. Four things were not as the code had them, and the
+stand-in now answers in the service's own words for each. The passages are
+Markdown, a heading to a line, the page's own headline first, then lists,
+bold and tables, and a video arrives as JSON (its name, and the comments under
+it); cut to size as they came, up to a third of a page's share went on the
+headline said a second time and on the marks. He now gets the words: the
+headline is dropped where the title has it, a heading ends in a colon, a
+table's row is its cells, data is read out a part at a time, and on a Reddit
+page the lesser headings, which are the names of those who wrote, are dropped
+as they are in the Reddit search. The service's status does not say which no
+it was: a key it does not know gets 422 (`SUBSCRIPTION_TOKEN_INVALID`), and so
+does a request it cannot make sense of (`VALIDATION`), while an address the
+key's plan leaves out gets 400 (`OPTION_NOT_IN_PLAN`); the word in the body
+does, so he is told which it was, the journal carries that word, and only a
+refused key or a spent allowance stops the ordinary results from being asked
+for. And in those ordinary results the date comes twice, in words ("August
+14, 2026") and as a date: the code took the first and cut it to ten
+characters, "August 14,". Last, real titles and addresses are long: six
+pages at full length ran past what one lookup may hand over and the sixth was
+cut off mid-word, so a page now gets its share while there is room, a smaller
+one in what is left, and is left out when that is too little to say anything
+in.
 
 **The owner's own records.** With `JOBCONTEXT_URL` and `JOBCONTEXT_TOKEN` set,
 he has one more tool: the owner's records on their own jobContext server (an
@@ -1055,7 +1133,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; a turn's allowance of lookups |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, and the note that goes with a search the program made; a turn's allowance of lookups |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
@@ -1199,6 +1277,9 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   `/etc/douglas/voice.env` (root:douglas, 640) and go only to the service
   each belongs to, in the header that service asks for. What is searched
   for goes to the service searched and nowhere else, the journal included.
+  With a web search switched on more goes out than without: any question
+  that the wider check says needs a search is searched for, in words taken
+  from the message itself.
   What comes back is other people's text, and is handed to the model marked
   as information, not instructions.
 - Douglas's key to the owner's jobContext records is a whole one: the server
