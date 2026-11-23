@@ -31,7 +31,8 @@ the model is a deliberate press — DougVoice's own button or the deck's.
                 and {"state": "thinking"} until then; "nothing" if nothing
                 was heard in it, "failed" if he answered but not aloud).
     GET  /picture?id=...
-                a picture he drew, by the id its transcript line carries.
+                a picture he drew or edited, by the id its transcript line
+                carries.
     GET  /health  200 "ok"
 
 A turn is: the kept audio → Wyoming faster-whisper (:10300) → llama.cpp's
@@ -173,6 +174,22 @@ PICTURES_DIR = E("PICTURES_DIR", "/var/lib/douglas/pictures")
 PICTURES_KEEP = int(E("PICTURES_KEEP", "60"))
 PICTURE_ID = re.compile(r"p-[0-9a-f]{12}")
 IMAGE_SHAPES = {"square": (1024, 1024), "wide": (1216, 832), "tall": (832, 1216)}
+# The image server holds one model at a time and is told which before each
+# job: one for drawing from words, and, if there is one, another for changing
+# a picture it is given. Each is "recipe file", the server's name for the
+# kind of model and the model's file under the server's model directory;
+# IMAGE_PARTS are the files both share. An empty IMAGE_DRAW is a server that
+# was started with its one model; an empty IMAGE_EDIT means he cannot edit.
+IMAGE_DRAW = E("IMAGE_DRAW", "flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf")
+IMAGE_EDIT = E("IMAGE_EDIT", "")
+IMAGE_PARTS = E("IMAGE_PARTS", "clip_l=text_encoders/clip_l.safetensors "
+                               "t5xxl=text_encoders/t5xxl-Q8_0.gguf vae=vae/ae.safetensors")
+# An edit is slow: thirteen seconds a step at a megapixel on this machine.
+# Eight steps came out as well as the model's usual twenty and take under two
+# minutes, and a picture is edited at no more than this many pixels a side.
+IMAGE_EDIT_STEPS = int(E("IMAGE_EDIT_STEPS", "8"))
+IMAGE_EDIT_SIDE = int(E("IMAGE_EDIT_SIDE", "1024"))
+IMAGE_EDIT_TIMEOUT_S = float(E("IMAGE_EDIT_TIMEOUT_S", "900"))
 SAY_BODY_MAX = MAX_IMAGE_BYTES * 4 // 3 + 65536     # base64, plus the words
 # True things about this household, in the owner's words (one line, in
 # /etc/douglas/voice.env). They are the only local knowledge Douglas has.
@@ -799,7 +816,14 @@ def system_prompt() -> str:
             "the Mission Control panel; DougVoice has no screen. Hand it over in a few words "
             "saying what you drew. You do not see what you made unless you look at it, so "
             "claim nothing about how it turned out"
-            + ("; asked how it looks, look at it and say." if EYES_URL else "."))
+            + ("; asked how it looks, look at it and say." if EYES_URL else ".")
+            + (" You can change a picture as well, with the edit tool: the last picture in "
+               "the conversation, a photo the person sent or one you drew. Say what should "
+               "change and what should stay. Changing a picture, or turning it into another "
+               "style, is always edit and never draw: draw cannot see the picture and would "
+               "make a different one. An edit takes about two minutes, so you do not wait "
+               "for it: tell the person it is on its way, and the edited picture appears on "
+               "their screens when it is ready." if IMAGE_EDIT else ""))
     elif TOOLS_ON:
         parts.append("You cannot make pictures: no image model is set up.")
     extra = read_instructions()
@@ -831,6 +855,10 @@ def turn_note(via: str, spoken: bool) -> str:
         note += ("Anything you say about the person's records has to come from the "
                  "jobcontext tool, called in this turn: if you have not called it, you do "
                  "not know. ")
+    if TOOLS_ON and IMAGE_URL:
+        note += ("A picture is made" + (" or changed only by calling draw or edit"
+                                        if IMAGE_EDIT else " only by calling draw")
+                 + ": saying one is on its way starts nothing. ")
     return f"[{note}{STYLE[bool(spoken)]}]"
 
 
@@ -1160,11 +1188,38 @@ def tool_look(question: str = "") -> str:
 EXTRA_ARGS = re.compile(r"<\s*/?\s*sd_cpp_extra_args\b[^>]*>", re.I)
 
 
+ARTIST = threading.Lock()            # the image server makes one picture at a time
+
+
+def image_model(spec: str) -> None:
+    """Have the image server hold the model a job needs. It keeps one at a
+    time; asking for the one it has costs nothing."""
+    if len(spec.split()) != 2:
+        return                       # a server started with its one model: nothing to choose
+    recipe, model = spec.split()
+    parts = dict(x.split("=", 1) for x in IMAGE_PARTS.split() if "=" in x)
+    req = urllib.request.Request(
+        f"{IMAGE_URL}/sdcpp/v1/models/load",
+        data=json.dumps({"recipe": recipe, "models": {"diffusion_model": model, **parts}}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        r.read(65536)
+
+
+def made(reply: bytes) -> bytes:
+    """The picture in the image server's answer."""
+    data = base64.b64decode(json.loads(reply)["data"][0]["b64_json"])
+    if picture_type(data) not in ("image/jpeg", "image/png"):
+        raise ValueError("the image server did not send back a picture")
+    return data
+
+
 def draw(prompt: str, shape: str = "square") -> bytes:
     """A picture of what the words say, from the image server: the bytes of
     a JPEG (or a PNG, if that is what it sends)."""
     if not IMAGE_URL:
         raise RuntimeError("no image model is set up")
+    image_model(IMAGE_DRAW)
     w, h = IMAGE_SHAPES.get(shape, IMAGE_SHAPES["square"])
     req = urllib.request.Request(
         f"{IMAGE_URL}/v1/images/generations",
@@ -1172,11 +1227,66 @@ def draw(prompt: str, shape: str = "square") -> bytes:
                          "output_format": "jpeg", "output_compression": 90}).encode(),
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=IMAGE_TIMEOUT_S) as r:
-        out = json.loads(r.read(64_000_000))
-    data = base64.b64decode(out["data"][0]["b64_json"])
-    if picture_type(data) not in ("image/jpeg", "image/png"):
-        raise ValueError("the image server did not send back a picture")
-    return data
+        return made(r.read(64_000_000))
+
+
+def picture_size(data: bytes) -> tuple[int, int]:
+    """Width and height of a JPEG, PNG, GIF or BMP, read from its header;
+    (0, 0) if they are not where they should be."""
+    kind = picture_type(data)
+    try:
+        if kind == "image/png":
+            return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+        if kind == "image/gif":
+            return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+        if kind == "image/bmp":
+            return (int.from_bytes(data[18:22], "little", signed=True),
+                    abs(int.from_bytes(data[22:26], "little", signed=True)))
+        at = 2                                   # JPEG: walk the segments to a frame header
+        while kind == "image/jpeg" and at + 9 < len(data) and data[at] == 0xFF:
+            marker, size = data[at + 1], int.from_bytes(data[at + 2:at + 4], "big")
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return int.from_bytes(data[at + 7:at + 9], "big"), int.from_bytes(data[at + 5:at + 7], "big")
+            at += 2 + size
+    except (IndexError, ValueError):
+        pass
+    return 0, 0
+
+
+def edit_size(w: int, h: int) -> str:
+    """The size an edit comes out at: the picture's own shape, no more than
+    IMAGE_EDIT_SIDE on its long side, each side a multiple of sixteen as the
+    model needs. Asked for outright, always: left to the server, a picture
+    straight off a camera would be edited at its full twelve megapixels."""
+    if w < 16 or h < 16:
+        return f"{IMAGE_EDIT_SIDE}x{IMAGE_EDIT_SIDE}"
+    scale = min(1.0, IMAGE_EDIT_SIDE / max(w, h))
+    return "x".join(str(max(256, round(side * scale / 16) * 16)) for side in (w, h))
+
+
+def edit(image: bytes, instruction: str) -> bytes:
+    """The picture, changed as the instruction says, from the image server's
+    editing model: the bytes of a JPEG."""
+    if not (IMAGE_URL and IMAGE_EDIT):
+        raise RuntimeError("no image editing model is set up")
+    kind = picture_type(image)
+    if not kind:
+        raise ValueError("not a picture that can be opened (JPEG, PNG, GIF or BMP)")
+    image_model(IMAGE_EDIT)
+    mark = "douglas" + os.urandom(12).hex()
+    prompt = instruction + (" <sd_cpp_extra_args>" + json.dumps(
+        {"sample_params": {"sample_steps": IMAGE_EDIT_STEPS}}) + "</sd_cpp_extra_args>"
+        if IMAGE_EDIT_STEPS > 0 else "")
+    fields = {"prompt": prompt, "n": "1", "size": edit_size(*picture_size(image)),
+              "output_format": "jpeg", "output_compression": "90"}
+    body = b"".join(f'--{mark}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                    for k, v in fields.items())
+    body += (f'--{mark}\r\nContent-Disposition: form-data; name="image[]"; filename="picture"\r\n'
+             f"Content-Type: {kind}\r\n\r\n").encode() + image + f"\r\n--{mark}--\r\n".encode()
+    req = urllib.request.Request(f"{IMAGE_URL}/v1/images/edits", data=body, headers={
+        "Content-Type": f"multipart/form-data; boundary={mark}"})
+    with urllib.request.urlopen(req, timeout=IMAGE_EDIT_TIMEOUT_S) as r:
+        return made(r.read(64_000_000))
 
 
 def picture_path(pid: str) -> str:
@@ -1211,6 +1321,35 @@ def keep_picture(data: bytes) -> str:
     return pid
 
 
+BUSY_DRAWING = ("The image model is busy with another picture, so this one was not started. Tell "
+                "the person to ask again in a couple of minutes.")
+
+
+def tool_edit(instruction: str = "") -> str:
+    """Change the last picture in the conversation as the instruction says.
+    It takes minutes, so the turn does not wait: the work is handed to the
+    pipeline, which puts the result on the person's screens when it is done."""
+    ctx = getattr(TURN, "ctx", None)
+    instruction = " ".join(EXTRA_ARGS.sub(" ", str(instruction or "")).split())[:1000]
+    if not instruction:
+        return "Nothing was changed: say what should change in the picture."
+    if ctx is None or not ctx.get("later"):
+        return "A picture cannot be edited from here."
+    image = SEEN["image"]
+    if not image:
+        return ("There is no picture in this conversation to edit. Ask the person to send "
+                "one, or draw one first.")
+    if not ARTIST.acquire(blocking=False):
+        return BUSY_DRAWING
+    ctx["later"](image, instruction)             # it lets go of the image model when done
+    return ("Started. It takes about two minutes, and the edited picture will appear on the "
+            "person's screens by itself when it is ready"
+            + (" (the phone page and the Mission Control panel: DougVoice has no screen)"
+               if ctx.get("via") == "voice" else "")
+            + ". Tell them it is on its way, in a few words. Do not wait for it, and say "
+            "nothing about how it will look.")
+
+
 def tool_draw(prompt: str = "", shape: str = "square") -> str:
     """Make a picture and put it with this turn's reply. One a turn: each
     takes the graphics card a good while, and the person is waiting."""
@@ -1223,8 +1362,22 @@ def tool_draw(prompt: str = "", shape: str = "square") -> str:
         return "A picture cannot be made from here."
     if ctx.get("picture"):
         return "One picture a turn: this one was not made. Offer it as the next."
+    if ctx.get("sent") and IMAGE_EDIT and not ctx.get("told"):
+        # A photo came with the request and he reached for draw: that makes a
+        # new picture from what the photo was described as, somebody else's
+        # dog on somebody else's porch. Once, he is pointed at edit instead.
+        ctx["told"] = True
+        return ("Not drawn. A picture came with this message, and draw cannot see it: it "
+                "would make a different picture from words. To change that picture, or turn "
+                "it into another style, call edit. Call draw again only if the person wants "
+                "a new picture that has nothing to do with theirs.")
+    if not ARTIST.acquire(blocking=False):
+        return BUSY_DRAWING
     started = time.time()
-    data = draw(prompt, shape if shape in IMAGE_SHAPES else "square")
+    try:
+        data = draw(prompt, shape if shape in IMAGE_SHAPES else "square")
+    finally:
+        ARTIST.release()
     ctx["picture"] = keep_picture(data)
     SEEN["image"] = data                    # what he made is what "look" looks at now
     # How long and how big: never what was asked for.
@@ -1255,7 +1408,10 @@ def tool_draw(prompt: str = "", shape: str = "square") -> str:
 #      what it has read somewhere else, and a fetch is how it would.
 # Which parts of the server any of this applies to is JOBCONTEXT_AREAS.
 
-CONVO = {"private": False, "pending": None}   # this conversation; forgotten with its history
+# This conversation; forgotten with its history. "news" is what has happened
+# since his last turn that he should be told (an edit finishing); "epoch"
+# counts conversations, so that work begun in one does not land in the next.
+CONVO = {"private": False, "pending": None, "news": "", "epoch": 0}
 TURN = threading.local()                      # .ctx: the turn this thread is answering
 JC = {"areas": {}, "catalogue": "", "words": None}   # what he may reach, from the server's own list
 JC_READY = threading.Event()                  # the first attempt to fetch that list is over
@@ -1695,6 +1851,22 @@ def names_things(reply: str) -> bool:
     return False
 
 
+# A reply that says a picture is coming, in a turn that started none. The
+# model is asked once more; if it says so again and still starts nothing, and
+# a picture is what the talk is about, the person is told the truth instead.
+PICTURE_PROMISE = re.compile(
+    r"\bon its way\b|\bcoming (right )?up\b"
+    r"|\b(i'll|i will|i'm|i am)\s+(now\s+)?(edit|chang|draw|redraw|sketch|paint|swap|redo)\w*"
+    r"|\b(editing|changing|drawing|redrawing|swapping)\b.{0,40}\b(now|picture|image|photo|it)\b"
+    r"|\bhere(?:'s| is)\b.{0,40}\b(picture|sketch|drawing|image|edit)\b", re.I)
+PICTURE_WORDS = re.compile(r"\b(pictures?|images?|photos?|sketch\w*|draw\w*|paint\w*|edit\w*)\b", re.I)
+NOT_STARTED = ("[You said a picture is on its way, but you called neither draw nor edit, so "
+               "nothing has been started. If the person asked for a picture or for a change "
+               "to one, call the tool now. If they did not, answer again without saying that "
+               "one is coming.]")
+NO_PICTURE = "I said a picture was on its way, but I had not started one. Ask me again."
+
+
 def held() -> bool:
     """Has the turn on this thread put a change forward? Then it is over:
     the read-back is the reply."""
@@ -1822,8 +1994,10 @@ def offer_tools() -> None:
     global TOOL_SPECS
     if IMAGE_URL:
         TOOLS["draw"] = (
-            tool_draw, "Make a picture from a description and show it to the person. Use it "
-            "only when a picture is asked for. It takes a while.", {
+            tool_draw, "Make a new picture from a description, from words alone, and show "
+            "it to the person. Use it only when a picture is asked for. It cannot see any "
+            "picture: to change or restyle one that is already in the conversation, use "
+            "edit. It takes a while.", {
                 "prompt": {"type": "string", "description": "What the picture shows, in plain "
                            "words: the subject first, then where it is, the light, and the "
                            "style (a photo, a watercolour, a pencil sketch)."},
@@ -1831,6 +2005,18 @@ def offer_tools() -> None:
                           "Square unless the subject is clearly wide or tall."}}, ["prompt"])
     else:
         TOOLS.pop("draw", None)
+    if IMAGE_URL and IMAGE_EDIT:
+        TOOLS["edit"] = (
+            tool_edit, "Change the last picture in this conversation, the photo the person "
+            "sent or the picture you drew, and show the result: alter what is in it, or turn "
+            "it into another style (a watercolour, a sketch, a cartoon). It works on the "
+            "picture itself, so what is in it stays. Use it only when asked to change a "
+            "picture. It takes about two minutes; the result arrives by itself.", {
+                "instruction": {"type": "string", "description": "What to change, plainly, "
+                                "and what must stay as it is: \"make the sky a sunset, keep "
+                                "the house and the people unchanged\"."}}, ["instruction"])
+    else:
+        TOOLS.pop("edit", None)
     if JC["areas"]:
         TOOLS["jobcontext"] = (
             tool_jobcontext, "Read the person's own records on their jobContext server, or "
@@ -1922,7 +2108,7 @@ def run_tool(name: str, args) -> str:
     if name == "jobcontext":             # it says what it did itself: names, never values
         keep = args
     else:
-        if name != "draw":               # what he is asked to draw stays out of the journal too
+        if name not in ("draw", "edit"):     # nor is what he is asked to draw the journal's
             log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
         keep = {k: v for k, v in args.items() if k in props}
     try:
@@ -1950,6 +2136,37 @@ def complete(messages: list[dict], tools: list | None = None,
         return json.loads(r.read())["choices"][0]["message"]
 
 
+TRACE_RESULT_MAX = 300       # characters of a lookup's result kept in the conversation
+
+
+def remember(call: dict, found: str) -> None:
+    """Keep, for the rest of the conversation, that a tool was called and
+    roughly what came back. Without this the conversation the model is shown
+    holds only its own replies, "Here is your sketch" with no sign of the
+    call that drew it, and it learns from its own example that saying is
+    doing: asked for a second picture, it said one was on its way and called
+    nothing. The result is kept short; what it was in full was for that turn."""
+    ctx = getattr(TURN, "ctx", None)
+    if ctx is None:
+        return
+    f = call.get("function") or {}
+    args = f.get("arguments")
+    args = args if isinstance(args, str) else json.dumps(args or {})
+    if len(args) > 600:                          # still JSON, with its long values cut
+        try:
+            args = json.dumps({k: (v if len(str(v)) <= 120 else str(v)[:120] + " ...")
+                               for k, v in json.loads(args).items()})
+        except (ValueError, AttributeError):
+            args = "{}"
+    cid = call.get("id") or "call"
+    if len(found) > TRACE_RESULT_MAX:
+        found = found[:TRACE_RESULT_MAX] + " [... the rest was for that turn and is not kept]"
+    ctx["trace"] += [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": cid, "type": "function", "function": {
+            "name": f.get("name") or "", "arguments": args}}]},
+        {"role": "tool", "tool_call_id": cid, "name": f.get("name") or "", "content": found}]
+
+
 def llm(messages: list[dict], ask=None) -> str:
     """The model's reply, after any lookups it asks for. `ask` is the call to
     the model server, replaceable in tests."""
@@ -1972,6 +2189,7 @@ def llm(messages: list[dict], ask=None) -> str:
             room -= len(found)
             msgs.append({"role": "tool", "tool_call_id": c.get("id") or "",
                          "name": f.get("name") or "", "content": found})
+            remember(c, found)
             if held():
                 return ""       # a change waits for a yes: its read-back is the reply
     return str(ask(msgs).get("content") or "")      # enough looking up: answer
@@ -2430,11 +2648,21 @@ class Pipeline:
                      "it: your eyes are not working right now.]")
         if note:
             said += "\n\n" + note
+        if CONVO["news"]:                   # what finished while nobody was talking to him
+            said += "\n\n" + CONVO["news"]
+            CONVO["news"] = ""
         here = turn_note(via, spoken)       # with the message, not in the instructions
         msgs = ([{"role": "system", "content": system_prompt()}] + self.history
                 + [{"role": "user", "content": f"{said}\n\n{here}"}])
         ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0,
-                          "picture": ""}
+                          "picture": "", "editing": False, "trace": [], "sent": bool(image)}
+
+        def later(image: bytes, instruction: str) -> None:
+            ctx["editing"] = True
+            threading.Thread(target=self._edit, args=(image, instruction, via, CONVO["epoch"]),
+                             daemon=True).start()
+
+        ctx["later"] = later
         try:
             answer = self.llm(msgs)
             if (TOOLS_ON and JC["areas"] and not ctx["lookups"]
@@ -2452,6 +2680,17 @@ class Pipeline:
                     if not ctx["lookups"] and names_things(clean(answer)):
                         log("and answered again without looking: the reply says so")
                         answer = f"{answer.rstrip()} {NOT_LOOKED}"
+            if (TOOLS_ON and IMAGE_URL and not ctx["picture"] and not ctx["editing"]
+                    and not ctx["held"] and PICTURE_PROMISE.search(clean(answer))):
+                log("a picture was promised and none started: asked again")
+                again = self.llm(msgs[:-1] + [{"role": "user", "content":
+                                               f"{said}\n\n{NOT_STARTED}\n\n{here}"}])
+                started = ctx["picture"] or ctx["editing"]
+                about = SEEN["image"] or PICTURE_WORDS.search(asked) or PICTURE_WORDS.search(again)
+                if not started and about and PICTURE_PROMISE.search(clean(again)):
+                    log("and promised again without starting one: the reply says so")
+                    again = NO_PICTURE
+                answer = again or answer
             reply = clean(answer)
         finally:
             TURN.ctx = None
@@ -2468,30 +2707,61 @@ class Pipeline:
         elif lead:
             reply = f"{lead} {reply}".strip()
         return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn,
-                              image=ctx["picture"])
+                              image=ctx["picture"], trace=ctx["trace"])
 
-    def _answered(self, said: str, reply: str, via: str, turn: int,
-                  always: bool = False, image: str = "") -> str | None:
+    def _answered(self, said: str, reply: str, via: str, turn: int, always: bool = False,
+                  image: str = "", trace: list | None = None) -> str | None:
         """One exchange into the shared memory and the transcript. None when
         a newer turn has superseded this one - unless `always`: what became
         of a change the person approved is on record even if nobody waits
-        to hear it."""
+        to hear it. `trace` is the tools he called to get to the reply: they
+        are remembered between the person's line and his."""
         if not self._current(turn) and not always:
             return None
-        self.history = (self.history + [{"role": "user", "content": said},
-                                        {"role": "assistant", "content": reply}]
-                        )[-2 * HISTORY_TURNS:]
+        self.history = (self.history + [{"role": "user", "content": said}] + list(trace or [])
+                        + [{"role": "assistant", "content": reply}])
+        said_at = [i for i, m in enumerate(self.history) if m["role"] == "user"]
+        if len(said_at) > HISTORY_TURNS:                 # whole exchanges, the newest few
+            self.history = self.history[said_at[-HISTORY_TURNS]:]
         self.last_exchange = time.time()
         self.tr.append("douglas", reply, via, image)
         self.st.update(last_turn=time.time())
         return reply if self._current(turn) else None
+
+    def _edit(self, image: bytes, instruction: str, via: str, epoch: int) -> None:
+        """An edit, start to finish, on its own thread: it holds the image
+        model (the edit tool took it), and when the picture is ready it goes
+        into the transcript as a line of his, for the screens to show."""
+        started = time.time()
+        try:
+            data = edit(image, instruction)
+            pid = keep_picture(data)
+        except Exception as e:                   # noqa: BLE001 — whatever it was, say so and let go
+            log(f"an edit failed after {time.time() - started:.0f} s: {type(e).__name__}: {e}")
+            self.tr.append("douglas", "I could not edit that picture: the image model failed. "
+                                      "Nothing was changed.", via)
+            news = ("[The edit you started has failed: the image model did not produce a "
+                    "picture. The person has been told.]")
+        else:
+            # How long and how big: never what was asked for.
+            log(f"edited a picture in {time.time() - started:.0f} s ({len(data) // 1024} KB)")
+            self.tr.append("douglas", "Here is the edited picture.", via, pid)
+            news = ("[The edit you started is finished and the edited picture is on the "
+                    "person's screens. It is now the picture that look and edit work on.]")
+            if CONVO["epoch"] == epoch:
+                SEEN["image"] = data
+        finally:
+            ARTIST.release()
+        if CONVO["epoch"] == epoch:              # the conversation that asked is still going
+            CONVO["news"] = news
+        self.st.update(last_turn=time.time())
 
     def forget(self) -> None:
         """The end of a conversation: what was said, the picture, the records
         that were read and any change still waiting all go together."""
         self.history = []
         SEEN["image"] = b""
-        CONVO.update(private=False, pending=None)
+        CONVO.update(private=False, pending=None, news="", epoch=CONVO["epoch"] + 1)
 
     def _hush(self) -> None:
         """Cut short an utterance playing on the remote speaker. Called with

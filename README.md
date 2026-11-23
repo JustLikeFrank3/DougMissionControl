@@ -283,9 +283,11 @@ meters, the last few turns, a box to type to him, push-to-talk, and a link
 to its own chat page), now playing, the fleet and the event log. When Douglas
 has a vision model the ask box grows a camera button: take or pick a photo,
 add a question or not, and he answers about what is in it. The photo is
-scaled to 1280 px on the phone before it is sent. A picture he draws shows
-under his line, here and on the panel; a tap fills the screen with it. Same
-SSE frame, same endpoints, same rules as the panel.
+scaled to 1280 px on the phone before it is sent. Ask him to change it
+instead (snow on the roof, the whole thing as a watercolour) and the edited
+picture arrives a minute or two later as a line of its own. A picture he
+draws or edits shows under his line, here and on the panel; a tap fills the
+screen with it. Same SSE frame, same endpoints, same rules as the panel.
 
 A phone's link to node1 is not a wire: on the tailnet it can drop to a relay,
 or go quiet for a minute or two at a time. So every request from the page has
@@ -537,8 +539,9 @@ and runs `douglas/setup.sh` at the end. In order:
    model's address if it can see (give `llama-server` its `--mmproj` in
    `LLAMA_ARGS`), or else a small vision model and its projector in
    `/srv/models/eyes` (see `/etc/douglas/eyes.env`). What lets him draw one
-   is an image model in `/srv/models/flux1-schnell` (`/etc/douglas/draw.env`
-   says which four files) and `IMAGE_URL` in `voice.env`.
+   is an image model in `/srv/models/draw` (`/etc/douglas/draw.env` says
+   which files, and where each goes) and `IMAGE_URL` in `voice.env`; a
+   second model beside it and `IMAGE_EDIT` let him change one he is given.
 5. **Run `provision.sh` again.** It is idempotent: config files are written
    only when missing, so this run just rebuilds what moved and ends with a
    port-by-port up/down list that means something.
@@ -566,12 +569,12 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 |---|---|
 | `llama.env` | `LLAMA_MODEL` (the GGUF), `LLAMA_ARGS` (default `-ngl 999 --load-mode none --jinja -c 32768 --parallel 2 --alias douglas`), `LLAMA_HOST`/`LLAMA_PORT`. `--metrics` is always on — the deck's tok/s meters need it |
 | `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists and `voice.env`'s `EYES_URL` points at it: a model that sees for itself needs no second one |
-| `draw.env` | `douglas-draw`, the image model on `:8083` (loopback): `DRAW_MODEL`, `DRAW_VAE`, `DRAW_CLIP_L`, `DRAW_T5XXL` (FLUX.1 schnell's four files), `DRAW_ARGS` (default `--steps 4 --cfg-scale 1.0 -W 1024 -H 1024`), `DRAW_HOST`/`DRAW_PORT`. `provision.sh` builds stable-diffusion.cpp and enables the unit only once the model file exists |
+| `draw.env` | `douglas-draw`, the image server on `:8083` (loopback): `DRAW_MODEL_DIR` (default `/srv/models/draw`, holding `diffusion_models/`, `text_encoders/` and `vae/`: the files themselves, since the server refuses links that lead out of the directory), `DRAW_ARGS` (empty by default), `DRAW_HOST`/`DRAW_PORT`. It starts with no model in memory: the pipeline tells it which to hold before each picture. `provision.sh` builds stable-diffusion.cpp and enables the unit only once a model is in `diffusion_models/` |
 | `chatgpt.env` | `douglas-chatgpt`, ChatGPT's chat-only line to Douglas: `CHATGPT_SECRET` (required, at least 24 URL-safe characters: it is the path of the connector's address, and changing it revokes the connector), `CHATGPT_PORT` (default `9120`, loopback), `CHATGPT_PER_HOUR` (default `60`), `LLM_URL`. Not created by `provision.sh`: the connector is set up by hand, see `douglas-chatgpt.py` |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image model, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he draws are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image server, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `IMAGE_DRAW` and `IMAGE_EDIT` (the model that draws and the model that edits, each a name and a file under `DRAW_MODEL_DIR`: `flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf` for drawing by default and nothing for editing, so without `IMAGE_EDIT` he draws and does not edit), `IMAGE_PARTS` (the text encoders and VAE the two share), `IMAGE_EDIT_STEPS` (default `8`: an edit's time is its steps, about 13 seconds each at a megapixel), `IMAGE_EDIT_SIDE` (default `1024`, the long side an edit comes out at), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he makes are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -733,6 +736,40 @@ he drew as readily as one he was sent), so he is told to hand it over
 without describing it. What he was asked to draw is not written to the
 journal, and the image server answers only this machine: it is cut off from
 the network by systemd, since making a picture needs nothing from anywhere.
+
+**What he can change.** With `IMAGE_EDIT` set as well he has an `edit` tool,
+which works on the last picture in the conversation, a photo he was sent or
+one he drew: "make it snow", "take the car out", "turn it into a
+watercolour". A second model does it (FLUX.1 Kontext [dev], under Black
+Forest Labs' non-commercial licence), and it is given the picture itself, so
+what is in it stays: the same dog on the same porch. The image server holds
+one model at a time, and the pipeline tells it which before each picture.
+An edit is slow, about thirteen seconds a step at a megapixel, so it runs at
+eight steps and at no more than 1024 pixels on its long side: a photo from
+the phone takes about a minute and a quarter. That is too long to hold a
+turn open. He answers at once that it is on its way, the edit runs behind
+the conversation, and the picture arrives as a line of his own ("Here is the
+edited picture.") on the same screens; he is told it has arrived with the
+person's next message. While one picture is being made another is not
+started, drawn or edited: he says the image model is busy. A request that
+comes with a photo is `edit`'s work, and a `draw` in such a turn is turned
+back once with the reason: `draw` never sees the photo, and would make a
+different picture from a description of it.
+
+**Saying is not doing.** The first edits never started. He answered "It's on
+its way" and called nothing, most of the time. The cause was in what he was
+shown of his own past: the conversation kept his replies and not the tool
+calls behind them, so every earlier picture looked like something he had
+produced by announcing it. Now each exchange is remembered with its calls
+and a short form of what came back (the first 300 characters), between the
+person's line and his. In a probe of the same request the call was made 3
+times in 12 before, 11 in 12 with the calls remembered, and 12 in 12 once
+the note that closes every message also said that only the tool starts a
+picture. A reply that still promises a picture when none was started is
+caught by the program: he is asked again, told that nothing has started, and
+if he promises a second time the person reads "I said a picture was on its
+way, but I had not started one. Ask me again."
+
 ### DougVoice — Douglas's ears
 
 DougVoice is a Raspberry Pi Zero 2 W wearing a PiSugar Whisplay HAT (WM8960
@@ -902,7 +939,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, and a picture promised without a call asked for again |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

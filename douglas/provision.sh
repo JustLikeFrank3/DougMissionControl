@@ -12,8 +12,9 @@
 #                         a picture (optional: enabled once its model is on disk
 #                         and voice.env's EYES_URL points at it; a brain that
 #                         sees for itself needs none)
-#     douglas-draw        an image model on :8083, so Douglas can draw one
-#                         (optional: built and enabled once its model is on disk)
+#     douglas-draw        image models on :8083, so Douglas can draw a picture and
+#                         edit one (optional: built and enabled once a model is
+#                         on disk)
 #     open-webui          chat on :8080 (and https://douglas.<tailnet>.ts.net, or
 #                         that address on :8443 once ChatGPT's connector has :443)
 #     wyoming-whisper     faster-whisper STT on :10300
@@ -195,32 +196,44 @@ CONF
 # ── a hand: an image model, built only once there is one to run ──────────
 env=/etc/douglas/draw.env
 [ -f "$env" ] || cat > "$env" <<'CONF'
-# douglas-draw: an image model, so that Douglas can make a picture when
-# asked. Restart after editing:  sudo systemctl restart douglas-draw
+# douglas-draw: image models, so that Douglas can make a picture when asked,
+# and change one he is given. Restart after editing:
+#     sudo systemctl restart douglas-draw
 #
-# Nothing is downloaded for you. FLUX.1 schnell (Black Forest Labs, Apache
-# 2.0; its text encoders are Google's T5-XXL and OpenAI's CLIP-L) fits beside
-# a 70 GB model and draws a 1024x1024 picture in about 25 seconds on this
-# machine's Radeon. It is four files, about 19 GB:
-#     flux1-schnell-q8_0.gguf
-#         from https://huggingface.co/leejet/FLUX.1-schnell-gguf
-#     t5xxl-Q8_0.gguf, clip_l.safetensors, ae.safetensors
-#         from https://huggingface.co/second-state/FLUX.1-schnell-GGUF
-# Put them in /srv/models/flux1-schnell and re-run provision.sh: it builds
-# stable-diffusion.cpp and enables the unit once the model is there. Then set
-# IMAGE_URL=http://127.0.0.1:8083 in voice.env and restart douglas-voice.
-DRAW_MODEL=/srv/models/flux1-schnell/flux1-schnell-q8_0.gguf
-DRAW_VAE=/srv/models/flux1-schnell/ae.safetensors
-DRAW_CLIP_L=/srv/models/flux1-schnell/clip_l.safetensors
-DRAW_T5XXL=/srv/models/flux1-schnell/t5xxl-Q8_0.gguf
+# Nothing is downloaded for you. The models live in one directory, laid out
+# the way stable-diffusion.cpp's server wants it (files, not links to
+# somewhere else):
+#     /srv/models/draw/diffusion_models/flux1-schnell-q8_0.gguf
+#         FLUX.1 schnell (Black Forest Labs, Apache 2.0), which draws: a
+#         1024x1024 picture in about 25 seconds on this machine's Radeon.
+#         From https://huggingface.co/leejet/FLUX.1-schnell-gguf
+#     /srv/models/draw/text_encoders/t5xxl-Q8_0.gguf
+#     /srv/models/draw/text_encoders/clip_l.safetensors
+#     /srv/models/draw/vae/ae.safetensors
+#         Google's T5-XXL, OpenAI's CLIP-L and the FLUX.1 VAE, which both
+#         models use. From https://huggingface.co/second-state/FLUX.1-schnell-GGUF
+#     /srv/models/draw/diffusion_models/flux1-kontext-dev-Q8_0.gguf   (optional)
+#         FLUX.1 Kontext [dev] (non-commercial licence), which edits: a photo
+#         changed as an instruction says, in about two minutes. From
+#         https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF
+# About 19 GB to draw, 13 GB more to edit. Re-run provision.sh once they are
+# there: it builds stable-diffusion.cpp and enables the unit. Then, in
+# voice.env, set IMAGE_URL=http://127.0.0.1:8083 and, to edit,
+# IMAGE_EDIT="flux1-kontext diffusion_models/flux1-kontext-dev-Q8_0.gguf",
+# and restart douglas-voice.
+DRAW_MODEL_DIR=/srv/models/draw
 # Loopback: only the voice pipeline on this machine talks to it.
 DRAW_HOST=127.0.0.1
 DRAW_PORT=8083
-# Four steps and no guidance is how FLUX.1 schnell is meant to be run.
-DRAW_ARGS="--steps 4 --cfg-scale 1.0 -W 1024 -H 1024"
+DRAW_ARGS=""
 CONF
 chown root:douglas "$env" && chmod 640 "$env"
-draw="$(envval "$env" DRAW_MODEL)"
+# A draw.env from before the models shared one directory names four files
+# and no directory; the unit now wants the directory.
+grep -q '^DRAW_MODEL_DIR=' "$env" || echo 'DRAW_MODEL_DIR=/srv/models/draw' >> "$env"
+# Any model at all in the directory is enough to build for and to start.
+draw="$(ls "$(envval "$env" DRAW_MODEL_DIR)"/diffusion_models/* 2>/dev/null | head -n1)"
+draw="${draw:-$(envval "$env" DRAW_MODEL_DIR)/diffusion_models}"
 if [ -f "$draw" ]; then
     # The same choice as for llama.cpp, and the same backend: Vulkan.
     step "stable-diffusion.cpp @ ${SD_REF} (Vulkan)"
@@ -367,9 +380,11 @@ LLM_MAX_TOKENS=400
 # llama-eyes serves (:8082, see eyes.env). Unset, he cannot be shown a
 # picture and says so.
 #EYES_URL=http://127.0.0.1:8082
-# His hand: the image model douglas-draw serves (see draw.env). Unset, he
-# cannot draw and says so.
+# His hand: the image models douglas-draw serves (see draw.env). Unset, he
+# cannot draw and says so. IMAGE_EDIT names the model that changes a picture
+# he is given; without it he draws but does not edit.
 #IMAGE_URL=http://127.0.0.1:8083
+#IMAGE_EDIT="flux1-kontext diffusion_models/flux1-kontext-dev-Q8_0.gguf"
 # The owner's own records, on their jobContext server. JOBCONTEXT_AREAS
 # names the parts he may reach: "stories" is the owner's stories and writing
 # samples and nothing else; unset, he reaches all of it, a job search

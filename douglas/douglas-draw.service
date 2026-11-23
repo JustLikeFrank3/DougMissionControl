@@ -1,5 +1,5 @@
 [Unit]
-Description=douglas-draw - Douglas's hand, an image model on :8083 (stable-diffusion.cpp, Vulkan)
+Description=douglas-draw - Douglas's hand, image models on :8083 (stable-diffusion.cpp, Vulkan)
 After=network-online.target llama-server.service
 Wants=network-online.target
 
@@ -7,10 +7,11 @@ Wants=network-online.target
 User=douglas
 Group=douglas
 SupplementaryGroups=render video
-# DRAW_MODEL, DRAW_VAE, DRAW_CLIP_L, DRAW_T5XXL, DRAW_HOST, DRAW_PORT and
-# DRAW_ARGS. ${X} is one argument, $X is split on whitespace, so DRAW_ARGS
-# can hold any number of flags. provision.sh enables this unit only once the
-# model file exists.
+# DRAW_MODEL_DIR, DRAW_HOST, DRAW_PORT and DRAW_ARGS. ${X} is one argument,
+# $X is split on whitespace, so DRAW_ARGS can hold any number of flags. The
+# server starts with no model in memory: douglas-voice tells it which of the
+# models in DRAW_MODEL_DIR to hold, one for drawing or one for editing, before
+# each picture. provision.sh enables this unit only once a model is there.
 EnvironmentFile=/etc/douglas/draw.env
 # A picture is made from words on this machine and needs nothing from any
 # other, so the service is cut off from every address but this machine's own.
@@ -20,7 +21,7 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 StateDirectory=douglas-draw
 WorkingDirectory=/var/lib/douglas-draw
-ExecStart=/opt/stable-diffusion.cpp/build/bin/sd-server --listen-ip ${DRAW_HOST} --listen-port ${DRAW_PORT} --diffusion-model ${DRAW_MODEL} --vae ${DRAW_VAE} --clip_l ${DRAW_CLIP_L} --t5xxl ${DRAW_T5XXL} $DRAW_ARGS
+ExecStart=/opt/stable-diffusion.cpp/build/bin/sd-server --listen-ip ${DRAW_HOST} --listen-port ${DRAW_PORT} --model-dir ${DRAW_MODEL_DIR} $DRAW_ARGS
 TimeoutStartSec=5min
 Restart=on-failure
 RestartSec=10
