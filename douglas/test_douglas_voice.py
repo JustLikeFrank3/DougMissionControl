@@ -488,11 +488,12 @@ print("-- pictures --")
 check("a picture is told by its first bytes",
       [voice.picture_type(x) for x in (JPEG, PNG, b"GIF89a..", b"BM....", b"RIFF....WEBP", b"hello")],
       ["image/jpeg", "image/png", "image/gif", "image/bmp", "", ""])
-SAW, SHOWN = [], []
+SAW, SHOWN, SAID_BEFORE = [], [], []
 
 
-def fake_see(image, question=""):
+def fake_see(image, question="", earlier=()):
     SAW.append((len(image), question))
+    SAID_BEFORE.append(list(earlier))
     return "A tabby cat asleep on a laptop keyboard."
 
 
@@ -522,14 +523,38 @@ check("the transcript marks the picture and keeps the reply", [(t["who"], t["tex
 check("what was seen stays in the conversation", "tabby cat" in ppipe.history[-2]["content"], True)
 voice.see = fake_see
 check("the picture is kept, and the look tool asks the eyes again",
-      (voice.SEEN["image"] == JPEG, voice.tool_look("what colour is the cat?"), SAW[-1]),
-      (True, "A tabby cat asleep on a laptop keyboard.", (len(JPEG), "what colour is the cat?")))
+      (voice.SEEN["image"] == JPEG, voice.tool_look("what colour is the cat?"), SAW[-1], SAID_BEFORE[-1]),
+      (True, "A tabby cat asleep on a laptop keyboard.", (len(JPEG), "what colour is the cat?"), []))
+voice.TURN.ctx = {"said": ["What is this?", "And  its collar?", "what colour is the cat?"]}
+voice.tool_look("what colour  is the cat?")
+voice.TURN.ctx = None
+check("in a turn, a second look is put with what the person has been saying", SAID_BEFORE[-1], ["What is this?", "And  its collar?"])
+before = len(lines())
+ppipe.say("Try again", "phone", image=JPEG)
+until(lambda: ppipe.state == "idle" and len(lines()) >= before + 2)
+check("a picture sent again with \"try again\" is looked at with what was asked the first time",
+      (SAID_BEFORE[0], SAW[-1], SAID_BEFORE[-1]), ([], (len(JPEG), "Try again"), ["What is this?"]))
+before = len(lines())
+ppipe.say("What kind of bird is this one?", "phone", image=PNG)
+until(lambda: ppipe.state == "idle" and len(lines()) >= before + 2)
+check("a new picture with a question of its own is looked at for that, without the questions about the last one",
+      (SAW[-1], SAID_BEFORE[-1]), ((len(PNG), "What kind of bird is this one?"), []))
+before = len(lines())
+ppipe.say("What kind of bird is this one?", "phone", image=PNG)
+until(lambda: ppipe.state == "idle" and len(lines()) >= before + 2)
+check("the same picture sent once more is looked at with what has been said",
+      SAID_BEFORE[-1], ["What is this?", "Try again", "What kind of bird is this one?"])
+check("what leans on what was said before: little more than \"again\"",
+      [bool(len(x.split()) < 3 or voice.AGAIN.search(x)) for x in (
+          "Try again", "Look closer at the muffler", "Have another look please", "Can you see it now?", "Again", "And this?",
+          "What do you think of this one?", "Who's this good boy?", "What does the sign say?", "Is the dog still there?")],
+      [True] * 6 + [False] * 4)
 check("with eyes a picture on the web is looked at",
       voice.tool_read_page("https://example.org/cat.jpg"),
       "The picture at https://example.org/cat.jpg shows: A tabby cat asleep on a laptop keyboard.")
 
 
-def blind(image, question=""):
+def blind(image, question="", earlier=()):
     raise OSError("connection refused")
 
 
@@ -564,11 +589,48 @@ threading.Thread(target=es.serve_forever, daemon=True).start()
 voice.see = real_see = load("voice3", "douglas-voice.py").see
 real_see.__globals__["EYES_URL"] = f"http://127.0.0.1:{es.server_address[1]}"
 check("the vision model's answer comes back as plain words", real_see(PNG, "what is it?"), "A red bicycle.")
-part = EYE["body"]["messages"][0]["content"]
-check("it is sent the picture as a data URL, then the question",
-      (EYE["path"], part[0]["image_url"]["url"][:22], part[0]["image_url"]["url"].split(",")[1] == base64.b64encode(PNG).decode(),
-       "First answer this about the picture: what is it?" in part[1]["text"]),
-      ("/v1/chat/completions", "data:image/png;base64,", True, True))
+sent = EYE["body"]["messages"]
+check("it is asked in four messages: how to look, the picture by itself as a data URL, a word of its own, and then the question, "
+      "so that the model server reads a picture once and a second look reads only the question",
+      (EYE["path"], [m["role"] for m in sent], sent[0]["content"] == voice.SEE_PROMPT, len(sent[1]["content"]),
+       sent[1]["content"][0]["image_url"]["url"][:22], sent[1]["content"][0]["image_url"]["url"].split(",")[1] == base64.b64encode(PNG).decode(),
+       sent[2]["content"], sent[3]["content"].startswith("Their message now: what is it?\nFirst answer what it asks about the picture")),
+      ("/v1/chat/completions", ["system", "user", "assistant", "user"], True, 1, "data:image/png;base64,", True,
+       "I have the picture in front of me.", True))
+first = json.dumps(sent[:3])
+real_see(PNG, "Try again", ["Can you tell me the   brand of the exhaust?", "There is a logo on the muffler", "Try again"])
+check("a question that leans on what was said before is put with it: the person's earlier messages, oldest first, and not the question twice",
+      EYE["body"]["messages"][3]["content"].startswith(
+          "What the person said before this, oldest first, only so that you know what their message is about:\n"
+          "- Can you tell me the brand of the exhaust?\n- There is a logo on the muffler\nTheir message now: Try again\n"), True)
+check("and all that comes before the question is the same from one look at a picture to the next", json.dumps(EYE["body"]["messages"][:3]) == first, True)
+check("with nothing said before, nothing is put before it",
+      ["What the person said before" in voice.see_words(q, e) for q, e in (("what is it?", []), ("what is it?", ["what is it?"]), ("", ["earlier"]))],
+      [False, False, False])
+check("with no question the picture is described", voice.see_words("").startswith("Describe the picture: what it shows"), True)
+check("the eyes are told that a name is something read and never something recognised, to say what they cannot make out, "
+      "and to check what they are told is there",
+      [w in voice.SEE_PROMPT + voice.see_words("what is it?") for w in (
+          "Name a make, a brand or a model only where you can read it in the picture",
+          "say that no name can be read on it, and do not name one from how it looks",
+          "too small, blurred, hidden or turned away to make out, say that",
+          "say plainly whether you can see it: never agree because they said so",
+          "without repeating their words")], [True] * 5)
+check("what the person has been saying: their own words from the last three turns, oldest first, without this program's notes",
+      voice.said_before([
+          {"role": "user", "content": "One?\n\n[It is Monday.]"}, {"role": "assistant", "content": "1"},
+          {"role": "user", "content": "Two,  with a picture\n\n[A picture came with this message. What you see in it: a cat.]\n\n[It is Monday.]"},
+          {"role": "assistant", "content": "", "tool_calls": [{"id": "look", "function": {"name": "look", "arguments": "{}"}}]},
+          {"role": "tool", "name": "look", "content": "a cat"}, {"role": "assistant", "content": "2"},
+          {"role": "user", "content": "Three\n\n[It is Monday.]"}, {"role": "assistant", "content": "3"},
+          {"role": "user", "content": "x" * 400 + "\n\n[It is Monday.]"}, {"role": "assistant", "content": "4"}]),
+      ["Two, with a picture", "Three", "x" * 300 + " ..."])
+check("and the exchange before a message: what the person said, marked if a picture came with it, and what he replied",
+      (voice.last_exchange([{"role": "user", "content": "Who is this?\n\n[A picture came with this message. What you see in it: a dog.]\n\n[It is Monday.]"},
+                            {"role": "assistant", "content": "", "tool_calls": []}, {"role": "assistant", "content": "A good dog."}]),
+       voice.last_exchange([{"role": "user", "content": "Hello\n\n[It is Monday.]"}, {"role": "assistant", "content": "Hi."}]),
+       voice.last_exchange([])),
+      (("Who is this? (a picture came with this message)", "A good dog."), ("Hello", "Hi."), ("", "")))
 try:
     real_see(b"hello")
     opened = "tried"
@@ -1360,7 +1422,7 @@ check("a picture that comes with a message is said to have arrived, and what can
        " The picture itself has arrived and is kept: the edit tool changes it."))
 ep = voice.Pipeline(voice.StateFile(d_state), voice.Transcript(d_lines), send=lambda *a: True,
                     snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, editor), tts=fake_tts,
-                    see=lambda image, question="": "A dog on a porch.")
+                    see=lambda image, question="", earlier=(): "A dog on a porch.")
 ep.forget()
 journal, real_err = io.StringIO(), sys.stderr
 sys.stderr = journal
@@ -1687,7 +1749,7 @@ def now_wanted(tool, said, before=""):
 n_state, n_lines = os.path.join(ddir, "now.json"), os.path.join(ddir, "now.jsonl")
 nowp = voice.Pipeline(voice.StateFile(n_state), voice.Transcript(n_lines), send=lambda *a: True,
                       snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, now_llm), tts=fake_tts,
-                      see=lambda image, question="": "A dog on a porch.", wanted=now_wanted)
+                      see=lambda image, question="", earlier=(): "A dog on a porch.", wanted=now_wanted)
 kept_tools = dict(voice.TOOLS)
 voice.TOOLS["weather"] = (lambda location="": (NOW["calls"].append(("weather", location)),
                                                "Weather for Springfield. Tomorrow, Monday 23 November: rain, high 48, low 39 F.")[1],
@@ -2019,7 +2081,85 @@ check("and with the headlines, what he was told about them as well",
        [w in told_this_turn() for w in ("[You have no web search, so this program has searched the news", "[You said a picture is on its way")]),
       ("Sound Weekly calls it the pair to beat.", [("news", "sony xm6 review")], ["user", "assistant", "tool"], [True, True]))
 voice.IMAGE_URL = ""
+# A picture in the conversation, and a message about it: the program looks again before he answers.
+LOOKS = []
+NOW["glance"], NOW["glanced"], NOW["blind"] = True, [], False
+
+
+def now_glance(said, before="", replied=""):
+    NOW["glanced"].append((said, before, replied))
+    return NOW["glance"]
+
+
+def now_see(image, question="", earlier=()):
+    LOOKS.append((len(image), question, list(earlier)))
+    if NOW["blind"]:
+        raise OSError("connection refused")
+    return "A dog on a porch, in a red collar with a brass tag."
+
+
+DOG = jpeg_of(640, 480)
+nowp.glance, kept_see, voice.see = now_glance, voice.see, now_see
+voice.EYES_URL = "http://eyes.invalid"
+voice.TOOLS["look"] = (voice.tool_look, "Look again at the last picture in this conversation.", {"question": {"type": "string"}}, ["question"])
+voice.offer_tools()
+NOW["script"] = lambda msgs: {"content": "It is red, with a brass tag."} if msgs[-1]["role"] == "tool" else {"content": "A good dog on a porch."}
+NOW["answer"]["weather"] = {"location": ""}
+NOW["asked"].clear(); NOW["calls"].clear()
+got = now_says("Who is this?", image=DOG)
+check("a message that brings a picture is looked at once, and nobody is asked whether to look again",
+      (got, NOW["glanced"], LOOKS), ("A good dog on a porch.", [], []))
+got = now_says("What colour is his collar?", goes_on=True)
+check("a message about the picture in the conversation: the program looks again before he says a word, with the person's own "
+      "words for the question and what they said before it",
+      (got, NOW["glanced"], LOOKS, NOW["asked"], len(NOW["said"][-1:])),
+      ("It is red, with a brass tag.",
+       [("What colour is his collar?", "Who is this? (a picture came with this message)", "A good dog on a porch.")],
+       [(len(DOG), "What colour is his collar?", ["Who is this?"])], [], 1))
+check("he is handed what was seen as a look he took, told what to do with it, and the look stays in the conversation",
+      (NOW["said"][-1]["role"], "in a red collar with a brass tag" in NOW["said"][-1]["content"],
+       "[This program has looked at the picture again for this message" in told_this_turn(),
+       "name no make, name or detail that the look did not read" in told_this_turn(),
+       [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in nowp.history[-4:]],
+       "[This program has looked" in nowp.history[-4]["content"]),
+      ("tool", True, True, True, [("user", ""), ("assistant", "look"), ("tool", ""), ("assistant", "")], False))
+NOW["glance"] = False
+NOW["glanced"].clear(); LOOKS.clear()
+got = now_says("What's the weather doing tomorrow?", goes_on=True)
+check("a message about something else is asked about, gets its no, and goes the way it always went",
+      (got, [g[0] for g in NOW["glanced"]], LOOKS, NOW["asked"], NOW["calls"]),
+      ("It is red, with a brass tag.", ["What's the weather doing tomorrow?"], [], [("weather", "What's the weather doing tomorrow?")], [("weather", "")]))
+NOW["script"] = lambda msgs: ({"content": "Brass."} if msgs[-1]["role"] == "tool" else {"content": "", "tool_calls": [
+    {"id": "l1", "type": "function", "function": {"name": "look", "arguments": "{\"question\": \"What is the tag made of?\"}"}}]})
+got = now_says("And the tag?", goes_on=True)
+check("a look he takes himself is put with what the person has been saying too",
+      (got, LOOKS), ("Brass.", [(len(DOG), "What is the tag made of?", ["Who is this?", "What colour is his collar?", "What's the weather doing tomorrow?", "And the tag?"])]))
+NOW["script"] = lambda msgs: {"content": "I could not look just now."} if msgs[-1]["role"] == "tool" else {"content": "A good dog."}
+NOW["glance"], NOW["blind"] = True, True
+LOOKS.clear()
+got = now_says("Is there a name on the tag?", goes_on=True)
+check("eyes down: he is handed that the look failed, and is not told that he looked",
+      (got, NOW["said"][-1]["content"].startswith("The look lookup failed"), "[This program has looked" in told_this_turn(), len(LOOKS)),
+      ("I could not look just now.", True, False, 1))
+NOW["blind"] = False
+NOW["glanced"].clear(); LOOKS.clear()
+voice.TOOLS_ON = False
+now_says("Is there a name on the tag?", goes_on=True)
+voice.TOOLS_ON = True
+now_says("Is there a name on the tag?")
+check("with his tools off, or with no picture in the conversation, nobody is asked and nothing is looked at", (NOW["glanced"], LOOKS), ([], []))
+NOW["asked"].clear(); NOW["calls"].clear()
+nowp.glance, voice.see = None, kept_see
+voice.EYES_URL = ""
+del voice.TOOLS["look"]
+voice.offer_tools()
+voice.SEEN["image"] = b""
 sys.stderr = real_err
+check("the journal says that the program looked again and how long it took, never what the person asked",
+      (journal.getvalue().count("asked about the picture: looked at again in "), "collar" in journal.getvalue().lower(),
+       "name on the tag" in journal.getvalue().lower()), (1, False, False))
+check("and of a picture that arrives, how big it was and how long the look took, never what was in it",
+      ("looked at a picture (640x480, 0 KB) in 0.0 s" in journal.getvalue(), "porch" in journal.getvalue().lower()), (True, False))
 check("the journal says a search was made before he answered", journal.getvalue().count("asked for a search: looked up before he answers"), 15)
 check("and when it was the news that was searched in the web's place: how many headlines and how long, never the words",
       ("no web search, so the news was searched: 2 headlines in " in journal.getvalue(),
@@ -2031,7 +2171,7 @@ check("and when a search of his own was turned down for the records' sake, that 
        [w in journal.getvalue().lower() for w in ("flooded", "server room")]), (1, [False, False]))
 check("the journal says when the program looked, and for what",
       (journal.getvalue().count("asked for the weather: looked up before he answers"),
-       journal.getvalue().count("asked for the news: looked up before he answers")), (5, 1))
+       journal.getvalue().count("asked for the news: looked up before he answers")), (6, 1))
 voice.TOOLS.update(kept_tools)
 PUT.clear()
 answers = []
@@ -2116,6 +2256,22 @@ check("and the words that bring a search on",
           "Good morning.", "Who wrote Hamlet?", "How do I boil an egg?", "Tell me a joke.", "That was a good one.", "This is good.")],
        [bool(voice.NOW_WORDS["reddit"].search(x)) for x in ("What does Reddit think?", "check r/headphones", "I read it somewhere")]),
       ([True] * 14 + [False] * 6, [True, True, False]))
+PUT.clear()
+answers = []
+for REPLY[0] in ("LOOK", "Look.", "NO", "No.", "</think>\n\nLOOK", "", "maybe"):
+    answers.append(voice.look_wanted("Try   again", "Can you tell me the brand? (a picture came with this message)", "A plain pipe.", fake_ask))
+check("whether a message takes another look at the picture is one word: LOOK, or anything else for a no", answers, [True, True, False, False, True, False, False])
+check("it is asked as instructions, with the exchange before the message and then the message, one word wanted, nothing left to chance",
+      ([m["role"] for m in PUT[0][0]], PUT[0][0][0]["content"].startswith("You are shown a message that someone has just sent to an assistant"),
+       PUT[0][0][0]["content"].endswith("Answer with the single word LOOK or the single word NO."), PUT[0][0][1]["content"], PUT[0][1:]),
+      (["system", "user"], True, True,
+       "The exchange before it:\nPerson: Can you tell me the brand? (a picture came with this message)\nAssistant: A plain pipe.\n\n"
+       "The new message: Try again", (None, 4, 0.0)))
+PUT.clear()
+voice.look_wanted("What is in the picture?", "", "", fake_ask)
+check("with nothing before it, the message alone", PUT[0][0][1]["content"], "The new message: What is in the picture?")
+check("no answer is a no, and so are no words",
+      (voice.look_wanted("Look again", "x", "y", no_answer), voice.look_wanted("  ", "x", "y", fake_ask)), (False, False))
 
 print("-- a search of the web and of Reddit: only with a key, through the service's own API --")
 NET = {"mode": "ok", "seen": [], "tokens": 0, "stale": False}

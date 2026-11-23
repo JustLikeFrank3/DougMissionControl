@@ -895,11 +895,13 @@ vision model beside one that reads only text (`llama-eyes`, `:8082`). `POST /say
 optional `"image"` (base64 JPEG, PNG, GIF or BMP); the pipeline has the vision
 model describe it with the question in mind, hands that to Douglas as what he
 saw, and marks the line `[picture]` in the transcript. The picture is kept for
-the rest of the conversation so that he can take a second look (the `look`
-tool) when a follow-up asks about a detail, and `read_page` on a picture's
-address looks at it the same way. Pictures never leave Douglas. With no
-vision model configured he refuses a picture and says why, and the phone page
-does not offer its camera button.
+the rest of the conversation so that it can be looked at again: by him (the
+`look` tool), and by the program itself when a later message is about the
+picture (see "A name he read, and one he supplied" below). `read_page` on a
+picture's address looks at it the same way. Pictures never leave Douglas, and
+of a look the journal says how big the picture was and how long it took,
+never what was in it. With no vision model configured he refuses a picture
+and says why, and the phone page does not offer its camera button.
 
 **What he can draw.** With `IMAGE_URL` set he has a `draw` tool: an image
 model on the same machine (`douglas-draw`: FLUX.1 schnell behind
@@ -969,6 +971,66 @@ picture. A reply that still promises a picture when none was started is
 caught by the program: he is asked again, told that nothing has started, and
 if he promises a second time the person reads "I said a picture was on its
 way, but I had not started one. Ask me again."
+
+**A name he read, and one he supplied.** Shown a photograph of a motorcycle
+and asked the make of its exhaust, he named one from memory. Told that the
+maker's name was written large on the muffler, he answered "I'm looking at
+the same picture you sent" and had looked at nothing. Sent the photograph
+again with "try again", he looked and was none the wiser. That photograph
+was not kept (nothing a person sends is), so what went wrong was worked out
+on test photographs made for the purpose: a maker's name put on a muffler at
+known sizes, and pipes with nothing on them.
+
+His eyes are sharp. The name was read at every size tried down to letters
+ten pixels high, in a photo the size the phone sends, faint or not, upright
+or on its side. What went wrong was in the asking. Asked for a brand, they
+gave one: of a pipe with nothing on it, "the brand of the exhaust is
+Akrapovič, as clearly visible on the muffler", and a bike was a Kawasaki by
+its colours. They are now told that a name is something read and never
+something recognised, to say where it is written, and to say so when nothing
+readable says whose a thing is. On the blank pipes that gave no name in 8
+looks of 8, and the real one was still read in every look. Asked nothing in
+particular, they left out what is faint: the same logo was read when the
+question was about the exhaust and was missing from a plain description, and
+"try again", sent with the photograph, was all the question they got. So a
+message that leans on what came before (the same picture sent again, or
+little more than "again") is put to them with the person's last three
+messages, and they are told to look for what the person says is there and to
+say plainly whether they can see it. Told of a logo on a blank pipe, they
+said they could not see one.
+
+A second look is the program's to take as well. All he has of a picture is
+the words of his first look, and he took those for the picture. So while a
+picture is in the conversation, each message that comes without one is put
+to the model as a question of its own, together with the exchange before it
+("try again" and "are you sure?" say nothing by themselves): does answering
+this take another look at the picture? It was right on all 84 sample
+messages, twice each, in half a second to a second. On a yes the program
+looks, with the person's own words for the question, and hands him what was
+seen as a look he took, with a note for that turn: answer from this, name
+nothing it did not read, and if it does not show what the person says is
+there, say so. In a dry run of whole conversations on those photographs (the
+exchange above on a pipe with nothing on it and on one with a faint logo, a
+logo asked about later, a picture he drew, the weather and an edit in
+between; 44 turns) the program looked again in 15 turns and left 13 alone,
+none of them wrongly; he named no make that a look had not read; and of the
+logo he was told about on the blank pipe he said, both times, that he could
+not see it. The file as it was before, on the same blank pipe: "That's an
+Akrapovič ... with the logo stamped right on it", and then, told of a logo,
+a second maker named in its place, with no look taken.
+
+Looking again is quick now, too. The eyes are asked in four messages: how to
+look, the picture by itself, a word of their own, and the question. The
+model server keeps what it has read up to the start of a message, so a photo
+is read once, which is six seconds of a first look's eight to ten, and every
+later look at it, or the same photo sent again, reads only the question: two
+to five seconds a look where each took eight to ten.
+
+What is left: lettering too small to read, seven pixels high and under in
+these tests, they still sometimes turn into a well-known name and say they
+read it. No wording changed that, and a second look says the same. A closer
+photograph is the cure, and he says so when a look could not make out what
+was asked about.
 
 ### DougVoice — Douglas's ears
 
@@ -1140,7 +1202,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; a turn's allowance of lookups |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; a turn's allowance of lookups |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

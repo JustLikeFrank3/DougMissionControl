@@ -866,7 +866,10 @@ def system_prompt() -> str:
             "about it as something you looked at yourself, and never mention the "
             "brackets or a description. You see only what is in the picture: do not "
             "guess at what is outside it, and do not take what it shows for a fact "
-            "about the person's own life unless they say it is theirs. If the person "
+            "about the person's own life unless they say it is theirs. What you saw is "
+            "all you know of a picture: a make, a name or a detail that your look did "
+            "not give, you do not know, so say you cannot make it out in the picture "
+            "rather than supply one from memory. If the person "
             "speaks of a picture and no brackets say one came, none has arrived: say so. "
             "A picture the brackets say you could not look at, you have not seen: say "
             "so, and never describe it, not even as a joke."
@@ -1546,8 +1549,39 @@ def tool_read_page(url: str, find: str = "") -> str:
 SEEN = {"image": b""}       # the last picture sent, kept for a second look
 # Short on purpose: every word of the answer is generated at reading speed,
 # and the person is waiting. The question steers what gets looked at.
-SEE_PROMPT = ("Say only what you can actually see in this picture, in under 120 words unless "
-              "you are asked to read out or list what is in it. ")
+#
+# The rest of it was learned from one photograph: a motorcycle, sent with
+# "can you tell me the brand of the exhaust?". Asked for a brand, the eyes
+# give one. On test photographs of a pipe with nothing on it they answered
+# "the brand of the exhaust is Akrapovic, as clearly visible on the muffler",
+# called the bike a Kawasaki from its colours, and read the marks on a tyre
+# as "Hawker", "Dunlop" and "Honda" in three looks at one picture; what is
+# really written there they read every time, down to letters ten pixels
+# high. So they are told that a name is something read, never something
+# recognised, and that what cannot be read is to be called that: no name for
+# the blank pipes in 8 looks of 8. (Lettering too small to read, about seven
+# pixels, they still sometimes turn into a well-known name; no wording
+# changed that.) And asked nothing in particular they leave out what is
+# faint: the same logo was read when the question was about the exhaust and
+# missing from a general description. So a question that leans on what was
+# said before ("try again") is put with what was said.
+SEE_PROMPT = (
+    "You are looking at a picture for someone, and what you say is all they will know of "
+    "it. Say only what you can actually see, in under 120 words unless you are asked to "
+    "read out or list what is in it. Copy lettering exactly as written: words, names, logos "
+    "and badges on things, numbers and signs, and say what each is on. Name a make, a brand "
+    "or a model only where you can read it in the picture, and say where it is written; "
+    "where nothing readable says whose it is, say that no name can be read on it, and do "
+    "not name one from how it looks. If something you are asked about is too small, "
+    "blurred, hidden or turned away to make out, say that.")
+SEE_EARLIER = 3             # of the person's earlier messages go with a look, at most
+# With a picture that has just arrived they go along only where the message
+# leans on them: it is the same picture sent again, or it says little more
+# than "try again". Put with every new picture, the questions about the last
+# one were answered too: shown a motorcycle after a dog, the eyes began "I
+# can't see a good boy or a collar in this picture".
+AGAIN = re.compile(r"\b(again|closer|harder|once more|one more time|this time|"
+                   r"another (look|try|go))\b|\bnow\W*$", re.I)
 
 
 def picture_type(data: bytes) -> str:
@@ -1563,24 +1597,62 @@ def picture_type(data: bytes) -> str:
     return ""
 
 
-def see(image: bytes, question: str = "") -> str:
-    """What is in a picture, in words, from the vision model."""
+def said_before(history: list[dict], limit: int = SEE_EARLIER) -> list[str]:
+    """What the person said in the last few turns of a conversation, oldest
+    first: their own words, without the notes this program put under them."""
+    out: list[str] = []
+    for m in reversed(history):
+        if m.get("role") == "user" and len(out) < limit:
+            words = clip(str(m.get("content") or "").split("\n\n[", 1)[0], 300)
+            if words:
+                out.append(words)
+    return out[::-1]
+
+
+def see_words(question: str = "", earlier=()) -> str:
+    """What the eyes are asked about a picture they have in front of them.
+    `question` is what is asked of it now, `earlier` what the person said
+    before that, oldest first."""
+    q = " ".join(str(question or "").split())
+    if not q:
+        return ("Describe the picture: what it shows, where it seems to be, any people or "
+                "animals and what they are doing.")
+    before = [w for w in (" ".join(str(e or "").split()) for e in earlier or ()) if w and w != q]
+    said = ("What the person said before this, oldest first, only so that you know what "
+            "their message is about:\n" + "\n".join(f"- {w}" for w in before) + "\n"
+            if before else "")
+    return (said + f"Their message now: {q}\nFirst answer what it asks about the picture, "
+            "without repeating their words. If they say something is in the picture, look "
+            "for it and say plainly whether you can see it: never agree because they said "
+            "so. Then say in a sentence or two what else the picture shows.")
+
+
+SEE_HAVE = "I have the picture in front of me."
+
+
+def see(image: bytes, question: str = "", earlier=()) -> str:
+    """What is in a picture, in words, from the vision model.
+
+    It is asked in four messages: how to look (the same every time), the
+    picture by itself, a word of the eyes' own, and then the question. The
+    model server keeps what it has read up to the start of a message, so put
+    this way a picture is read once, about six seconds for a photo from the
+    phone, and a second look at it, or the same photo sent again, reads only
+    the question: two seconds where it took eight with the picture and the
+    question in one message. (The word in between keeps the turns
+    alternating, which some models' templates insist on.)"""
     kind = picture_type(image)
     if not EYES_URL:
         raise RuntimeError("no vision model is set up")
     if not kind:
         raise ValueError("not a picture that can be opened (JPEG, PNG, GIF or BMP)")
-    q = question.strip()
-    ask = SEE_PROMPT + (
-        f"First answer this about the picture: {q} Then say in a sentence or two what else "
-        "it shows, copying out any writing that matters exactly as written." if q else
-        "Describe it: what it shows, where it seems to be, any people or animals and what "
-        "they are doing, and any writing in it, copied exactly as written.")
     payload = {"model": EYES_MODEL, "max_tokens": EYES_MAX_TOKENS, "stream": False,
-               "temperature": 0.2, "messages": [{"role": "user", "content": [
-                   {"type": "image_url", "image_url": {
-                       "url": f"data:{kind};base64," + base64.b64encode(image).decode()}},
-                   {"type": "text", "text": ask}]}]}
+               "temperature": 0.2, "messages": [
+                   {"role": "system", "content": SEE_PROMPT},
+                   {"role": "user", "content": [{"type": "image_url", "image_url": {
+                       "url": f"data:{kind};base64," + base64.b64encode(image).decode()}}]},
+                   {"role": "assistant", "content": SEE_HAVE},
+                   {"role": "user", "content": see_words(question, earlier)}]}
     req = urllib.request.Request(f"{EYES_URL}/v1/chat/completions",
                                  data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -1590,9 +1662,14 @@ def see(image: bytes, question: str = "") -> str:
 
 
 def tool_look(question: str = "") -> str:
+    """A second look at the picture in the conversation. What the person has
+    been saying goes with the question, whoever worded it: asked to "look
+    again", the eyes have to know at what."""
     if not SEEN["image"]:
         return "No picture has been sent in this conversation."
-    return see(SEEN["image"], str(question or ""))
+    ctx = getattr(TURN, "ctx", None) or {}
+    q = " ".join(str(question or "").split())
+    return see(SEEN["image"], q, [w for w in ctx.get("said") or () if w != q])
 
 
 # ── a hand: words, put into a picture ────────────────────────────────────
@@ -2546,6 +2623,74 @@ def wants_change(said: str, ask=None) -> bool:
     return bool(re.match(r"\W*yes\b", unthought(str(m.get("content") or "")), re.I))
 
 
+# A second look is the program's to take as well. Shown a motorcycle and
+# asked the make of its exhaust, he guessed; told "you didn't notice the
+# giant logo on the muffler?", he answered "I'm looking at the same picture
+# you sent" and had looked at nothing: all he has of a picture is the words
+# of his first look, and he took those for the picture. So while there is a
+# picture in the conversation, each message that comes without one is asked
+# about: does answering it take another look? It is asked with the exchange
+# before it, because "try again" and "are you sure?" say nothing by
+# themselves. On a yes the program looks, with the person's own words for a
+# question, and hands him what was seen as a look he took.
+LOOK_ASKED = (
+    "You are shown a message that someone has just sent to an assistant, and the exchange "
+    "before it. There is a picture in their conversation, one the person sent or one the "
+    "assistant made, and the assistant can look at that picture again whenever it needs "
+    "to. A picture it made itself it has not seen at all until it looks. Decide whether "
+    "answering the new message takes another look at the picture. It does when the message "
+    "asks about something in the picture: what a thing in it is, says, shows or looks like, "
+    "how many there are, what colour, what is written on it, or how a picture the assistant "
+    "made has turned out. It does when the message says the assistant missed something in "
+    "the picture or got it wrong, when it tells the assistant to look again, look closer or "
+    "try again at the picture, and when it goes on from a question about the picture in "
+    "the exchange before. A message that speaks of the picture or the photo and asks what "
+    "is in it is about it, whatever the exchange before was about. It does not when the "
+    "message asks for the picture to be changed or for a new picture, asks for something "
+    "to be looked up or searched for, asks what a thing costs, where to buy it or what its "
+    "reviews say, thanks, chats, or is about anything other than what the picture shows. "
+    "Answer with the single word LOOK or the single word NO.")
+LOOKED = (
+    "[This program has looked at the picture again for this message, with the person's own "
+    "words for the question. What was seen this time follows, as a look you took, and it "
+    "counts for more than what you saw before. Answer from it in a sentence or two, and "
+    "name no make, name or detail that the look did not read. Only if it does not show "
+    "what the person asked about or says is there: tell them plainly that you cannot see "
+    "that in this picture, and that a closer photo of that part would settle it.]")
+
+
+def last_exchange(history: list[dict]) -> tuple[str, str]:
+    """The exchange before this message, for the question above: what the
+    person said (marked if a picture came with it) and what he replied."""
+    replied = next((clip(m.get("content"), 300) for m in reversed(history)
+                    if m.get("role") == "assistant" and m.get("content")), "")
+    for m in reversed(history):
+        if m.get("role") == "user":
+            words, _, notes = str(m.get("content") or "").partition("\n\n[")
+            return (clip(words, 300) + (" (a picture came with this message)"
+                                        if notes.startswith("A picture came") else ""), replied)
+    return "", replied
+
+
+def look_wanted(said: str, before: str = "", replied: str = "", ask=None) -> bool:
+    """Does answering a message take another look at the picture in the
+    conversation? `before` and `replied` are the exchange before it; `ask`
+    is the call to the model server, replaceable in tests."""
+    said = " ".join(str(said).split())[:600]
+    if not said:
+        return False
+    past = (f"The exchange before it:\nPerson: {before or '(nothing)'}\n"
+            f"Assistant: {replied or '(nothing)'}\n\n" if before or replied else "")
+    try:
+        m = (ask or complete)([{"role": "system", "content": LOOK_ASKED},
+                               {"role": "user", "content": f"{past}The new message: {said}"}],
+                              None, 4, 0.0)
+    except Exception as e:      # noqa: BLE001 - no answer is a no: he may still look for himself
+        log(f"could not ask whether another look at the picture was wanted: {type(e).__name__}: {e}")
+        return False
+    return bool(re.match(r"\W*look\b", unthought(str(m.get("content") or "")), re.I))
+
+
 # A reply that says a picture is coming, in a turn that started none. The
 # model is asked once more; if it says so again and still starts nothing, and
 # a picture is what the talk is about, the person is told the truth instead.
@@ -3118,7 +3263,7 @@ class Pipeline:
     def __init__(self, state: StateFile, transcript: Transcript, *, send,
                  snd_format=lambda: (22050, 2, 1), stt=stt, llm=llm, tts=tts,
                  linked=lambda: True, speaker=None, see=see, judge=None,
-                 wanted=None) -> None:
+                 wanted=None, glance=None) -> None:
         self.st, self.tr = state, transcript
         self.send, self.snd_format, self.linked = send, snd_format, linked
         self.speaker = speaker          # real speakers elsewhere, when they are up
@@ -3126,6 +3271,7 @@ class Pipeline:
         self.stt, self.llm, self.tts, self.see = stt, llm, tts, see
         self.judge = judge              # "was a change to the picture asked for?"; wants_change
         self.wanted = wanted            # "is this asking for the weather, the news?"; lookup_wanted
+        self.glance = glance            # "does this take another look at the picture?"; look_wanted
         self.history: list[dict] = []
         self.last_exchange = 0.0
         self._lock = threading.Lock()
@@ -3423,13 +3569,20 @@ class Pipeline:
                 lead = "That change was not saved."
                 note = ("[The person did not say yes to the change you put forward, so it "
                         "was dropped and nothing was saved.]")
+        earlier = said_before(self.history)     # what the person has been saying, for a look
         if image:
+            again = image == SEEN["image"] or len(said.split()) < 3 or bool(AGAIN.search(said))
             SEEN["image"] = image                # kept for a second look
+            began = time.time()
             try:
-                saw = self.see(image, said)
+                saw = self.see(image, said, earlier if again else [])
             except Exception as e:               # noqa: BLE001 — the eyes are another service
                 log(f"could not look at the picture: {e}")
                 saw = ""
+            else:
+                # How big it was and how long it took: never what was in it.
+                log("looked at a picture (%dx%d, %d KB) in %.1f s"
+                    % (*picture_size(image), len(image) // 1024, time.time() - began))
             said += ("\n\n[A picture came with this message. What you see in it: "
                      f"{saw}{kept_note(True)}]" if saw else
                      "\n\n[A picture came with this message, but you could not look at "
@@ -3451,7 +3604,7 @@ class Pipeline:
         msgs = [{"role": "system", "content": system_prompt()}] + self.history + [put()]
         ctx = TURN.ctx = {"via": via, "spoken": spoken, "held": None, "lookups": 0,
                           "picture": "", "editing": False, "trace": [], "sent": bool(image),
-                          "called": set(), "began": time.time()}
+                          "called": set(), "began": time.time(), "said": earlier + [asked]}
 
         def later(image: bytes, instruction: str) -> None:
             ctx["editing"] = True
@@ -3461,7 +3614,25 @@ class Pipeline:
         ctx["later"] = later
         try:
             looked = []
-            if TOOLS_ON and not ctx["sent"]:
+            if (TOOLS_ON and not ctx["sent"] and "look" in TOOLS and SEEN["image"]
+                    and (self.glance or look_wanted)(asked, *last_exchange(self.history))):
+                # About the picture in the conversation: it is looked at again
+                # here, with the person's words for the question (see
+                # LOOK_ASKED). How long it took: never what was asked.
+                began = time.time()
+                call = {"id": "look", "type": "function", "function": {
+                    "name": "look", "arguments": json.dumps({"question": asked})}}
+                found = run_tool("look", {"question": asked}, quiet=True, theirs=True)
+                if found.startswith(LOOKED_UP):
+                    log(f"asked about the picture: looked at again in {time.time() - began:.1f} s, "
+                        "before he answers")
+                    told = LOOKED
+                remember(call, found)
+                msgs[-1] = put()
+                looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
+                          {"role": "tool", "tool_call_id": "look", "name": "look",
+                           "content": found}]
+            if TOOLS_ON and not ctx["sent"] and not looked:
                 # The weather or the news: looked up here, before he says a
                 # word, and handed to him as a call he made. (A message that
                 # brings a picture is about the picture: "make it snow" is no
