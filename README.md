@@ -603,8 +603,9 @@ phrase onward). He is told to look up anything about the present every time
 rather than recall it, to add nothing the lookup did not return, and to say so
 when a lookup fails. Two more need a key and are offered only with one: a
 search of the web and a search of Reddit (below). Without them there is no
-general web search: search engines answer an automated client with a bot
-challenge, which this does not try to get past. `read_page` fetches public addresses
+general web search, only the headlines of a news search standing in for one:
+search engines answer an automated client with a bot challenge, which this
+does not try to get past. `read_page` fetches public addresses
 only (loopback, LAN and tailnet addresses are refused, redirects included), and
 whatever a lookup returns is handed to the model marked as information, not
 instructions. Lookups are the one thing that leaves the house: the words of
@@ -655,10 +656,33 @@ web search, and for what words?") and the program searching before he
 answers, 24 of 24, and 12 of 12 for Reddit, with plain questions left alone.
 With one search switched on and not the other, the one that is there stands
 in: a question about Reddit becomes a web search with the word reddit in it,
-and a question about reviews goes to Reddit. With neither, a question that
-wants a search is not left to him either: he is told in that turn to say he
-cannot look it up, where before he might answer "I can't find that model" as
-if he had tried.
+and a question about reviews goes to Reddit. A message in the words of the
+owner's own records ("which of my stories is best?") is never taken to a
+search: the records come first.
+
+With neither search, the news stands in. The news search needs no key, and
+searched for a product it finds what news and review sites have run about it:
+reviews, round-ups and deals, each headline with its outlet and its date. So a
+question about reviews, a price or what to buy is taken there with the words
+it comes to, and he is told in that turn what he has been handed: headlines,
+not the reviews under them, to be passed on in a few sentences with the outlet
+named for each, nothing added, and a plain word that headlines are all he can
+see without a search key. Often the headline carries the verdict, the score or
+the price; a round-up's headline does not name its winner, and he says that
+too. In a dry run on the real model and the real news search, 23 such
+questions (reviews, prices, what to buy, comparisons, "search the web for"),
+each asked twice, were all taken to the news, and read against the headlines
+they were handed the answers kept to them; they take about ten seconds, most
+of it the writing. A question that names Reddit is not taken to the news,
+since no headline says what people there think, and one the news has nothing
+on is not answered from the day's top stories: for both he is told to say that
+he cannot look it up, where before he might answer "I can't find that model"
+as if he had tried. A headline older than half a year carries its year, so
+that last year's review does not read as this month's. What to do with
+headlines is said to him only in the turn that has them: told in his standing
+instructions to call the news tool first, he took to saying "I looked this up"
+in turns that had looked nothing up. With a search key the news steps aside by
+itself.
 
 A turn has an allowance of looking: four lookups, nine thousand characters
 of results, and twenty seconds (`DOUGLAS_TURN_LOOKUP_S`), after which he has
@@ -1020,7 +1044,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, and neither the words nor the keys in the journal; a turn's allowance of lookups |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; a turn's allowance of lookups |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

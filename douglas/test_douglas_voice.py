@@ -9,6 +9,7 @@ each other rather than each to its own idea of it.
 """
 
 import base64
+import email.utils
 import importlib.util
 import io
 import json
@@ -348,11 +349,22 @@ ATOM = b"""<feed xmlns="http://www.w3.org/2005/Atom"><title>Blog</title>
 <entry><title>New post</title><summary>About things.</summary></entry></feed>"""
 LONG = (b"<html><body><nav>Home | About | Login</nav><article><h1>Title</h1>" + b"<p>Body text.</p>" * 400
         + b"<p>The winner was Ada.</p></article><footer>Copyright</footer></body></html>")
-FOUND = b"""<rss><channel><title>search</title>
-<item><title>Ada Lovelace wins the Grand Prix - Wire</title><pubDate>Sun, 15 Nov 2026 12:00:00 GMT</pubDate>
+
+
+def feed_date(days_ago):
+    """A moment that many days ago: as a feed writes it, as he is given it, and its year."""
+    when = int(time.time()) - days_ago * 86400
+    tm = time.localtime(when)
+    return email.utils.formatdate(when, usegmt=True), f"{time.strftime('%a', tm)} {tm.tm_mday} {time.strftime('%b', tm)}", tm.tm_year
+
+
+LAST_WEEK, EARLIER, LONG_AGO = feed_date(7), feed_date(16), feed_date(400)
+FOUND = f"""<rss><channel><title>search</title>
+<item><title>Ada Lovelace wins the Grand Prix - Wire</title><pubDate>{LAST_WEEK[0]}</pubDate>
 <description>&lt;a href="x"&gt;related&lt;/a&gt;</description></item>
-<item><title>Grand Prix preview - Paddock</title><pubDate>Fri, 6 Nov 2026 12:00:00 GMT</pubDate></item>
-<item><title>Undated item</title></item></channel></rss>"""
+<item><title>Grand Prix preview - Paddock</title><pubDate>{EARLIER[0]}</pubDate></item>
+<item><title>The Grand Prix car, reviewed - Paddock</title><pubDate>{LONG_AGO[0]}</pubDate></item>
+<item><title>Undated item</title></item></channel></rss>""".encode()
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 voice.http_get = lambda url, limit=0: ((RSS, "utf-8", "application/rss+xml") if "rss" in url
@@ -376,10 +388,11 @@ check("today and tomorrow are named, so neither is worked out from a date",
        "Tomorrow, Sunday 22 November: clear, high 58, low 40 F, 5% chance of rain or snow." in w), (True, True))
 voice.tool_weather("Springfield, IL")
 check("a state abbreviation finds the same place", ("latitude=39.8" in URLS[-1], len(voice.ABBREV)), (True, 53))
-check("a topic is searched for in the news, each headline with its date",
+check("a topic is searched for in the news, each headline with its date, and with its year once it is an old one",
       voice.tool_news("grand  prix"),
-      "Latest headlines about 'grand prix': Ada Lovelace wins the Grand Prix - Wire (Sun 15 Nov)"
-      " | Grand Prix preview - Paddock (Fri 6 Nov) | Undated item (undated)")
+      f"Latest headlines about 'grand prix': Ada Lovelace wins the Grand Prix - Wire ({LAST_WEEK[1]})"
+      f" | Grand Prix preview - Paddock ({EARLIER[1]}) | The Grand Prix car, reviewed - Paddock ({LONG_AGO[1]} {LONG_AGO[2]})"
+      " | Undated item (undated)")
 check("wikipedia returns the summary of the top hit, its address and the other matches",
       voice.tool_wikipedia("capital of australia"),
       "Wikipedia, 'Canberra' <https://en.wikipedia.org/wiki/Canberra>: Canberra is the capital city of Australia."
@@ -1643,12 +1656,25 @@ voice.offer_tools()
 voice.SEEN["image"] = b""
 
 print("-- the weather and the news: looked up by the program when he does not --")
-NOW = {"script": None, "said": [], "asked": [], "answer": {"weather": {"location": ""}, "news": {"topic": ""}}, "calls": []}
+NOW = {"script": None, "said": [], "asked": [], "answer": {"weather": {"location": ""}, "news": {"topic": ""}}, "calls": [],
+       "shown": [], "headlines": ""}
 
 
 def now_llm(msgs, tools=None):
     NOW["said"].append(msgs[-1])
+    NOW["shown"] = list(msgs)
     return NOW["script"](msgs)
+
+
+def told_this_turn():
+    """The person's message as the model was last shown it, with whatever the program added to it."""
+    return next((m["content"] for m in reversed(NOW["shown"]) if m["role"] == "user"), "")
+
+
+def now_news(topic=""):
+    """The news tool: what a search of the news finds for a topic, if NOW says it finds anything; the top stories otherwise."""
+    NOW["calls"].append(("news", topic))
+    return f"Latest headlines about {topic!r}: {NOW['headlines']}" if topic and NOW["headlines"] else "Current headlines: Bridge reopens (Wire)."
 
 
 def now_wanted(tool, said):
@@ -1664,8 +1690,7 @@ kept_tools = dict(voice.TOOLS)
 voice.TOOLS["weather"] = (lambda location="": (NOW["calls"].append(("weather", location)),
                                                "Weather for Springfield. Tomorrow, Monday 23 November: rain, high 48, low 39 F.")[1],
                           ) + kept_tools["weather"][1:]
-voice.TOOLS["news"] = (lambda topic="": (NOW["calls"].append(("news", topic)), "Current headlines: Bridge reopens (Wire).")[1],
-                       ) + kept_tools["news"][1:]
+voice.TOOLS["news"] = (now_news,) + kept_tools["news"][1:]
 
 
 def now_says(text, image=b""):
@@ -1740,23 +1765,81 @@ voice.TOOLS_ON = True
 NOW["asked"].clear(); NOW["calls"].clear()
 NOW["script"] = lambda msgs: {"content": "The reviews like it."} if msgs[-1]["role"] == "tool" else {"content": "I have not seen any reviews."}
 NOW["answer"].update(weather=None, news=None, search={"query": "sony xm6 review"}, reddit={"query": "sony xm6"})
+NOW["headlines"] = "Sony XM6 review: still the pair to beat | Reviews - Sound Weekly (Tue 17 Nov) | Skip the XM6 at this price - Gadget Desk (Fri 6 Nov)"
 got = now_says("Is the XM6 worth buying? What do the reviews say?")
-check("with neither search switched on, a question that wants one is not looked up, and he is told to say that he cannot",
-      (got, NOW["asked"], NOW["calls"], voice.now_tool("search"), voice.now_tool("reddit"),
-       "[Answering this well takes a web search, and you have none. Say plainly that you cannot look it up." in NOW["said"][-1]["content"]),
-      ("I have not seen any reviews.", [("search", "Is the XM6 worth buying? What do the reviews say?")], [], "", "", True))
-check("that is said to him for the one turn, and is no part of what the conversation keeps",
+check("with neither search switched on, a question that wants one is taken to the news, for the words it comes to",
+      (got, NOW["asked"], NOW["calls"], voice.now_tool("search"), voice.now_tool("reddit")),
+      ("The reviews like it.", [("search", "Is the XM6 worth buying? What do the reviews say?")], [("news", "sony xm6 review")], "news", ""))
+shown = NOW["shown"]
+check("he is given the headlines as the result of a search of the news that he made",
+      ([m["role"] for m in shown[-3:]], (shown[-2].get("tool_calls") or [{}])[0].get("function"), shown[-1].get("name"),
+       "Latest headlines about 'sony xm6 review': Sony XM6 review: still the pair to beat | Reviews - Sound Weekly (Tue 17 Nov) | Skip the XM6"
+       in shown[-1]["content"]),
+      (["user", "assistant", "tool"], {"name": "news", "arguments": "{\"topic\": \"sony xm6 review\"}"}, "news", True))
+check("and is told in that turn what they are: headlines and not the reviews, each with its outlet, and all he can see without a key",
+      [w in told_this_turn() for w in (
+          "Is the XM6 worth buying? What do the reviews say?\n\n[You have no web search, so this program has searched the news for this instead.",
+          "They are headlines, not the reviews or articles themselves, which you have not read.",
+          "pick the headlines that bear on it rather than reading out the list, name the outlet whose headline says each thing you pass on",
+          "add no score, price or verdict that is not in a headline",
+          "Say plainly that headlines are all you can see without a web search key.",
+          "Say plainly that you cannot look it up")],
+      [True, True, True, True, True, False])
+check("that is said to him for the one turn: the conversation keeps his question, the search and his answer",
+      ("headlines are all you can see" in json.dumps(nowp.history),
+       [(m["role"], (m.get("tool_calls") or [{}])[0].get("function", {}).get("name", "")) for m in nowp.history[-4:]]),
+      (False, [("user", ""), ("assistant", "news"), ("tool", ""), ("assistant", "")]))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["headlines"] = ""
+got = now_says("Is the XM6 worth buying? What do the reviews say?")
+check("where the news has no headlines for it, he is not handed the day's top stories: he is told to say that he cannot look it up",
+      (got, NOW["calls"], NOW["said"][-1]["role"],
+       "[Answering this well takes a web search, and you have none. Say plainly that you cannot look it up." in NOW["said"][-1]["content"],
+       "Bridge reopens" in json.dumps(NOW["shown"])),
+      ("I have not seen any reviews.", [("news", "sony xm6 review")], "user", True, False))
+check("that too is said to him for the one turn, and is no part of what the conversation keeps",
       "you have none" in json.dumps(nowp.history), False)
-NOW["asked"].clear()
+NOW["headlines"] = "Sony XM6 review: still the pair to beat - Sound Weekly (Tue 17 Nov)"
+NOW["asked"].clear(); NOW["calls"].clear()
 got = now_says("What does Reddit think of the XM6?")
-check("asked about Reddit with no search at all, nothing is put to the question", NOW["asked"], [])
-NOW["asked"].clear()
+check("asked about Reddit with no search at all, nothing is put to the question", (NOW["asked"], NOW["calls"]), ([], []))
+NOW["asked"].clear(); NOW["calls"].clear()
+got = now_says("Search Reddit for reviews of the XM6.")
+check("and a search of Reddit is not taken to the news, where no headline says what people there think: he is told to say that he cannot",
+      (got, NOW["asked"], NOW["calls"], "you have none. Say plainly that you cannot look it up" in NOW["said"][-1]["content"]),
+      ("I have not seen any reviews.", [("search", "Search Reddit for reviews of the XM6.")], [], True))
+NOW["asked"].clear(); NOW["calls"].clear()
+NOW["answer"]["search"] = {"query": "  "}
+got = now_says("Is the XM6 worth buying? What do the reviews say?")
+check("nor is the news searched for nothing at all", (got, NOW["calls"]), ("I have not seen any reviews.", []))
+NOW["answer"]["search"] = {"query": "sony xm6 review"}
+news_search, voice.NEWS_SEARCH = voice.NEWS_SEARCH, ""
+NOW["asked"].clear(); NOW["calls"].clear()
+got = now_says("Is the XM6 worth buying? What do the reviews say?")
+check("where the news cannot be searched either, there is nothing to stand in, and he is told to say that he cannot look it up",
+      (got, NOW["asked"], NOW["calls"], voice.now_tool("search"),
+       "you have none. Say plainly that you cannot look it up" in NOW["said"][-1]["content"]),
+      ("I have not seen any reviews.", [("search", "Is the XM6 worth buying? What do the reviews say?")], [], "", True))
+voice.NEWS_SEARCH = news_search
+NOW["asked"].clear(); NOW["calls"].clear()
 voice.TOOLS["search"] = (lambda query="": (NOW["calls"].append(("search", query)), "Web search results: a review says it is good.")[1],
                          "Search the web.", {"query": {"type": "string"}}, ["query"])
 got = now_says("Is the XM6 worth buying? What do the reviews say?")
-check("with a web search, the program searches before he says a word, for the words the question comes to",
-      (got, NOW["asked"], NOW["calls"]),
-      ("The reviews like it.", [("search", "Is the XM6 worth buying? What do the reviews say?")], [("search", "sony xm6 review")]))
+check("with a web search, the program searches the web before he says a word, for the words the question comes to, and the news is left out of it",
+      (got, NOW["asked"], NOW["calls"], voice.now_tool("search"), "headlines are all you can see" in json.dumps(NOW["shown"])),
+      ("The reviews like it.", [("search", "Is the XM6 worth buying? What do the reviews say?")], [("search", "sony xm6 review")], "search", False))
+voice.JC.update(areas={"stories": {}}, words=voice.re.compile(r"\b(stor(y|ies)|anecdotes?)\b"))
+NOW["asked"].clear(); NOW["calls"].clear()
+now_says("Which of my stories is the best one to tell at an interview?")
+check("a message in the records' own words is about the person's records: it is not put to the search question, and nothing is searched",
+      (NOW["asked"], NOW["calls"]), ([], []))
+NOW["answer"]["weather"] = {"location": ""}
+NOW["asked"].clear(); NOW["calls"].clear()
+now_says("Will it rain on story night tomorrow?")
+check("the weather is looked up all the same", (NOW["asked"], NOW["calls"]),
+      ([("weather", "Will it rain on story night tomorrow?")], [("weather", "")]))
+NOW["answer"]["weather"] = None
+voice.JC.update(areas={}, words=None)
 NOW["asked"].clear(); NOW["calls"].clear()
 got = now_says("What does Reddit think of the XM6?")
 check("asked about Reddit with only the web search there, the web is searched with the word reddit",
@@ -1789,11 +1872,38 @@ NOW["asked"].clear(); NOW["calls"].clear()
 got = now_says("What do people on r/headphones say about the XM6?")
 check("and one that names Reddit is searched there, as asked", (NOW["asked"][0][0], NOW["calls"]), ("reddit", [("reddit", "sony xm6")]))
 del voice.TOOLS["reddit"]
+# A reply that trips the check for a promised picture is asked for again: with what was looked up still in front of him.
+voice.IMAGE_URL = "http://art.invalid"
+again_asked = lambda msgs: any("nothing has been started" in str(m.get("content")) for m in msgs if m["role"] == "user")
+NOW["script"] = lambda msgs: ({"content": "I have no forecast."} if msgs[-1]["role"] != "tool" else
+                              {"content": "Rain tomorrow, high of 48."} if again_asked(msgs) else {"content": "Sunshine is on its way, with a high of 48."})
+NOW["answer"]["weather"] = {"location": ""}
+NOW["asked"].clear(); NOW["calls"].clear()
+got = now_says("What's the weather doing tomorrow?")
+check("asked again about a reply, he still has what the program looked up, and it is not looked up twice",
+      (got, NOW["calls"], [m["role"] for m in NOW["shown"][-3:]]),
+      ("Rain tomorrow, high of 48.", [("weather", "")], ["user", "assistant", "tool"]))
+NOW["answer"]["weather"] = None
+NOW["script"] = lambda msgs: ({"content": "I have not seen any reviews."} if msgs[-1]["role"] != "tool" else
+                              {"content": "Sound Weekly calls it the pair to beat."} if again_asked(msgs) else {"content": "A verdict is on its way."})
+NOW["answer"]["search"] = {"query": "sony xm6 review"}
+NOW["calls"].clear()
+got = now_says("Is the XM6 worth buying? What do the reviews say?")
+check("and with the headlines, what he was told about them as well",
+      (got, NOW["calls"], [m["role"] for m in NOW["shown"][-3:]],
+       [w in told_this_turn() for w in ("[You have no web search, so this program has searched the news", "[You said a picture is on its way")]),
+      ("Sound Weekly calls it the pair to beat.", [("news", "sony xm6 review")], ["user", "assistant", "tool"], [True, True]))
+voice.IMAGE_URL = ""
 sys.stderr = real_err
-check("the journal says a search was made before he answered", journal.getvalue().count("asked for a search: looked up before he answers"), 5)
+check("the journal says a search was made before he answered", journal.getvalue().count("asked for a search: looked up before he answers"), 7)
+check("and when it was the news that was searched in the web's place: how many headlines and how long, never the words",
+      ("no web search, so the news was searched: 2 headlines in " in journal.getvalue(),
+       journal.getvalue().count("no web search, and the news has no headlines for it"),
+       [w in journal.getvalue().lower() for w in ("xm6", "sony", "vacuum")]),
+      (True, 1, [False, False, False]))
 check("the journal says when the program looked, and for what",
       (journal.getvalue().count("asked for the weather: looked up before he answers"),
-       journal.getvalue().count("asked for the news: looked up before he answers")), (2, 1))
+       journal.getvalue().count("asked for the news: looked up before he answers")), (4, 1))
 voice.TOOLS.update(kept_tools)
 PUT.clear()
 answers = []
@@ -1828,9 +1938,12 @@ check("the words that bring the question on",
 check("and the words that bring a search on",
       ([bool(voice.NOW_WORDS["search"].search(x)) for x in (
           "What do the reviews say?", "Which robot vacuum should I buy?", "How much does it cost?", "What's a good dishwasher under 800 dollars?",
-          "Look it up.", "Good morning.", "Who wrote Hamlet?", "How do I boil an egg?")],
+          "Look it up.", "Are the new AirPods any good?", "What do reviewers think of it?", "I'm thinking of buying a kettle.",
+          "Is it better than the old one?", "Any deals on a Kindle?", "What's the cheapest one?",
+          "Is the new Pixel reliable?", "Hey Douglas, is the Steam Deck OLED good?", "How is the battery life on it?",
+          "Good morning.", "Who wrote Hamlet?", "How do I boil an egg?", "Tell me a joke.", "That was a good one.", "This is good.")],
        [bool(voice.NOW_WORDS["reddit"].search(x)) for x in ("What does Reddit think?", "check r/headphones", "I read it somewhere")]),
-      ([True, True, True, True, True, False, False, False], [True, True, False]))
+      ([True] * 14 + [False] * 6, [True, True, False]))
 
 print("-- a search of the web and of Reddit: only with a key, through the service's own API --")
 NET = {"mode": "ok", "seen": [], "tokens": 0, "stale": False}
@@ -1923,24 +2036,42 @@ class FakeNet(BaseHTTPRequestHandler):
 net = ThreadingHTTPServer(("127.0.0.1", 0), FakeNet)
 threading.Thread(target=net.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{net.server_address[1]}"
-check("with no key he has neither search, and is told he has no web search",
-      ("search" in voice.TOOLS, "reddit" in voice.TOOLS, "You have no general web search: for something that is not in the news" in voice.system_prompt()),
-      (False, False, True))
+voice.offer_tools()
+sp = voice.system_prompt()
+check("with no key he has neither search, and is told that the headlines of the news are the nearest thing he has",
+      ("search" in voice.TOOLS, "reddit" in voice.TOOLS,
+       "You have no general web search. What news and review sites have run about a product" in sp,
+       "does turn up in a search of the news, as headlines" in sp,
+       "say you have no way to look it up" in sp),
+      (False, False, True, True, True))
+check("and the news tool says that it is for reviews, prices and what to buy as well",
+      [t["function"]["description"] for t in voice.TOOL_SPECS if t["function"]["name"] == "news"],
+      [voice.NEWS_TOOL + " You have no web search, so use it as well for product reviews, prices and what to buy: with a "
+       "product's name and the word review as the topic, or the word best and a kind of product, it returns the headlines of "
+       "reviews, round-ups and deals, each ending with the name of its outlet."])
+news_search, voice.NEWS_SEARCH = voice.NEWS_SEARCH, ""
+voice.offer_tools()
+check("with no way to search the news either, he is told he has no web search, and nothing of headlines",
+      ("You have no general web search: for something that is not in the news" in voice.system_prompt(),
+       "a search of the news, as headlines" in voice.system_prompt(), voice.TOOLS["news"][1] == voice.NEWS_TOOL), (True, False, True))
+voice.NEWS_SEARCH = news_search
 voice.REDDIT_AUTH_URL, voice.REDDIT_API_URL = base + "/api/v1/access_token", base
 voice.REDDIT_ID, voice.REDDIT_SECRET, voice.REDDIT_AGENT = "id1", "sec1", "linux:douglas-home-assistant:v1.0 (by /u/tester)"
 voice.offer_tools()
 check("with Reddit's key alone he can search Reddit, and still has no web search",
       ("reddit" in [t["function"]["name"] for t in voice.TOOL_SPECS], "search" in voice.TOOLS,
        "With the reddit tool you can search Reddit" in voice.system_prompt(),
-       "You have no general web search: for something that is not on Reddit, in the news" in voice.system_prompt()),
-      (True, False, True, True))
+       "You have no general web search: for something that is not on Reddit, in the news" in voice.system_prompt(),
+       voice.TOOLS["news"][1] == voice.NEWS_TOOL),
+      (True, False, True, True, True))
 voice.SEARCH_URL, voice.SEARCH_KEY = base + "/res/v1", "k" * 20
 voice.offer_tools()
 sp = voice.system_prompt()
 check("with a search key he can search the web, and is no longer told that he cannot",
       ("search" in [t["function"]["name"] for t in voice.TOOL_SPECS], "With the search tool you can search the web" in sp,
-       "a search of the web, a search of Reddit, and reading a web page" in sp, "no general web search" in sp),
-      (True, True, True, False))
+       "a search of the web, a search of Reddit, and reading a web page" in sp, "no general web search" in sp,
+       "a search of the news, as headlines" in sp, voice.TOOLS["news"][1] == voice.NEWS_TOOL),
+      (True, True, True, False, False, True))
 journal, real_err = io.StringIO(), sys.stderr
 sys.stderr = journal
 NET["seen"].clear()
@@ -2050,7 +2181,9 @@ check("never what for, and never a key",
 net.shutdown()
 voice.SEARCH_KEY = voice.REDDIT_ID = voice.REDDIT_SECRET = voice.REDDIT_AGENT = ""
 voice.offer_tools()
-check("without the keys the tools are gone again", ("search" in voice.TOOLS, "reddit" in voice.TOOLS), (False, False))
+check("without the keys the tools are gone again, and the news stands in for a search once more",
+      ("search" in voice.TOOLS, "reddit" in voice.TOOLS, voice.now_tool("search"), voice.TOOLS["news"][1] != voice.NEWS_TOOL),
+      (False, False, "news", True))
 
 print("-- a turn's allowance of lookups, and what is not a reply --")
 check("a tool call written out as words is no part of what he said",
