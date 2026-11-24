@@ -3648,8 +3648,24 @@ check("the words that make a message one to ask about",
       [bool(voice.REPO_WORDS.search(q)) for q in (
           "Can you clone a repo locally and work on it?", "Do you have access to repos on github?",
           "What is in my repository?", "Show me the diff.", "The commit broke it.", "How was your day?",
-          "I need a patch for my jeans.", "Is the gate closed?")],
-      [True, True, True, True, True, False, True, False])
+          "I need a patch for my jeans.", "Is the gate closed?", "Push it.", "push it", "Open a PR for that.",
+          "Has it been pushed?", "Push the meeting to Friday.", "A pushover, that one.", "What a prize.",
+          "Do twenty pushups.")],
+      [True, True, True, True, True, False, True, False, True, True, True, True, True, False, False, False])
+SHOP["routes"].clear(); SHOP["calls"].clear()
+SHOP["route"] = {"do": "push"}
+SHOP["answers"]["offer"] = {"ok": False, "text": "There is no finished job with changes to push."}
+SHOP["script"] = lambda msgs: {"content": "There is nothing to push."}
+voice.WORKING.update(job="", ended=0.0)
+got = repo_says("Push it.")
+check("asked to push long after any job, in a conversation about no repository, he still hears it as one",
+      (got, SHOP["routes"], SHOP["calls"]), ("There is nothing to push.", [("Push it.", "")], [("offer", {"repo": ""})]))
+SHOP["routes"].clear(); SHOP["calls"].clear()
+SHOP["route"] = None
+SHOP["script"] = lambda msgs: {"content": "Friday it is."}
+got = repo_says("Push the meeting to Friday.")
+check("and a push of something else is asked about and left alone",
+      (got, SHOP["routes"], SHOP["calls"]), ("Friday it is.", [("Push the meeting to Friday.", "")], []))
 
 SHOP["calls"].clear(); SHOP["routes"].clear()
 SHOP["route"] = {"do": "read", "path": "secret.py"}
@@ -3900,6 +3916,38 @@ check("a message that points back is first said again so that it stands alone",
       (voice.repo_wanted("Clone it.", route_ask, before="Is jobcontextmcp on GitHub?"), len(PUT),
        PUT[1][0][1]["content"]),
       ({"do": "clone", "repo": "jobcontextmcp"}, 2, "The message: Clone jobcontextmcp."))
+PUT.clear()
+ROUTER["reply"] = "PUSH"
+check("a push that points back is asked about as it stands: it is about a job's work, whatever was said before",
+      (voice.repo_wanted("Push it.", route_ask, before="What's the weather tomorrow?"), len(PUT),
+       PUT[0][0][0]["content"] == voice.REPO_ASKED, PUT[0][0][1]["content"]),
+      ({"do": "push"}, 1, True, "The message: Push it."))
+PUT.clear()
+ROUTER["reply"] = "NO"
+
+
+def dentist_ask(msgs, tools=None, max_tokens=0, temperature=None):
+    if msgs[0]["content"] == voice.RESTATE:
+        PUT.append((msgs, tools, max_tokens, temperature))
+        return {"content": "Push my dentist appointment back an hour."}
+    return route_ask(msgs, tools, max_tokens, temperature)
+
+
+check("what is not a push as it stands is said again and asked about as any other message is",
+      (voice.repo_wanted("Push it back an hour.", dentist_ask, before="When is my dentist appointment?"),
+       [p[0][0]["content"] == voice.RESTATE for p in PUT], PUT[0][0][1]["content"], PUT[2][0][1]["content"]),
+      (None, [False, True, False], "The message: Push it back an hour.",
+       "The message: Push my dentist appointment back an hour."))
+PUT.clear()
+ROUTER["reply"] = "STOP"
+check("only a push is taken from the message as it stands: anything else waits for the whole of it",
+      (voice.repo_wanted("Stop it and push it.", route_ask, before="The music is loud."), len(PUT)),
+      ({"do": "stop"}, 3))
+PUT.clear()
+ROUTER["reply"] = "PUSH"
+check("and a message that points at nothing is asked about once, as before",
+      (voice.repo_wanted("Push your work to GitHub.", route_ask, before="What's the weather tomorrow?"), len(PUT)),
+      ({"do": "push"}, 1))
 n = len(PUT)
 check("with no words there is nothing to ask, and no answer is a no",
       (voice.repo_wanted("  ", route_ask), len(PUT) - n, voice.repo_wanted("Clone it all.", no_answer)), (None, 0, None))

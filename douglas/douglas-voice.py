@@ -3268,9 +3268,13 @@ REPO_TOOL = (
     "stop (stop the job), push (offer the job's branch to GitHub as a pull request: what would "
     "go is read back to the person, and it is pushed only if they then say yes).")
 # A message that may be about a repository, when none is in the conversation.
+# "Push it" may come hours after the job it is about, in a conversation that
+# has no repository in it yet: the word alone gets the message asked about.
+# The question then tells a push of work from a meeting pushed to Friday.
 REPO_WORDS = re.compile(
     r"\b(clon(e|es|ed|ing)|repos?|repositor(y|ies)|github|git|codebase|code ?base|source code|"
-    r"pull requests?|commits?|branch(es)?|diff|patch)\b", re.I)
+    r"pull requests?|prs?|push(es|ed|ing)?|commits?|branch(es)?|diff|patch)\b", re.I)
+PUSH_WORDS = re.compile(r"\b(pull requests?|prs?|push(es|ed|ing)?)\b", re.I)
 REPO_ASKED = (
     "You are shown one message that someone sent to an assistant. The assistant can clone "
     "software repositories from GitHub onto its own machine, look things up in the code of a "
@@ -3288,7 +3292,7 @@ REPO_ASKED = (
     "CHANGES: it asks to see what the job changed: the diff, the patch, the changed files.\n"
     "STOP: it asks for the job to be stopped.\n"
     "PUSH: it asks for the job's work to be pushed to GitHub, or for a pull request to be "
-    "opened for it.\n"
+    "opened for it. A message that says not to push, or to wait with it, is NO.\n"
     "ABOUT: it asks what the repository is, what it does or is for, or how it is laid out.\n"
     "FILE and the file's name as the message gives it: it asks to see or read one file, or "
     "what one named file does.\n"
@@ -3323,16 +3327,27 @@ def repo_wanted(said: str, ask=None, before: str = "") -> dict | None:
     before = " ".join(str(before).split())[:300]
     if not said:
         return None
-    whole = restated(before, said, ask) if before and POINTS.search(said) else said
-    try:
+
+    def answered(text: str) -> tuple[str, str]:
         m = (ask or complete)([{"role": "system", "content": REPO_ASKED},
-                               {"role": "user", "content": "The message: " + whole}], None, 30, 0.0)
+                               {"role": "user", "content": "The message: " + text}], None, 30, 0.0)
+        got = " ".join(unthought(str(m.get("content") or "")).split()).strip(" .!\"'*`")
+        word, _, rest = got.partition(" ")
+        return word.upper().strip(":,.-"), rest.strip(" :,.-\"'*`")[:120]
+
+    try:
+        points = bool(before and POINTS.search(said))
+        # "Push it" points at a job's work, not at the message before it:
+        # said again after "What's the weather tomorrow?" it comes out as a
+        # push of the weather, which is no push at all. So a message that
+        # speaks of pushing is asked about as it stands first, and a PUSH is
+        # taken from that. (Only a PUSH: it does nothing until a yes.)
+        if points and PUSH_WORDS.search(said) and answered(said)[0] == "PUSH":
+            return {"do": "push"}
+        word, rest = answered(restated(before, said, ask) if points else said)
     except Exception as e:      # noqa: BLE001 - no answer is a no: his own reply stands
         log(f"could not ask what was wanted of a repository: {type(e).__name__}: {e}")
         return None
-    got = " ".join(unthought(str(m.get("content") or "")).split()).strip(" .!\"'*`")
-    word, _, rest = got.partition(" ")
-    word, rest = word.upper().strip(":,.-"), rest.strip(" :,.-\"'*`")[:120]
     if word == "CLONE":
         return {"do": "clone", "repo": rest} if rest else {"do": "list"}
     if word == "FILE":

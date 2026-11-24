@@ -887,13 +887,20 @@ but the pipeline's user may open.
 a repo locally and work on it?", he used to say that he could not, which was
 true. With the tool in his hands the old trouble would be the other one:
 left to pick a tool from everything he is told, this model picks the right
-one six to nine times in ten. So a message that speaks of repositories, or
-comes while one is in the conversation or a job is under way, is first put
+one six to nine times in ten. So a message that speaks of repositories or of
+pushing, or comes while one is in the conversation or a job is under way or
+not an hour over, is first put
 to a question of its own (`REPO_ASKED`: clone, list, work, status, changes,
 stop, push, about, a file, find, or none of these; one line for an answer).
 The program then does that, and he is handed what came of it as a call he
-made. On 90 messages of every kind, twice each, the answer was right every
-time, in half a second ("Push the meeting to Friday" is none of these).
+made. On 110 messages of every kind, twice each, the answer was right every
+time, in half a second ("Push the meeting to Friday" is none of these, and
+neither is "Don't push it yet"). A message that points back ("clone it") is
+first said again with the one before it, so that it stands alone; "push it"
+is the exception, and is asked about as it stands, because it points at a
+job's work and not at what was last said. Said again after a question about
+the weather it came out as a push of the weather, and he answered that he
+did not know what was meant.
 
 *Reading.* A clone is bare: git's objects and no files laid out, so nothing
 in it can be run by accident. "What is it?" gets the README in its own words
