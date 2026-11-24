@@ -882,11 +882,13 @@ def system_prompt() -> str:
             "one onto this machine, look things up in its code, and have a job done on it. A "
             "job is a change to the code that is made for you, by itself, on a copy of the "
             "repository and on a branch of its own; it takes some minutes, goes on after "
-            "your reply, and the person is told on their screens when it ends. Nothing is "
-            "ever pushed to GitHub from here. What you know of a repository's code is only "
-            "what the repo tool has given you in this conversation: never describe code, a "
-            "file or a change from memory, and never say a job was started, finished or "
-            "changed something unless the tool said so.")
+            "your reply, and the person is told on their screens when it ends. Nothing "
+            "reaches GitHub from here unless the person asks for a push: then this program "
+            "reads back to them exactly what would go, and it is pushed only if they say "
+            "yes. What you know of a repository's code is only what the repo tool has given "
+            "you in this conversation: never describe code, a file or a change from memory, "
+            "and never say a job was started, finished or changed something, or that "
+            "anything was pushed, unless the tool said so.")
     if EYES_URL:
         parts.append(
             "You can see pictures that are sent to you. When one comes with a message, "
@@ -3005,6 +3007,38 @@ NOT_STARTED = ("[You said a picture is on its way, but you called neither draw n
 NO_PICTURE = "I said a picture was on its way, but I had not started one. Ask me again."
 
 
+# What is said of a thing that was read back and is waiting for its yes: a
+# change to the owner's records (the first), or a push to GitHub.
+HELD = {
+    "": {"late": "That change waited too long for a yes and was not saved.",
+         "late_note": "[The change you put forward was not answered in time. It was "
+                      "dropped and nothing was saved.]",
+         "no": "Dropped. Nothing was saved.",
+         "unclear": "Nothing is saved yet. Say yes to save it, or no to drop it.",
+         "other": "That change was not saved.",
+         "other_note": "[The person did not say yes to the change you put forward, so it "
+                       "was dropped and nothing was saved.]"},
+    "push": {"late": "That push waited too long for a yes and was not made.",
+             "late_note": "[The push that was read back to the person was not answered in time. "
+                          "Nothing was pushed.]",
+             "no": "Left where it is. Nothing was pushed.",
+             "unclear": "Nothing is pushed yet. Say yes to push it, or no to leave it.",
+             "other": "Nothing was pushed.",
+             "other_note": "[The person did not say yes to the push that was read back to them, "
+                           "so nothing was pushed.]"},
+}
+
+
+def push_made(change: dict) -> str:
+    """Make a push the person has just said yes to, and say truthfully what
+    became of it. Only ever called for that: the job and the commit are the
+    ones that were read back."""
+    got = workshop("push", wait=330, job=change["args"]["job"], sha=change["args"]["sha"])
+    log("repo push " + ("made" if got.get("ok") else "not made"))
+    return str(got.get("text") or "The workshop gave no answer, so it is not known whether "
+                                  "anything was pushed.")
+
+
 def held() -> bool:
     """Has the turn on this thread put a change forward? Then it is over:
     the read-back is the reply."""
@@ -3112,7 +3146,7 @@ WORKING = {"job": "", "ended": 0.0}      # the job under way, and when the last 
 REPO_DO = {"list": "repos", "clone": "clone", "update": "update", "about": "about",
            "files": "files", "read": "read", "find": "find", "search": "search",
            "history": "log", "work": "work", "status": "status", "changes": "changes",
-           "stop": "stop"}
+           "stop": "stop", "push": "offer"}
 # What each of those is sent with, besides the repository.
 REPO_ARGS = {"files": ("path", "find", "said"), "read": ("path", "line", "find", "said"),
              "find": ("words", "said"), "search": ("words", "path", "said"), "about": ("said",),
@@ -3168,16 +3202,35 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
         line = 0
     have = {"path": str(path or "")[:300], "find": str(words or "")[:200], "words": str(words or "")[:200],
             "line": line, "said": said[:600]}
-    if do in ("clone", "work") and not ctx.get("routed"):
-        # A job is started and a repository cloned when the person asks for
-        # it, and this program has seen that in their own words (see
-        # repo_wanted). Not on a call he thinks up himself: what he has just
-        # read on a web page or in a repository may be telling him to.
+    if do in ("clone", "work", "push") and not ctx.get("routed"):
+        # A job is started, a repository cloned and a push offered when the
+        # person asks for it, and this program has seen that in their own
+        # words (see repo_wanted). Not on a call he thinks up himself: what
+        # he has just read on a web page or in a repository may be telling
+        # him to.
         log(f"repo {do} refused: not asked for by the person in this message")
-        return ("Not done. " + ("A job is started" if do == "work" else "A repository is cloned")
+        return ("Not done. " + {"work": "A job is started", "clone": "A repository is cloned",
+                                "push": "A push is offered"}[do]
                 + " only when the person asks for it themselves, in plain words, in their own "
                 "message. If that is what they want, tell them to say so, for example "
-                + ("\"Fix ...\" or \"Add ...\"." if do == "work" else "\"Clone the ... repository.\""))
+                + {"work": "\"Fix ...\" or \"Add ...\".", "clone": "\"Clone the ... repository.\"",
+                   "push": "\"Push it.\""}[do])
+    if do == "push":
+        # Nothing is pushed here. The workshop says what a push would send;
+        # that is read back to the person as this turn's reply, word for
+        # word, and the push is made only if their next message is a plain
+        # yes (see HELD and push_made), by this program and not by him.
+        got = workshop("offer", repo=repo or CONVO["repo"])
+        if got.get("repo"):
+            CONVO["repo"] = str(got["repo"])
+        if got.get("ok") and got.get("job") and got.get("sha") and got.get("text") and "held" in ctx:
+            ctx["held"] = {"kind": "push", "area": "repo", "action": "push", "readback": str(got["text"]),
+                           "args": {"job": str(got["job"]), "sha": str(got["sha"])}}
+            log("repo push held for a yes")
+            return ("Nothing has been pushed. What would be pushed is being read back to the "
+                    "person now, and they will be asked to say yes.")
+        log("repo push: not offered")
+        return str(got.get("text") or "The workshop gave no answer.")
     if do == "clone":
         args = {"name": repo or said[:200]}
     elif do == "work":
@@ -3212,7 +3265,8 @@ REPO_TOOL = (
     "search (every line that has a text, words), history (the latest commits), "
     "work (start a job that changes the code by itself; task says what is to be done), "
     "status (how the job is going, or what became of it), changes (what the job changed), "
-    "stop (stop the job).")
+    "stop (stop the job), push (offer the job's branch to GitHub as a pull request: what would "
+    "go is read back to the person, and it is pushed only if they then say yes).")
 # A message that may be about a repository, when none is in the conversation.
 REPO_WORDS = re.compile(
     r"\b(clon(e|es|ed|ing)|repos?|repositor(y|ies)|github|git|codebase|code ?base|source code|"
@@ -3233,6 +3287,8 @@ REPO_ASKED = (
     "STATUS: it asks how the job is going, whether it is finished, or what became of it.\n"
     "CHANGES: it asks to see what the job changed: the diff, the patch, the changed files.\n"
     "STOP: it asks for the job to be stopped.\n"
+    "PUSH: it asks for the job's work to be pushed to GitHub, or for a pull request to be "
+    "opened for it.\n"
     "ABOUT: it asks what the repository is, what it does or is for, or how it is laid out.\n"
     "FILE and the file's name as the message gives it: it asks to see or read one file, or "
     "what one named file does.\n"
@@ -3241,7 +3297,7 @@ REPO_ASKED = (
     "is done, whether it handles something.\n"
     "NO: it asks for none of these: small talk, a question about something else, or about "
     "the world outside the code.\n\n"
-    "Answers look like: CLONE jobcontextmcp. LIST. WORK. STATUS. CHANGES. STOP. ABOUT. "
+    "Answers look like: CLONE jobcontextmcp. LIST. WORK. STATUS. CHANGES. STOP. PUSH. ABOUT. "
     "FILE server.py. FIND tone profile. NO.")
 # What to do with what the program got for him, said in the turn that has it
 # (see SEARCHED): one answer to give from, and no further looking this turn.
@@ -3285,7 +3341,7 @@ def repo_wanted(said: str, ask=None, before: str = "") -> dict | None:
         return {"do": "find", "words": rest} if rest else {"do": "about"}
     if word == "WORK":
         return {"do": "work", "task": said}         # the person's own words are the job
-    return {"do": word.lower()} if word in ("LIST", "STATUS", "CHANGES", "STOP", "ABOUT") else None
+    return {"do": word.lower()} if word in ("LIST", "STATUS", "CHANGES", "STOP", "PUSH", "ABOUT") else None
 
 
 def work_line(got: dict) -> str:
@@ -3314,6 +3370,8 @@ def work_line(got: dict) -> str:
                     if files else "")
                  + f". It is on the branch {tame(got.get('branch'), 80)} in my clone, and nothing has "
                  "been pushed to GitHub.")
+        if got.get("can_push"):
+            line += " Say \"push it\" if you want it there as a pull request."
     else:
         line += " No file was changed."
     if got.get("summary"):
@@ -4091,26 +4149,24 @@ class Pipeline:
             answer = "other" if image or via != waiting["via"] else verdict(said, heard)
             if answer == "yes" and heard and self._level < QUIET_DB:
                 answer = "unclear"      # a yes nobody said out loud: the recogniser's own
-            name = f"{waiting['area']}.{waiting['action']}"
+            kind = waiting.get("kind") or ""
+            words = HELD.get(kind) or HELD[""]
+            name = "repo push" if kind == "push" else f"jobcontext {waiting['area']}.{waiting['action']}"
             if time.time() - waiting["ts"] > JOBCONTEXT_CONFIRM_S:
-                log(f"jobcontext {name} dropped: no answer in time")
-                lead = "That change waited too long for a yes and was not saved."
-                note = ("[The change you put forward was not answered in time. It was "
-                        "dropped and nothing was saved.]")
+                log(f"{name} dropped: no answer in time")
+                lead, note = words["late"], words["late_note"]
             elif answer == "yes":
-                return self._answered(said, clean(jc_commit(waiting)), via, turn, always=True)
+                made = push_made(waiting) if kind == "push" else jc_commit(waiting)
+                return self._answered(said, clean(made), via, turn, always=True)
             elif answer == "no":
-                log(f"jobcontext {name} dropped: the answer was no")
-                return self._answered(said, "Dropped. Nothing was saved.", via, turn)
+                log(f"{name} dropped: the answer was no")
+                return self._answered(said, words["no"], via, turn)
             elif answer == "unclear":
                 CONVO["pending"] = waiting              # still waiting, on the same clock
-                return self._answered(said, "Nothing is saved yet. Say yes to save it, "
-                                            "or no to drop it.", via, turn)
+                return self._answered(said, words["unclear"], via, turn)
             else:
-                log(f"jobcontext {name} dropped: the answer was not a yes")
-                lead = "That change was not saved."
-                note = ("[The person did not say yes to the change you put forward, so it "
-                        "was dropped and nothing was saved.]")
+                log(f"{name} dropped: the answer was not a yes")
+                lead, note = words["other"], words["other_note"]
         earlier = said_before(self.history)     # what the person has been saying, for a look
         if image:
             again = (image == (SEEN["full"] or SEEN["image"]) or len(said.split()) < 3
@@ -4299,7 +4355,9 @@ class Pipeline:
                               {"role": "tool", "tool_call_id": tool, "name": tool,
                                "content": found}]
                     break
-            answer = self.llm(msgs + looked)
+            # What the program has just held for a yes is this turn's reply,
+            # word for word: he is not asked.
+            answer = "" if ctx["held"] else self.llm(msgs + looked)
             if (TOOLS_ON and JC["areas"] and not ctx["lookups"]
                     and about_records(asked, CONVO["private"])
                     and (not JOBCONTEXT_VIA or via in JOBCONTEXT_VIA)):

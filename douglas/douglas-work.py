@@ -62,7 +62,10 @@ Settings (environment; /etc/douglas/work.env):
     WORK_JOBS           the directory both sides see /var/lib/douglas-work/jobs
     WORK_SOCKET         where it listens             /run/douglas-work.sock
     WORK_OWNER          the GitHub account a bare repo name belongs to
-    WORK_GITHUB_TOKEN   for private repositories (optional; see README)
+    WORK_GITHUB_TOKEN   for private repositories, and for pushing (optional;
+                        see README)
+    WORK_PUSH           1: a job's branch may be pushed and a pull request
+                        opened for it, each time on the owner's yes
     WORK_MAX_MB         the largest repository cloned                   500
     WORK_CLIENTS        users who may ask            douglas
     WORK_VOICE_STATE    the voice pipeline's state file: a job waits while
@@ -108,6 +111,11 @@ WORK_DIR = E("WORK_DIR", "/var/lib/douglas-work")
 SOCKET = E("WORK_SOCKET", "/run/douglas-work.sock")
 OWNER = E("WORK_OWNER")
 TOKEN = E("WORK_GITHUB_TOKEN")
+# May a job's branch be pushed to GitHub and a pull request opened for it?
+# Only with this set and a token that can write, and then only when asked,
+# one push at a time, after what would go has been read back and answered
+# with a yes: that part is the voice pipeline's to keep. Never without.
+PUSH = E("WORK_PUSH") == "1"
 GIT_URL = E("WORK_GIT_URL", "https://github.com").rstrip("/")
 API_URL = E("WORK_API_URL", "https://api.github.com" if GIT_URL == "https://github.com" else "").rstrip("/")
 MAX_MB = int(E("WORK_MAX_MB", "500"))
@@ -367,6 +375,16 @@ class Problem(Exception):
     """Something that went wrong, in words for Douglas to pass on."""
 
 
+class Refused(Problem):
+    """GitHub said no to something it was sent: its status, and its reason
+    in its own words, cut short."""
+
+    def __init__(self, code: int, said: str) -> None:
+        super().__init__(f"GitHub refused that (HTTP {code}): {said}" if said else
+                         f"GitHub refused that (HTTP {code}).")
+        self.code, self.said = code, said
+
+
 def whole_number(value, most: int = 1_000_000) -> int:
     """A count out of something the other side wrote: whatever is there,
     this is a number between nothing and `most`."""
@@ -454,6 +472,19 @@ def why(err: str) -> str:
     if "could not resolve host" in low or "failed to connect" in low or "timed out" in low:
         return "GitHub could not be reached from here."
     return "git said: " + clip(" ".join((err or "it failed and gave no reason").split()), 160)
+
+
+def why_not_pushed(said: str) -> str:
+    """What git complained of when a push was not taken, in a sentence."""
+    low = (said or "").lower()
+    if "protected branch" in low:
+        return "That branch is protected on GitHub."
+    if "[rejected]" in low or "non-fast-forward" in low or "fetch first" in low:
+        return "GitHub already has a branch of that name with other work on it."
+    if "permission to" in low or "403" in low or "authentication failed" in low \
+            or "could not read username" in low or "write access" in low:
+        return "The access token on this machine does not allow writing to that repository."
+    return why(said)
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -606,18 +637,32 @@ class Manager:
         self.last = f"{owner}/{name}"
         return owner, name, self.meta(owner, name)
 
-    def ask_github(self, path: str):
+    def ask_github(self, path: str, send: dict | None = None):
+        """One question to GitHub's API, or, with `send`, one thing sent to
+        it. A refusal of what was sent comes back as Refused, with GitHub's
+        reason."""
         if not API_URL:
             return None
-        req = urllib.request.Request(API_URL + path, headers={
-            "Accept": "application/vnd.github+json", "User-Agent": "douglas-work",
-            "X-GitHub-Api-Version": "2022-11-28"})
+        req = urllib.request.Request(
+            API_URL + path, data=None if send is None else json.dumps(send).encode(), headers={
+                "Accept": "application/vnd.github+json", "User-Agent": "douglas-work",
+                "X-GitHub-Api-Version": "2022-11-28",
+                **({} if send is None else {"Content-Type": "application/json"})})
         if TOKEN:
             req.add_header("Authorization", "Bearer " + TOKEN)
         try:
             with API.open(req, timeout=20) as r:
                 return json.loads(r.read(4_000_000))
         except urllib.error.HTTPError as e:
+            if send is not None:
+                try:
+                    told = json.loads(e.read(20_000))
+                    said = " ".join(str(x) for x in [told.get("message")] + [
+                        (err.get("message") if isinstance(err, dict) else err)
+                        for err in told.get("errors") or []] if x)
+                except (ValueError, AttributeError, OSError):
+                    said = ""
+                raise Refused(e.code, clip(said, 200)) from None
             if e.code == 404:
                 return None
             raise Problem("GitHub would not answer a question about its repositories "
@@ -1182,7 +1227,10 @@ class Manager:
         text = f"Job {r.get('id')} on {r.get('repo')} {head} after {took} and {r.get('step') or 0} steps."
         if r.get("commits"):
             text += (f" Changed: {r.get('stat') or 'see the files'}, on branch {r.get('branch')} in "
-                     "the clone on this machine. Nothing has been pushed to GitHub."
+                     "the clone on this machine. "
+                     + (f"It has been pushed to GitHub, and its pull request is {r['pr']}." if r.get("pr")
+                        else "It has been pushed to GitHub, with no pull request." if r.get("pushed")
+                        else "Nothing has been pushed to GitHub.")
                      + (" Files: " + ", ".join(r["files"][:12]) + (", ..." if len(r["files"]) > 12 else "")
                         + "." if r.get("files") else ""))
         else:
@@ -1211,7 +1259,9 @@ class Manager:
                  "private": bool(r.get("private")), "stat": r.get("stat") or "",
                  "files": (r.get("files") or [])[:12], "branch": r.get("branch") or "",
                  "commits": int(r.get("commits") or 0), "summary": r.get("summary") or "",
-                 "error": r.get("error") or "", "finished": float(r.get("finished") or 0)})
+                 "error": r.get("error") or "", "finished": float(r.get("finished") or 0),
+                 "pr": r.get("pr") or "",
+                 "can_push": bool(PUSH and TOKEN and r.get("commits") and not r.get("pushed"))})
 
     def pick_repo(self, repo: str) -> str:
         if not repo:
@@ -1260,6 +1310,101 @@ class Manager:
                 + cut + (f"\n[The patch goes on: {len(patch.splitlines())} lines in all. Ask for one "
                          "file by name to see more of it.]" if len(cut) < len(patch) else ""),
                 self.tag(owner, name, meta))
+
+    def to_push(self, repo: str = "", job: str = "") -> tuple[dict, str, str, dict, str]:
+        """The finished job a push would be about, where its repository is,
+        and where its branch stands. The one named, or the latest that
+        changed something."""
+        r = next((x for x in reversed(self.records()) if x.get("id") == job), None) if job \
+            else self.latest(self.pick_repo(repo), with_branch=True)
+        if not r or not r.get("commits"):
+            raise Problem("There is no finished job with changes to push.")
+        if r.get("pushed"):
+            raise Problem("That job's work is on GitHub already"
+                          + (f": {r['pr']}" if r.get("pr") else ", with no pull request") + ".")
+        if not PUSH or not TOKEN:
+            raise Problem("I cannot push from this machine: " + (
+                "pushing is switched off here." if TOKEN else
+                "there is no GitHub token on it. Its owner would have to make one that may write "
+                "to this repository and switch pushing on (see the workshop's settings).")
+                + " The work stays on its branch in my clone, and can be fetched from there.")
+        owner, name = r["repo"].split("/", 1)
+        bare, meta = self.path(owner, name), self.meta(owner, name)
+        if not BRANCH.fullmatch(str(r.get("branch") or "")) or r["branch"] == meta.get("default"):
+            raise Problem("That is not a branch of a job's, and nothing else is pushed from here.")
+        tip = git("rev-parse", "--verify", "--quiet", f"refs/heads/{r['branch']}^{{commit}}", cwd=bare).stdout.strip()
+        if not SHA.fullmatch(tip):
+            raise Problem("That job's branch is no longer in my clone.")
+        return r, f"{owner}/{name}", bare, meta, tip
+
+    def op_offer(self, repo: str = "", job: str = "") -> tuple[str, dict]:
+        """What a push would send, said so that a person can answer yes or
+        no to it. Nothing is pushed here."""
+        r, full, _bare, meta, tip = self.to_push(repo, job)
+        files = [str(f) for f in r.get("files") or []]
+        return (f"This would push the branch {r['branch']} to {full} on GitHub, which is "
+                f"{'private' if meta.get('private') else 'public'}, and open a pull request against "
+                f"{meta.get('default')}. It is {r['commits']} commit{'s' if r['commits'] != 1 else ''}: "
+                f"{r.get('stat') or 'see the files'}"
+                + (" (" + ", ".join(files[:6]) + (", and more" if len(files) > 6 else "") + ")" if files else "")
+                + ". The commit and the pull request carry the words of the job and my own account of "
+                "it, which nobody has checked. Nothing is pushed until you say yes. Say yes to push it, "
+                "or no to leave it.",
+                {"repo": full, "private": bool(meta.get("private")), "job": r["id"], "sha": tip,
+                 "branch": r["branch"]})
+
+    def op_push(self, job: str = "", sha: str = "") -> tuple[str, dict]:
+        """Push one job's branch, as it stood when it was read back, and
+        open a pull request for it. The branch and nothing else: no other
+        branch can be named, and nothing is forced."""
+        if not job:
+            raise Problem("Say which job's work to push.")
+        r, full, bare, meta, tip = self.to_push("", job)
+        if tip != sha:
+            raise Problem("That branch is not as it was when it was read back, so nothing was pushed.")
+        owner, name = full.split("/", 1)
+        ref = "refs/heads/" + r["branch"]
+        with self.slow:
+            p = git("push", "--porcelain", "origin", f"{ref}:{ref}", cwd=bare, timeout=300, auth=True)
+            if p.returncode:
+                raise Problem("Nothing was pushed. " + why_not_pushed(p.stderr + " " + p.stdout))
+            r["pushed"] = time.time()
+            write_whole(os.path.join(DONE, r["id"] + ".json"), json.dumps(r).encode())
+            # Which job and where to: its branch is named in the job's own words, so not that.
+            log(f"pushed job {r['id']} to {full} ({r['commits']} commits)")
+            task = " ".join(str(r.get("task") or "").split())
+            send = {"title": clip("Douglas: " + task, 72), "head": r["branch"], "base": meta.get("default"),
+                    "body": ("Made by Douglas, an assistant running on its owner's own machine, in a job "
+                             "its owner asked for and then said yes to pushing. Nobody has reviewed "
+                             f"it.\n\nThe job, as it was asked for:\n\n> {clip(task, 1000)}\n\n"
+                             f"What changed: {r.get('stat') or 'see the files'}.\n\nDouglas's own "
+                             "account of the work, which nobody has checked:\n\n> "
+                             + clip(" ".join(str(r.get("summary") or "(none given)").split()), 1500))}
+            try:
+                pr = self.ask_github(f"/repos/{owner}/{name}/pulls", send)
+            except Refused as e:
+                found = None
+                if e.code == 422:               # one is open for this branch already
+                    try:
+                        found = self.ask_github(f"/repos/{owner}/{name}/pulls?state=open&head="
+                                                + urllib.parse.quote(f"{owner}:{r['branch']}"))
+                    except Problem:
+                        found = None
+                pr = found[0] if isinstance(found, list) and found and isinstance(found[0], dict) else None
+                if pr is None:
+                    raise Problem(f"The branch {r['branch']} is on GitHub now, but no pull request "
+                                  f"could be opened for it: {e.said or 'GitHub gave no reason'}. One can "
+                                  "be opened there by hand.") from None
+            if not isinstance(pr, dict) or not str(pr.get("html_url") or "").startswith("https://") \
+                    and not str(pr.get("html_url") or "").startswith("http://"):
+                raise Problem(f"The branch {r['branch']} is on GitHub now, but GitHub did not say "
+                              "where the pull request is.")
+            r.update(pr=str(pr["html_url"])[:300], pr_number=whole_number(pr.get("number")))
+            write_whole(os.path.join(DONE, r["id"] + ".json"), json.dumps(r).encode())
+            log(f"pull request {r['pr_number']} opened on {full}")
+        return (f"Pushed {r['branch']} to {full}, and pull request {r['pr_number']} is open for it: "
+                f"{r['pr']}", {"repo": full, "private": bool(meta.get("private")), "job": r["id"],
+                               "pr": r["pr"]})
 
     def finish(self, jid: str, status: dict) -> None:
         """A job is over. Its result is taken out of the shared directory,
@@ -1474,7 +1619,7 @@ class Manager:
            "search": ("repo", "words", "path", "at", "said"), "find": ("repo", "words", "said"),
            "log": ("repo", "count", "at"), "work": ("repo", "task", "before"),
            "status": ("job", "repo"), "wait": ("job", "seconds"), "stop": ("job",),
-           "changes": ("repo", "job", "path")}
+           "changes": ("repo", "job", "path"), "offer": ("repo", "job"), "push": ("job", "sha")}
 
     def call(self, req) -> dict:
         op = req.get("op") if isinstance(req, dict) else None
@@ -1541,7 +1686,8 @@ def manager_main() -> None:
     threading.Thread(target=manager.watch, daemon=True).start()
     log(f"douglas-work manager on {SOCKET}: {len(manager.cloned())} clones, {len(manager.jobs)} jobs "
         f"under way, bare names looked up on {OWNER or 'no account'}, "
-        f"{'with' if TOKEN else 'no'} access token")
+        f"{'with' if TOKEN else 'no'} access token, pushing "
+        + ("on, each time on a yes" if PUSH and TOKEN else "off"))
     server.serve_forever()
 
 

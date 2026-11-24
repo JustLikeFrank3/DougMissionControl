@@ -108,7 +108,7 @@ ROWS = [{"name": "jobContextMCP", "private": False, "size": 1200},
         {"name": "vault", "private": True, "size": 10}]
 for row in ROWS:
     row.update(owner={"login": "acme"}, default_branch="main")
-API = {"seen": []}
+API = {"seen": [], "posted": [], "pulls": "ok"}
 
 
 class Api(BaseHTTPRequestHandler):
@@ -129,6 +129,23 @@ class Api(BaseHTTPRequestHandler):
                               and (signed or not r["private"])), None)
             if row:
                 code, body = 200, row
+        if "/pulls?" in self.path and signed:       # the open pull requests for a branch
+            code, body = 200, [{"number": 5, "html_url": "https://github.com/acme/jobContextMCP/pull/5"}]
+        data = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):  # noqa: N802
+        sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        API["posted"].append((self.path, self.headers.get("Authorization"), sent))
+        code, body = {
+            "ok": (201, {"number": 7, "html_url": "https://github.com/acme/jobContextMCP/pull/7"}),
+            "exists": (422, {"message": "Validation Failed", "errors": [
+                {"message": "A pull request already exists for acme:" + str(sent.get("head")) + "."}]}),
+            "forbidden": (403, {"message": "Resource not accessible by personal access token"}),
+        }[API["pulls"]]
         data = json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Length", str(len(data)))
@@ -510,6 +527,56 @@ else:
         '+    return "Hi, " + name', "not pushed")
     has("and the code as the job left it", ask(op="read", path="hello.py", at="work")["text"],
         '2:     return "Hi, " + name')
+    print("== a push, which is only ever made when asked for and answered with a yes")
+    remote = os.path.join(remotes, "acme", "jobContextMCP.git")
+
+    def on_remote(ref):
+        return subprocess.run(["git", "--git-dir", remote, "rev-parse", "--verify", "--quiet", ref],
+                              capture_output=True, text=True, env=GITENV).stdout.strip()
+
+    main_before = on_remote("refs/heads/main")
+    has("with no token and pushing not switched on, he says he cannot, and where the work is",
+        ask(op="offer")["text"], "I cannot push from this machine", "there is no GitHub token",
+        "stays on its branch in my clone")
+    work.TOKEN = "not-a-real-token-0123456789"
+    has("a token alone is not leave to push", ask(op="offer")["text"], "pushing is switched off here")
+    check("and what became of the job does not say it could be pushed", ask(op="status")["can_push"], False)
+    work.PUSH = True
+    offer = ask(op="offer")
+    has("asked to push, he says what would go and where, and pushes nothing", offer["text"],
+        f"This would push the branch {rec['branch']} to acme/jobContextMCP on GitHub, which is public, and "
+        "open a pull request against main. It is 1 commit: 1 file changed, 1 insertion(+), 1 deletion(-) "
+        "(hello.py).", "which nobody has checked", "Nothing is pushed until you say yes")
+    check("that is: the job, and the commit its branch stands at; GitHub has seen nothing",
+          (offer["job"], offer["sha"] == bare_git("rev-parse", "refs/heads/" + rec["branch"]).strip(),
+           on_remote("refs/heads/" + rec["branch"]), API["posted"], ask(op="status")["can_push"]),
+          (rec["id"], True, "", [], True))
+    has("a push of something other than what was read back is not made",
+        ask(op="push", job=rec["id"], sha="0" * 40)["text"], "not as it was when it was read back")
+    has("nor one that names no job", ask(op="push", sha=offer["sha"])["text"], "Say which job")
+    check("and still GitHub has seen nothing", (on_remote("refs/heads/" + rec["branch"]), API["posted"]), ("", []))
+    pushed = ask(op="push", job=rec["id"], sha=offer["sha"])
+    check("on the yes it is pushed and a pull request opened, and he says where",
+          (pushed["ok"], pushed["text"]),
+          (True, f"Pushed {rec['branch']} to acme/jobContextMCP, and pull request 7 is open for it: "
+                 "https://github.com/acme/jobContextMCP/pull/7"))
+    check("the branch is on GitHub as it was read back, and main is as it was",
+          (on_remote("refs/heads/" + rec["branch"]), on_remote("refs/heads/main")), (offer["sha"], main_before))
+    path, signed, sent = API["posted"][0]
+    check("the pull request is for that branch, against main, under the token",
+          (path, signed, sent["head"], sent["base"], sent["title"], len(API["posted"])),
+          ("/repos/acme/jobContextMCP/pulls", "Bearer not-a-real-token-0123456789", rec["branch"], "main",
+           "Douglas: Make the greeting say Hi instead of Hello.", 1))
+    has("and says what it is: whose work, on whose asking, with his account of it marked as his own",
+        sent["body"], "Made by Douglas", "Nobody has reviewed it", "> Make the greeting say Hi instead of Hello.",
+        "1 file changed", "which nobody has checked:\n\n> Changed the greeting in hello.py")
+    has("asked again, he says it is there already", ask(op="offer")["text"],
+        "on GitHub already: https://github.com/acme/jobContextMCP/pull/7")
+    has("and what became of the job says where it went", ask(op="status")["text"],
+        "It has been pushed to GitHub, and its pull request is https://github.com/acme/jobContextMCP/pull/7",
+        never=["Nothing has been pushed"])
+    work.TOKEN, work.PUSH = "", False
+
     check("the shared directory is empty again, and so is the worker's own",
           ([n for n in os.listdir(work.JOBS) if n != "hold"], os.listdir(work.JOB_DIR)), ([], [rec["id"]]))
 
@@ -880,10 +947,54 @@ else:
           "is no job, whatever it holds, and is cleared away at the next start",
           (again.jobs, os.path.exists(stray), os.path.exists(forged)), ({}, False, False))
 
+    print("== a push that GitHub does not take whole")
+    work.TOKEN, work.PUSH = "not-a-real-token-0123456789", True
+
+    def the_job(words):
+        return next(x for x in reversed(m.records()) if words in x["task"] and x.get("commits"))
+
+    API["pulls"] = "exists"
+    r = the_job("then dawdle")
+    offer = ask(op="offer", job=r["id"])
+    has("where a pull request is open for the branch already, that is the one he gives",
+        ask(op="push", job=r["id"], sha=offer["sha"])["text"], f"Pushed {r['branch']}",
+        "pull request 5 is open for it: https://github.com/acme/jobContextMCP/pull/5")
+    API["pulls"] = "forbidden"
+    r = the_job("then lose the model")
+    offer = ask(op="offer", job=r["id"])
+    got = ask(op="push", job=r["id"], sha=offer["sha"])
+    has("where the branch went but the pull request was refused, he says exactly that, with GitHub's reason",
+        (got["ok"], got["text"]), "False", f"The branch {r['branch']} is on GitHub now, but no pull request could "
+        "be opened for it: Resource not accessible by personal access token")
+    check("and the branch is there", on_remote("refs/heads/" + r["branch"]) == offer["sha"], True)
+    has("so that asked again he does not push it twice", ask(op="offer", job=r["id"])["text"],
+        "on GitHub already, with no pull request")
+    API["pulls"] = "ok"
+    r = the_job("A result made up by hand")
+    offer = ask(op="offer", job=r["id"])
+    n = len(API["posted"])
+    subprocess.run(["chmod", "-R", "a-w", remote], check=True)
+    got = ask(op="push", job=r["id"], sha=offer["sha"])
+    subprocess.run(["chmod", "-R", "u+w", remote], check=True)
+    if os.geteuid():
+        check("where GitHub does not take the push, nothing is pushed, no pull request is asked for, and it "
+              "can be tried again",
+              (got["ok"], got["text"][:19], on_remote("refs/heads/" + r["branch"]), len(API["posted"]) - n,
+               ask(op="offer", job=r["id"])["ok"]), (False, "Nothing was pushed.", "", 0, True))
+    forged = dict(r, id="f0f0f0f0", branch="main", pushed=0)
+    with open(os.path.join(work.DONE, "f0f0f0f0.json"), "w") as f:
+        json.dump(forged, f)
+    has("and nothing but a job's own branch is ever pushed, whatever a record says",
+        ask(op="offer", job="f0f0f0f0")["text"], "not a branch of a job's")
+    os.unlink(os.path.join(work.DONE, "f0f0f0f0.json"))
+    check("main on GitHub is still as it was", on_remote("refs/heads/main"), main_before)
+    work.TOKEN, work.PUSH = "", False
+
     print("== what the journal holds")
     journal = "\n".join(LOG)
     has("which repository and how much, for each thing asked", journal, "cloned acme/jobContextMCP (public)",
-        "fetched acme/jobContextMCP: 1 new commits", "search acme/jobContextMCP:", "job ", " done: 1 commits")
+        "fetched acme/jobContextMCP: 1 new commits", "search acme/jobContextMCP:", "job ", " done: 1 commits",
+        "pushed job ", " to acme/jobContextMCP (1 commits)", "pull request 7 opened on acme/jobContextMCP")
     check("and never the token, the words searched for, the job's words or the code",
           [w for w in ("not-a-real-token", "load_stories", "zebra", "greeting", "Hello", "story store",
                        "Try every way out") if w in journal], [])

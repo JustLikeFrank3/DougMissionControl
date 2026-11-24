@@ -66,9 +66,11 @@ if [ ! -f "$env" ]; then
 # The GitHub account a bare name is looked up on ("clone my kettle repo").
 # Without it a repository has to be named as owner/name.
 WORK_OWNER=
-# For private repositories: a fine-grained personal access token, limited to
-# the repositories he may read, with "Contents: Read-only" and nothing else.
-# He never pushes, so it needs no write access. Put it here with
+# For private repositories, and for pushing: a fine-grained personal access
+# token, limited to the repositories he may work with. To read private ones
+# it needs "Contents: Read-only" and nothing else. To push a job's branch and
+# open a pull request for it (WORK_PUSH, below) it needs "Contents: Read and
+# write" and "Pull requests: Read and write", and no more. Put it here with
 #     sudo bash -c 'read -rs t && printf "WORK_GITHUB_TOKEN=%s\n" "$t" >> /etc/douglas/work.env'
 # (typed or pasted at the prompt, so that it is in no command line and no
 # shell history), then restart douglas-work. Without it he sees public
@@ -76,6 +78,11 @@ WORK_OWNER=
 # has read such code, he fetches nothing from the web for the rest of that
 # conversation.
 #WORK_GITHUB_TOKEN=
+# May he push a job's branch to GitHub and open a pull request for it? 1 for
+# yes. Even then nothing is pushed unless someone asks him to, hears read
+# back what would go, and answers yes: one push, of that job's branch as it
+# stood when it was read back. Never another branch, never on his own idea.
+#WORK_PUSH=1
 # The largest repository cloned, in MB.
 WORK_MAX_MB=500
 # How long one job may go on: steps of the model, and seconds of work.
