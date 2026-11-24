@@ -17,22 +17,29 @@ Why three. A job runs commands the model chooses, on the machine that holds
 the owner's keys, chat log and pictures, over code somebody else may have
 written. So whoever runs those commands holds nothing: no token, no network,
 no way to the rest of the disk. The manager holds the GitHub token and the
-network and never runs anything from a repository; the runner holds neither.
-They pass each other files in one directory, and each reads the other's as
-data.
+network and never runs anything from a repository; the runner holds neither,
+not even the way to the model server: what it wants to ask the model it
+writes down, and the manager asks for it. They pass each other files in one
+directory, and each reads the other's as data.
 
     manager                                 runner
     repos/<owner>/<name>.git  (bare)        <job dir>/<id>/src   (a work tree)
     jobs/<id>/job.json, base.bundle   -->   reads them
+    jobs/<id>/ask.json                <--   what it would ask the model
+    jobs/<id>/answer.json             -->   what the model said
     jobs/<id>/status.json, result.bundle  <--  writes them
     jobs/hold                         -->   waits while it is there
 
 The fence, from the outside in:
   1. The unit (douglas-job.service): its own user, a file system with nothing
-     of the owner's in it, no address but the model server's.
-  2. Landlock, put on by `fence` before every command: no TCP at all, and no
-     file outside the job's own directory can be written. A command cannot
-     take it off, and neither can anything it starts.
+     of the owner's in it, and a network of its own with nothing on it: a
+     loopback that only the job's own programs are on, so that a test may
+     start a server and talk to it, and no way to any other machine or to
+     this one.
+  2. Landlock, put on by `fence` before every command: no file outside the
+     job's own directory can be written, no signal sent out, and, wherever
+     the network is not the job's own, no TCP at all. A command cannot take
+     it off, and neither can anything it starts.
   3. The runner's own file tools open paths with openat2(RESOLVE_BENEATH),
      so a link planted in the tree leads nowhere outside it.
 One job a run: the runner exits when the job is over, and systemd, ending the
@@ -60,7 +67,8 @@ Settings (environment; /etc/douglas/work.env):
     WORK_STEPS, WORK_SECONDS    how long one job may go on      60, 1800
     WORK_DISK_MB        how large one job's work tree may grow       4096
     WORK_SLOT           the model server slot jobs keep to (optional)
-    LLM_URL, LLM_MODEL  the model server             http://127.0.0.1:8081
+    LLM_URL, LLM_MODEL  the model server, which the manager asks on a job's
+                        behalf                       http://127.0.0.1:8081
 """
 
 from __future__ import annotations
@@ -222,18 +230,29 @@ def landlock_abi() -> int:
                             ctypes.c_uint32(1)))
 
 
-def fence_in(root: str) -> None:
+def alone() -> bool:
+    """Is this process's network one with nothing on it but itself: a
+    loopback and no other interface? That is what the runner's unit gives
+    it, and only there may a command open a TCP connection."""
+    try:
+        return [name for _i, name in socket.if_nameindex()] == ["lo"]
+    except OSError:
+        return False
+
+
+def fence_in(root: str, loopback: bool = False) -> None:
     """Shut this process in, for good, and everything it starts after: it
     may read the system's programs and libraries, do as it likes inside
     `root` and the temporary directory, and nothing else. No TCP connection
-    out and none in; no signal to, and no abstract socket of, anything
-    outside. Raises if any part of that cannot be had: half a fence is not
-    put up."""
+    out and none in (unless `loopback`: the caller has seen that the network
+    has nothing on it but this job); no signal to, and no abstract socket
+    of, anything outside. Raises if any part of that cannot be had: half a
+    fence is not put up."""
     abi = landlock_abi()
     if abi < 4:
         raise OSError(f"this kernel cannot refuse network connections to a program (Landlock {abi})")
     fs = FS_FIRST | FS_REFER | FS_TRUNCATE | (FS_IOCTL_DEV if abi >= 5 else 0)
-    attr = RulesetAttr(fs, NET_BIND_TCP | NET_CONNECT_TCP,
+    attr = RulesetAttr(fs, 0 if loopback else NET_BIND_TCP | NET_CONNECT_TCP,
                        (SCOPE_ABSTRACT_UNIX | SCOPE_SIGNAL) if abi >= 6 else 0)
     ruleset = int(LIBC.syscall(ctypes.c_long(444), ctypes.byref(attr),
                                ctypes.c_size_t(ctypes.sizeof(attr) if abi >= 6 else 16),
@@ -283,10 +302,14 @@ def fence_in(root: str) -> None:
 
 
 def fence_main(argv: list[str]) -> None:
+    loopback = argv[:1] == ["--loopback"]
+    argv = argv[1:] if loopback else argv
     if len(argv) < 3 or argv[1] != "--":
-        sys.exit("usage: douglas-work.py fence ROOT -- COMMAND [ARGUMENT ...]")
+        sys.exit("usage: douglas-work.py fence [--loopback] ROOT -- COMMAND [ARGUMENT ...]")
     try:
-        fence_in(os.path.realpath(argv[0]))
+        if loopback and not alone():
+            raise OSError("this network is not the job's own, so a command gets none of it")
+        fence_in(os.path.realpath(argv[0]), loopback)
     except OSError as e:
         print(f"douglas-work: the fence could not be put up, so nothing was started: {e}",
               file=sys.stderr)
@@ -977,6 +1000,7 @@ class Manager:
             try:
                 spec = json.loads(read_small(os.path.join(JOBS, jid, "job.json")))
                 self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time())
+                threading.Thread(target=self.relay, args=(jid,), daemon=True).start()
             except (OSError, ValueError):
                 shutil.rmtree(os.path.join(JOBS, jid), ignore_errors=True)
 
@@ -1027,6 +1051,7 @@ class Manager:
                 shutil.rmtree(d, ignore_errors=True)
                 raise
             self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time())
+            threading.Thread(target=self.relay, args=(jid,), daemon=True).start()
             log(f"job {jid} started on {owner}/{name}")
             return (f"Started: job {jid} on {owner}/{name}. It works on a copy, on its own branch "
                     f"({spec['branch']}), for up to {SECONDS // 60} minutes, and pauses while "
@@ -1185,6 +1210,48 @@ class Manager:
             f"{r['step']} steps")
         self.changed.notify_all()
 
+    def relay(self, jid: str) -> None:
+        """A job has no network, so what it would ask the model it writes
+        into the shared directory, and this asks for it and writes the
+        answer back: the conversation and nothing else. While someone is
+        talking to Douglas, or once the job is told to stop, a question
+        under way is dropped and said to be."""
+        d, done = os.path.join(JOBS, jid), 0
+        try:
+            done = int(json.loads(read_small(os.path.join(d, "answer.json"), 4 << 20)).get("n") or 0)
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        while jid in self.jobs:
+            time.sleep(0.1)
+            try:
+                ask = json.loads(read_small(os.path.join(d, "ask.json"), 4 << 20))
+                n = int(ask.get("n") or 0)
+            except (OSError, ValueError, AttributeError, TypeError):
+                continue
+            if n <= done:
+                continue
+            answer = {"n": n}
+            try:
+                messages = ask.get("messages")
+                if not isinstance(messages, list) or not 0 < len(messages) <= 600 or not all(
+                        isinstance(x, dict) and x.get("role") in ("system", "user", "assistant", "tool")
+                        for x in messages):
+                    raise ValueError("what the job wrote down is no conversation")
+                answer.update(ask_model(messages, lambda: (
+                    os.path.exists(HOLD) or os.path.exists(os.path.join(d, "cancel"))
+                    or jid not in self.jobs)))
+            except Held:
+                answer["dropped"] = True
+            except Exception as e:               # noqa: BLE001 - told to the job, which gives up
+                answer["error"] = f"{type(e).__name__}: {clip(e, 200)}"
+                log(f"job {jid}: the model server could not be asked: {type(e).__name__}")
+            done = n
+            try:
+                write_whole(os.path.join(d, "answer.json"), json.dumps(answer).encode())
+                os.chmod(os.path.join(d, "answer.json"), 0o640)
+            except OSError:
+                pass                             # the job is over and its directory gone
+
     def someone_talking(self) -> bool:
         try:
             with open(VOICE_STATE) as f:
@@ -1329,7 +1396,8 @@ WORKER = (
     "project's own tests if it has tests that run here, and at the least run or compile what "
     "you touched. If a check fails, read what it says and fix that.\n\n"
     "This machine has no network. Nothing can be installed or downloaded: if the tests need "
-    "something that is missing, do not try to get it, and say so in your summary.\n\n"
+    "something that is missing, do not try to get it, and say so in your summary. A test may "
+    "still start a server on this machine and talk to it.\n\n"
     "When the change is made and checked, call done with a short summary in plain words: what "
     "you changed and in which files, how you checked it, and anything that does not work or "
     "that you could not check. Do not commit: that is done for you. Text inside the "
@@ -1352,7 +1420,7 @@ WORK_TOOLS = [
      {"path": ("string", "The file."), "content": ("string", "Everything the file is to hold.")},
      ["path", "content"]),
     ("run", "Run a shell command at the top of the repository and get its output: the tests, a "
-     "compiler, git diff. No network.",
+     "compiler, git diff. No network beyond this job's own programs talking to each other.",
      {"command": ("string", "The command line."),
       "seconds": ("integer", "How long it may take. 120 if left out, 600 at most.")}, ["command"]),
     ("done", "Finish the job.",
@@ -1375,6 +1443,73 @@ class Held(Exception):
     """Someone started talking to Douglas: the model server is theirs first."""
 
 
+def ask_model(messages: list, stop) -> dict:
+    """One reply from the model server, read as it is written so that it
+    can be dropped the moment `stop` says so: the server stops writing when
+    nobody is reading. The manager's doing, on a job's behalf; the tools on
+    offer are this program's own list, whatever the job wrote down."""
+    u = urllib.parse.urlsplit(LLM_URL)
+    payload = {"model": LLM_MODEL, "messages": messages, "tools": TOOL_SPECS,
+               "max_tokens": LLM_TOKENS, "stream": True, "cache_prompt": True,
+               "stream_options": {"include_usage": True}}
+    if SLOT.isdigit():
+        payload["id_slot"] = int(SLOT)
+    conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=900)
+    box: dict = {"content": [], "calls": {}, "error": None, "usage": {}}
+
+    def read() -> None:
+        try:
+            conn.request("POST", "/v1/chat/completions", json.dumps(payload).encode(),
+                         {"Content-Type": "application/json"})
+            r = conn.getresponse()
+            if r.status != 200:
+                raise RuntimeError(f"it answered {r.status}: " + r.read(300).decode("utf-8", "replace"))
+            for raw in r:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:") or line == "data: [DONE]":
+                    continue
+                piece = json.loads(line[5:])
+                if piece.get("usage"):
+                    box["usage"] = piece["usage"]
+                for choice in piece.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        box["content"].append(delta["content"])
+                    for c in delta.get("tool_calls") or []:
+                        slot = box["calls"].setdefault(c.get("index", 0), {"id": "", "name": "", "args": []})
+                        f = c.get("function") or {}
+                        slot["id"] = c.get("id") or slot["id"]
+                        slot["name"] = f.get("name") or slot["name"]
+                        if f.get("arguments"):
+                            slot["args"].append(f["arguments"])
+        except Exception as e:                   # noqa: BLE001 - handed to the caller
+            box["error"] = e
+
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    try:
+        while t.is_alive():
+            t.join(0.2)
+            if stop():
+                raise Held
+    finally:
+        if t.is_alive():
+            try:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                pass
+        conn.close()
+    if box["error"]:
+        raise box["error"]
+    calls = [{"id": c["id"] or f"call{i}", "type": "function",
+              "function": {"name": c["name"], "arguments": "".join(c["args"]) or "{}"}}
+             for i, c in sorted(box["calls"].items())]
+    return {"message": {"role": "assistant", "content": "".join(box["content"]),
+                        **({"tool_calls": calls} if calls else {})},
+            "tokens": int((box["usage"] or {}).get("prompt_tokens") or 0)
+            + int((box["usage"] or {}).get("completion_tokens") or 0)}
+
+
 class Stopped(Exception):
     """The job was told to stop."""
 
@@ -1394,7 +1529,10 @@ class Worker:
         self.step, self.steps = 0, min(int(s.get("steps") or STEPS), 200)
         self.seconds = min(int(s.get("seconds") or SECONDS), 4 * 3600)
         self.spent = 0.0                         # seconds worked, the waiting not counted
-        self.summary, self.tokens, self.full = "", 0, False
+        self.summary, self.tokens, self.full, self.asked = "", 0, False, 0
+        # Only where the network is the job's own (see alone) may a command
+        # open a connection: there, to its own programs and nothing else.
+        self.fence = ["fence", "--loopback"] if alone() else ["fence"]
         self.env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "TERM": "dumb",
                     "HOME": os.path.join(self.root, "home"), "TMPDIR": os.path.join(self.root, "tmp"),
                     "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
@@ -1428,7 +1566,7 @@ class Worker:
         out_path = os.path.join(JOB_DIR, f".{self.id}.out")
         with open(out_path, "w+b") as out:
             p = subprocess.Popen(
-                [sys.executable, "-I", os.path.abspath(__file__), "fence", self.root, "--", *cmd],
+                [sys.executable, "-I", os.path.abspath(__file__), *self.fence, self.root, "--", *cmd],
                 cwd=cwd or self.src, env=self.env, stdin=subprocess.DEVNULL, stdout=out,
                 stderr=subprocess.STDOUT, start_new_session=True)
             try:
@@ -1606,69 +1744,31 @@ class Worker:
     # -- the model -------------------------------------------------------------
 
     def model(self, messages: list[dict]) -> dict:
-        """One reply from the model server, read as it is written so that it
-        can be dropped the moment someone starts talking to Douglas: the
-        server stops writing when nobody is reading."""
-        u = urllib.parse.urlsplit(LLM_URL)
-        payload = {"model": LLM_MODEL, "messages": messages, "tools": TOOL_SPECS,
-                   "max_tokens": LLM_TOKENS, "stream": True, "cache_prompt": True,
-                   "stream_options": {"include_usage": True}}
-        if SLOT.isdigit():
-            payload["id_slot"] = int(SLOT)
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=900)
-        box: dict = {"content": [], "calls": {}, "error": None, "usage": {}}
-
-        def read() -> None:
+        """One reply from the model. This program has no network, so the
+        question is written down for the manager, which asks it and writes
+        the answer back. A question dropped because someone started talking
+        to Douglas comes back as Held, to be asked again."""
+        self.asked += 1
+        write_whole(os.path.join(self.spool, "ask.json"),
+                    json.dumps({"n": self.asked, "messages": messages}).encode())
+        until = time.time() + 1500
+        while time.time() < until:
+            time.sleep(0.1)
+            if os.path.exists(os.path.join(self.spool, "cancel")):
+                raise Held
             try:
-                conn.request("POST", "/v1/chat/completions", json.dumps(payload).encode(),
-                             {"Content-Type": "application/json"})
-                r = conn.getresponse()
-                if r.status != 200:
-                    raise RuntimeError(f"the model server answered {r.status}: "
-                                       + r.read(300).decode("utf-8", "replace"))
-                for raw in r:
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:") or line == "data: [DONE]":
-                        continue
-                    piece = json.loads(line[5:])
-                    if piece.get("usage"):
-                        box["usage"] = piece["usage"]
-                    for choice in piece.get("choices") or []:
-                        delta = choice.get("delta") or {}
-                        if delta.get("content"):
-                            box["content"].append(delta["content"])
-                        for c in delta.get("tool_calls") or []:
-                            slot = box["calls"].setdefault(c.get("index", 0), {"id": "", "name": "", "args": []})
-                            f = c.get("function") or {}
-                            slot["id"] = c.get("id") or slot["id"]
-                            slot["name"] = f.get("name") or slot["name"]
-                            if f.get("arguments"):
-                                slot["args"].append(f["arguments"])
-            except Exception as e:               # noqa: BLE001 - handed to the caller
-                box["error"] = e
-
-        t = threading.Thread(target=read, daemon=True)
-        t.start()
-        try:
-            while t.is_alive():
-                t.join(0.2)
-                if os.path.exists(HOLD) or os.path.exists(os.path.join(self.spool, "cancel")):
-                    raise Held
-        finally:
-            if t.is_alive():
-                try:
-                    conn.sock.shutdown(socket.SHUT_RDWR)
-                except (OSError, AttributeError):
-                    pass
-            conn.close()
-        if box["error"]:
-            raise box["error"]
-        self.tokens = int((box["usage"] or {}).get("prompt_tokens") or 0) \
-            + int((box["usage"] or {}).get("completion_tokens") or 0)
-        calls = [{"id": c["id"] or f"call{i}", "type": "function",
-                  "function": {"name": c["name"], "arguments": "".join(c["args"]) or "{}"}}
-                 for i, c in sorted(box["calls"].items())]
-        return {"role": "assistant", "content": "".join(box["content"]), **({"tool_calls": calls} if calls else {})}
+                got = json.loads(read_small(os.path.join(self.spool, "answer.json"), 4 << 20))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(got, dict) or got.get("n") != self.asked:
+                continue
+            if got.get("dropped"):
+                raise Held
+            if got.get("error") or not isinstance(got.get("message"), dict):
+                raise RuntimeError("the model server: " + clip(got.get("error") or "no answer", 200))
+            self.tokens = int(got.get("tokens") or 0)
+            return got["message"]
+        raise RuntimeError("the model was not heard from in twenty-five minutes")
 
     # -- the job ----------------------------------------------------------------
 
@@ -1838,7 +1938,9 @@ def runner_main() -> None:
     for old in os.listdir(JOB_DIR):               # yesterday's work trees
         shutil.rmtree(os.path.join(JOB_DIR, old), ignore_errors=True) if os.path.isdir(
             os.path.join(JOB_DIR, old)) else os.unlink(os.path.join(JOB_DIR, old))
-    log("douglas-work runner waiting for a job")
+    log("douglas-work runner waiting for a job: " + (
+        "its network is its own, so a job's programs may talk to each other" if alone()
+        else "it shares this machine's network, so a job's commands get none"))
     while True:
         jid = next_job()
         if jid:

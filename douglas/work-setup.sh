@@ -8,11 +8,11 @@
 # What it leaves behind:
 #   users    douglas-work (the manager: it has the network and, if you give
 #            it one, the GitHub token) and douglas-job (the runner, fenced
-#            in), and the group douglas-spool they pass files through
+#            in, with no network but its own loopback), and the group
+#            douglas-spool they pass files through
 #   code     /opt/douglas/douglas-work.py
-#   units    douglas-work.socket, douglas-work, douglas-job-fence, douglas-job
-#   config   /etc/douglas/work.env and job.env (written only if missing),
-#            /etc/douglas/job-fence.nft
+#   units    douglas-work.socket, douglas-work, douglas-job
+#   config   /etc/douglas/work.env (written only if missing)
 #   and      WORK_SOCKET in /etc/douglas/voice.env, if it has none
 # The clones are in /var/lib/douglas-work, a job's work tree in
 # /var/lib/douglas-job, and what the two pass each other in
@@ -28,12 +28,12 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)"; exit 1; }
 envval() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | sed 's/^"\(.*\)"$/\1/'; }
-units="douglas-work.socket douglas-work.service douglas-job-fence.service douglas-job.service"
+units="douglas-work.socket douglas-work.service douglas-job.service"
 voice=/etc/douglas/voice.env
 
 if [ "${1:-on}" = off ]; then
     systemctl disable --now douglas-job.service douglas-work.service douglas-work.socket \
-        douglas-job-fence.service 2>/dev/null || true
+        2>/dev/null || true
     if [ -f "$voice" ] && grep -q '^WORK_SOCKET=' "$voice"; then
         sed -i '/^# The workshop (douglas-work)/d; /^WORK_SOCKET=/d' "$voice"
         echo "WORK_SOCKET is out of $voice: restart douglas-voice when nobody is talking to him."
@@ -43,9 +43,8 @@ if [ "${1:-on}" = off ]; then
 fi
 
 command -v git >/dev/null || { echo "git is not installed (apt install git)"; exit 1; }
-command -v nft >/dev/null || { echo "nft is not installed (apt install nftables)"; exit 1; }
 id douglas >/dev/null 2>&1 || { echo "there is no douglas user yet: run provision.sh first"; exit 1; }
-# A job is fenced in by the kernel (Landlock, with its network rules: Linux 6.7).
+# A job is fenced in by the kernel (Landlock 4 or later: Linux 6.7).
 python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None).syscall(444, None, 0, 1) >= 4 else 1)' \
     || { echo "this kernel cannot fence a job in (it needs Landlock 4, Linux 6.7 or later): not installed"; exit 1; }
 
@@ -82,53 +81,30 @@ WORK_MAX_MB=500
 # How long one job may go on: steps of the model, and seconds of work.
 WORK_STEPS=60
 WORK_SECONDS=1800
+# The model server a job thinks with. A job has no network of its own:
+# douglas-work asks on its behalf.
+#LLM_URL=http://127.0.0.1:8081
+# The model server slot jobs keep to, if it has one to spare (see README).
+#WORK_SLOT=2
 CONF
 fi
 chown root:douglas-work "$env" && chmod 640 "$env"
 
-port="$(envval /etc/douglas/llama.env LLAMA_PORT)"; port="${port:-8081}"
-env=/etc/douglas/job.env
-if [ ! -f "$env" ]; then
-    cat > "$env" <<CONF
-# douglas-job: the runner of Douglas's workshop. No secrets belong in here.
-# Restart after editing:  sudo systemctl restart douglas-job
-#
-# The model server a job thinks with. Change the port here and re-run
-# work-setup.sh, which writes the firewall rule to match.
-LLM_URL=http://127.0.0.1:$port
-# The model server slot jobs keep to, if it has one to spare (see README).
-#WORK_SLOT=2
-CONF
-    chmod 644 "$env"
+# What an earlier version of this installed and no longer needs: the runner
+# had the model server's port and a firewall rule to keep it to that. It has
+# no network at all now.
+if [ -e /etc/systemd/system/douglas-job-fence.service ]; then
+    systemctl disable --now douglas-job-fence.service 2>/dev/null || true
+    rm -f /etc/systemd/system/douglas-job-fence.service
 fi
-port="$(envval "$env" LLM_URL | sed -n 's#.*:\([0-9][0-9]*\)/*$#\1#p')"; port="${port:-8081}"
-cat > /etc/douglas/job-fence.nft <<CONF
-# Written by douglas/work-setup.sh. Whatever runs as douglas-job may open a
-# TCP connection to the model server on this machine and nothing else: no
-# other port here, no other machine, no other protocol. Traffic of every
-# other user is not looked at.
-table inet douglas_job
-delete table inet douglas_job
-table inet douglas_job {
-    chain out {
-        type filter hook output priority filter; policy accept;
-        meta skuid "douglas-job" jump only_the_model
-    }
-    chain only_the_model {
-        oifname "lo" ip daddr 127.0.0.1 tcp dport $port accept
-        meta l4proto tcp counter reject with tcp reset
-        counter reject
-    }
-}
-CONF
-chmod 644 /etc/douglas/job-fence.nft
+nft delete table inet douglas_job 2>/dev/null || true
+rm -f /etc/douglas/job-fence.nft /etc/douglas/job.env
 
 for u in $units; do
     install -m 644 "$here/$u" "/etc/systemd/system/$u"
 done
 systemctl daemon-reload
-systemctl enable douglas-job-fence.service douglas-work.socket douglas-work.service douglas-job.service
-systemctl restart douglas-job-fence.service
+systemctl enable douglas-work.socket douglas-work.service douglas-job.service
 systemctl start douglas-work.socket
 systemctl restart douglas-work.service douglas-job.service
 
@@ -138,7 +114,7 @@ if [ -f "$voice" ] && ! grep -q '^WORK_SOCKET=' "$voice"; then
 fi
 
 sleep 1
-for u in douglas-job-fence douglas-work douglas-job; do
+for u in douglas-work douglas-job; do
     systemctl is-active --quiet "$u" || { echo "$u is not running - journalctl -u $u"; exit 1; }
 done
 # Asked the way the voice pipeline asks: as its user, through the socket.

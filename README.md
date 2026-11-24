@@ -587,8 +587,7 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists and `voice.env`'s `EYES_URL` points at it: a model that sees for itself needs no second one |
 | `draw.env` | `douglas-draw`, the image server on `:8083` (loopback): `DRAW_MODEL_DIR` (default `/srv/models/draw`, holding `diffusion_models/`, `text_encoders/` and `vae/`: the files themselves, since the server refuses links that lead out of the directory), `DRAW_ARGS` (empty by default), `DRAW_HOST`/`DRAW_PORT`. It starts with no model in memory: the pipeline tells it which to hold before each picture. `provision.sh` builds stable-diffusion.cpp and enables the unit only once a model is in `diffusion_models/` |
 | `chatgpt.env` | `douglas-chatgpt`, ChatGPT's chat-only line to Douglas: `CHATGPT_SECRET` (required, at least 24 URL-safe characters: it is the path of the connector's address, and changing it revokes the connector), `CHATGPT_PORT` (default `9120`, loopback), `CHATGPT_PER_HOUR` (default `60`), `LLM_URL`. Not created by `provision.sh`: the connector is set up by hand, see `douglas-chatgpt.py` |
-| `work.env` | `douglas-work`, his workshop (see below): `WORK_OWNER` (the GitHub account a bare name such as "my kettle repo" is looked up on; without it a repository is named as owner/name), `WORK_GITHUB_TOKEN` (optional, for private repositories: a fine-grained token with read-only access to the contents of the repositories he may see, and nothing else), `WORK_MAX_MB` (the largest repository cloned, default 500), `WORK_STEPS` and `WORK_SECONDS` (how long one job may go on: 60 steps of the model, 1800 seconds of work). Readable by `douglas-work` only |
-| `job.env` | `douglas-job`, the fenced runner of a job: `LLM_URL` (the model server it thinks with; `work-setup.sh` writes the firewall rule to match its port), `WORK_SLOT` (optional: a model server slot jobs keep to). No secrets belong in it |
+| `work.env` | `douglas-work`, his workshop (see below): `WORK_OWNER` (the GitHub account a bare name such as "my kettle repo" is looked up on; without it a repository is named as owner/name), `WORK_GITHUB_TOKEN` (optional, for private repositories: a fine-grained token with read-only access to the contents of the repositories he may see, and nothing else), `WORK_MAX_MB` (the largest repository cloned, default 500), `WORK_STEPS` and `WORK_SECONDS` (how long one job may go on: 60 steps of the model, 1800 seconds of work), `WORK_DISK_MB` (how large one job's work tree may grow, default 4096), `LLM_URL` (the model server jobs think with, asked by the manager on their behalf) and `WORK_SLOT` (optional: a model server slot jobs keep to). Readable by `douglas-work` only |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
@@ -934,17 +933,21 @@ pictures. So the part that runs them holds nothing:
   token. It runs nothing a repository brings: git, on bare clones, with
   hooks off. What comes back from a job it reads as data: a report that is a
   link is not followed, and a result is taken only if it is a git bundle of
-  the job's own branch, built on the code that was handed over.
+  the job's own branch, built on the code that was handed over. It is also
+  the only way a job has to the model: what the runner would ask, it writes
+  down, and the manager asks, with the list of tools its own.
 - `douglas-job`, the runner, is another user in a unit with nothing of the
   owner's in it: an empty `/var`, `/run`, `/srv` and `/opt` but for its own
   work trees and the one directory the two share, `/etc/douglas` and the
-  home directories shut, the system read-only, and no address but
-  `127.0.0.1`. A firewall rule for its user (`douglas-job-fence`) narrows
-  that to the model server's port.
+  home directories shut, the system read-only, and a network of its own with
+  nothing on it. There is a loopback that only the job's own programs are
+  on, so a test can start a server and talk to it; there is no other
+  machine, and nothing of this one, the model server included.
 - Every command a job runs is started through Landlock
-  (`douglas-work.py fence`): no TCP connection at all, not even to the model
-  server; no file written outside the job's own directory; no signal to
-  anything outside. A command cannot take that off, nor can what it starts.
+  (`douglas-work.py fence`): no file written outside the job's own
+  directory, no signal to anything outside, and, wherever the network is
+  not the job's own, no TCP at all. A command cannot take that off, nor can
+  what it starts.
 - The file tools the model is given open every path with
   `openat2(RESOLVE_BENEATH)`: a link planted in the tree leads nowhere
   outside it.
@@ -953,19 +956,23 @@ pictures. So the part that runs them holds nothing:
 
 Tried from inside the unit on Douglas, as its user: the settings, the chat
 log, the pictures, the clones, the journal and the home directories could
-not be read; the model server's port connected and nothing else did, on
-this machine, the home network or the internet; and from a command behind
-the fence nothing connected at all. The kernel has to be able to do this
-(Landlock with network rules, Linux 6.7): on one that cannot, the runner
-does not start.
+not be read, and nothing connected: not the model server, not this
+machine's other services, not the home network, not the internet. A server
+started inside a job could be reached from inside it and from nowhere else.
+The kernel has to be able to do this (Landlock 4, Linux 6.7): on one that
+cannot, the runner does not start.
 
 *What it cannot do.* Nothing can be installed in a job: there is no network
 to fetch it with. A job runs the tests that run with what the machine has
-(Python's own `unittest` does; a suite that needs pytest or a project's
+(Python's own `unittest` does, and so does a test that starts a server on
+the machine and talks to it; a suite that needs pytest or a project's
 dependencies does not), and says so when it could not check its work. The
-worker is the same model that talks, on a small loop of tools: it changed a
+worker is the same model that talks, on a small loop of tools. It changed a
 default and wrote a module with nine passing tests in one to two minutes
-each, and that is the size of job it has been tried on. Private
+each, and it fixed a real bug in this repository's `deck_api.py` (a refused
+POST leaving its body on the connection) in nine minutes and 25 steps, the
+suite's 51 checks passing when run elsewhere: the same job, on the same
+model, that took Codex CLI nine minutes. Nothing larger has been tried. Private
 repositories need the token, which only the owner can create; what is
 cloned with it is treated as the owner's own, like their records: once he
 has read such code in a conversation he fetches nothing from the web, and
@@ -1409,7 +1416,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
 | `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job watched to its end and the line the person is then shown, a workshop that is not answering, and none of the names or words in the journal |
-| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, and out of steps; and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). Where the kernel has no Landlock 4 the job checks are left out, and the run says so |
+| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). Where the kernel has no Landlock 4 the job checks are left out, and the run says so |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
@@ -1503,12 +1510,11 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
 - **Machine wakes but nothing is spoken.** Nobody logged on — the greeting
   is a logon task. See auto sign-in above.
 - **Douglas says the workshop is not answering, or a job fails at once.**
-  On Douglas: `systemctl status douglas-work douglas-job douglas-job-fence`
+  On Douglas: `systemctl status douglas-work douglas-job`
   and `journalctl -u douglas-work -u douglas-job -o cat -n 40` (which names
   the repository and how a job ended, never what was asked). A runner that
   exits straight away with "cannot fence a job in" is on a kernel without
-  Landlock's network rules (Linux 6.7): nothing runs unfenced, so nothing
-  runs. "He has no repo tool" after an install means `douglas-voice` has
+  Landlock 4 (Linux 6.7): nothing runs unfenced, so nothing runs. "He has no repo tool" after an install means `douglas-voice` has
   not been restarted since `WORK_SOCKET` went into `voice.env`. To ask the
   workshop something by hand, the way the pipeline does:
   `echo '{"op": "repos"}' | sudo -u douglas nc -U -N /run/douglas-work.sock`.
@@ -1576,11 +1582,11 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   code from GitHub, on the machine that holds everything above. The part
   that runs them is `douglas-job`: its own user, in a unit that cannot see
   `/etc/douglas`, `/var/lib/douglas`, the clones or a home directory, with
-  no address but `127.0.0.1` and no port there but the model server's, and
-  every command behind Landlock with no network at all. It holds no token
-  and cannot push; the manager, which holds the GitHub token if there is
-  one, runs nothing from a repository and reads what a job hands back as
-  data. The token goes to git in its environment, by a credential helper
+  a network of its own that has nothing on it but the job's own programs,
+  and every command behind Landlock. It holds no token, cannot push, and
+  cannot reach even the model server: the manager, which holds the GitHub
+  token if there is one, asks the model on its behalf, runs nothing from a
+  repository and reads what a job hands back as data. The token goes to git in its environment, by a credential helper
   that answers for GitHub's host only: it is on no command line. What a
   repository says is handed to the model marked as information, and once a
   private one has been read nothing is fetched from the web for the rest of

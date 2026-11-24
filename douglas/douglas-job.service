@@ -1,8 +1,6 @@
 [Unit]
 Description=douglas-job - one job on a copy of a repository, fenced in (douglas-work's runner)
-After=douglas-work.service douglas-job-fence.service llama-server.service
-# Without the firewall rule for its user it does not run at all.
-Requires=douglas-job-fence.service
+After=douglas-work.service
 StartLimitIntervalSec=0
 
 [Service]
@@ -11,7 +9,6 @@ Group=douglas-job
 SupplementaryGroups=douglas-spool
 UMask=0007
 Environment=WORK_JOBS=/var/lib/douglas-spool WORK_JOB_DIR=/var/lib/douglas-job HOME=/var/lib/douglas-job
-EnvironmentFile=-/etc/douglas/job.env
 ExecStart=/usr/bin/python3 /opt/douglas/douglas-work.py runner
 StateDirectory=douglas-job
 StateDirectoryMode=0700
@@ -50,11 +47,16 @@ TemporaryFileSystem=/var:ro /run:ro /srv:ro /opt:ro /mnt:ro /media:ro /boot:ro
 BindPaths=/var/lib/douglas-job /var/lib/douglas-spool
 BindReadOnlyPaths=/opt/douglas/douglas-work.py
 InaccessiblePaths=/etc/douglas -/etc/flightsim -/etc/ssh -/etc/NetworkManager -/etc/netplan -/etc/sudoers.d
-# No address but this machine's own, and (douglas-job-fence) no port there
-# but the model server's.
-RestrictAddressFamilies=AF_UNIX AF_INET
+# A network of its own with nothing on it: a loopback that only the job's
+# own programs are on (a test may start a server and talk to it), and no way
+# to any other machine or to anything on this one, the model server
+# included. What a job asks the model, the manager asks for it.
+PrivateNetwork=yes
+# (AF_NETLINK is how a program asks which interfaces there are: the runner
+# asks, to see that this network is its own, before it lets a command on it.)
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 IPAddressDeny=any
-IPAddressAllow=127.0.0.1
+IPAddressAllow=localhost
 # Room to work, and not all of the machine's: the voice comes first.
 MemoryMax=16G
 TasksMax=512

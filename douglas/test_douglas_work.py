@@ -459,6 +459,10 @@ else:
     check("the model was shown the file, the change, and the command's output",
           (shown()[0].startswith("1: def greet(name):"), shown()[1], "Exit code 0" in shown()[2],
            "Hi, everyone" in shown()[2]), (True, "Changed hello.py.", True, True))
+    check("the job itself has no way to the model: what it would ask it writes down, and the manager asks, "
+          "with the tools on this program's own list",
+          ([t["function"]["name"] for t in MODEL["seen"][0]["tools"]], MODEL["seen"][0]["stream"]),
+          (["list", "read", "search", "replace", "write", "run", "done"], True))
     has("it was told the repository, the job and its limits",
         MODEL["seen"][0]["messages"][1]["content"], "acme/jobContextMCP", "hello.py", "tools/",
         "Make the greeting say Hi", "30 steps", never=[".git"])
@@ -562,6 +566,12 @@ else:
     check("and what it left running is gone with it",
           subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout.strip(), "")
     has("inside its own tree it works as usual", got[13], "inside", "fine", "Exit code 0")
+    if not work.alone():
+        out = subprocess.run([sys.executable, "-I", os.path.join(here, "douglas-work.py"), "fence", "--loopback",
+                              root, "--", "/bin/true"], capture_output=True, text=True)
+        has("a command is let onto the network only where the network is the job's own: asked for on a "
+            "machine's shared one, nothing is started", (out.returncode, out.stderr), "126",
+            "not the job's own, so a command gets none of it")
     check("this process is still here", (rec["state"], os.getpid() > 0), ("done", True))
     listener.close()
 
@@ -660,6 +670,12 @@ else:
     check("and a fifth tool in one step is put off", (got[5], rec["commits"]),
           ("Not done: four tools a step at most. Call it again.", 0))
 
+    url, work.LLM_URL = work.LLM_URL, "http://127.0.0.1:9"
+    rec = job("Think with a model server that is not there.", [])
+    work.LLM_URL = url
+    has("with the model server not answering, the job fails and says why",
+        (rec["state"], rec["error"], rec["commits"]), "failed", "the model server", "0")
+
     print("== what the worker hands back is checked")
 
     def handed(make) -> dict:
@@ -743,6 +759,23 @@ else:
     rec = handed(lambda d, j: status_of(d))
     has("done with nothing to show for it is said to be so", work.Manager.report(rec), "finished",
         "No file was changed")
+
+    def odd_ask(d, j):
+        with open(os.path.join(d, "ask.json"), "w") as f:
+            json.dump({"n": 1, "messages": [{"role": "root", "content": "x"}], "tools": [{"type": "own"}]}, f)
+        for _ in range(50):
+            if os.path.exists(os.path.join(d, "answer.json")):
+                break
+            time.sleep(0.1)
+        with open(os.path.join(d, "answer.json")) as f:
+            ODD.update(json.load(f))
+        status_of(d, state="failed")
+
+    ODD, n = {}, len(MODEL["seen"])
+    handed(odd_ask)
+    has("a question that is no conversation is not passed on to the model", ODD.get("error", ""),
+        "no conversation")
+    check("and the model server never saw it", len(MODEL["seen"]) - n, 0)
 
     print("== what the journal holds")
     journal = "\n".join(LOG)

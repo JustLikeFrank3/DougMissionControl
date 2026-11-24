@@ -16,8 +16,9 @@ StateDirectory=douglas-work
 StateDirectoryMode=0750
 ReadWritePaths=/var/lib/douglas-spool
 # It holds the GitHub token and the network, and runs nothing a repository
-# brings along: git only, on bare clones, with hooks off. What Douglas's
-# other services keep is none of its business.
+# brings along: git only, on bare clones, with hooks off. It is also the
+# only way a job has to the model server: what a job would ask, it asks.
+# What Douglas's other services keep is none of its business.
 InaccessiblePaths=/etc/douglas /var/lib/douglas -/srv/models
 NoNewPrivileges=yes
 ProtectSystem=strict
