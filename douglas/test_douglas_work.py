@@ -1606,6 +1606,107 @@ else:
           ("done", 10, [True] * 2 + [False] * 8))
     work.CONTEXT_MAX = 48000
 
+    print("== a question that takes reading through the code: a job that only reads, and reports")
+    report = ("1. hello.py, greet() (line 1) builds the greeting from the name it is given.\n"
+              "2. tests/test_stories.py, test_load_stories asserts that load_stories('x') is an empty list: it "
+              "does not cover greet(). I found no test that does.\n" + "Detail. " * 300)
+    n_refs = bare_git("for-each-ref", "refs/heads")
+    recl = run_job([says("", ("search", {"text": "def greet"})),
+                    says("", ("read", {"path": "hello.py"})),
+                    says("", ("write", {"path": "notes.md", "content": "my notes\n"}),
+                         ("replace", {"path": "hello.py", "old": "Hello", "new": "Hi"})),
+                    says("", ("run", {"command": "echo scratch > scratch.txt; grep -c greet hello.py"})),
+                    says("", ("done", {"summary": report}))],
+                   repo="jobContextMCP", look=1, task="Trace how the greeting is built, and find one test that "
+                   "covers it. Cite the file and function at each hop.")
+    check("a job that only reads is offered no tool that changes a file, and is given the question as a question",
+          ([t["function"]["name"] for t in MODEL["seen"][0]["tools"]],
+           MODEL["seen"][0]["messages"][0]["content"] == work.LOOKER,
+           "The question, in the words of the person who asked:\nTrace how the greeting is built" in first_told(),
+           "You have 60 steps." in first_told()),
+          (["list", "read", "search", "run", "done"], True, True, True))
+    has("it is told to say only what it has read, with the file and the function, and where it got stuck",
+        work.LOOKER, "Say only what you have read.", "names the file and the function", "say where you got stuck",
+        "Do not say what a test verifies unless you have read its assertions", "Change nothing: this job only reads")
+    check("asked to change a file all the same, it is refused, each time",
+          [x for x in shown() if x.startswith("Not done: this job only reads")],
+          ["Not done: this job only reads. Nothing is to be changed; report what you find."] * 2)
+    check("it ends with nothing changed anywhere: no commit, no branch, whatever its commands left in its copy",
+          (recl["state"], recl["kind"], recl["commits"], recl["files"], bare_git("for-each-ref", "refs/heads") == n_refs,
+           bare_git("for-each-ref", "refs/douglas-incoming")), ("done", "look", 0, [], True, ""))
+    check("and what it found is kept whole, where another job's account is cut short",
+          (recl["summary"][:54], len(recl["summary"]) > 2400, len(recl["summary"]) <= work.REPORT_MAX + 4),
+          ("1. hello.py, greet() (line 1) builds the greeting from", True, True))
+    has("he is told that it reads and changes nothing, and not to answer in the meantime", recl["started_with"],
+        "It reads through the code on a copy, file after file, to answer what was asked, and changes nothing.",
+        "do not answer the question yourself in the meantime")
+    r = ask(op="status")
+    has("what became of it is the report, marked as the worker's own reading", r["text"],
+        "It was a look through the code to answer a question, and it changed nothing.",
+        "What the worker found (its own reading of the code, which nobody has checked): 1. hello.py, greet()",
+        never=["No file was changed", "Nothing has been pushed"])
+    check("in pieces too, for the line the person is shown", (r["kind"], r["commits"], r["summary"] == recl["summary"]),
+          ("look", 0, True))
+    has("a look is nothing to push, and is not taken for the work a push is about",
+        ask(op="offer", repo="jobContextMCP")["text"], "", never=["look-"])
+    has("it wants a question", ask(op="work", repo="jobContextMCP", look=1, task="x")["text"],
+        "Say what should be looked into, in a sentence.")
+    check("what its report cites was checked against the code by the runner, and all of it is there",
+          (recl["checks"][0]["ok"], recl["checks"][0]["said"],
+           "files, names and line numbers the report cites, against the code" in recl["checks"][0]["what"]),
+          (True, "", True))
+    has("which is said with what became of it", r["text"],
+        "files, names and line numbers the report cites, against the code: all of it is there.")
+    push(tree, "acme", "jobContextMCP", {"lib/flow.py": "import os\n\n\ndef first_step(x):\n    return x\n"
+                                                        + "\n# padding\n" * 20 + "\n\ndef last_step(x):\n    return x\n"},
+         "a longer file")
+    ask(op="update", repo="jobContextMCP")
+    made_up = ("1. lib/flow.py last_step() (lines 4-9) picks the sample and calls helpers._write_sample().\n"
+               "2. tools/missing.py keeps the store.\n3. server.py `load_stories` (line 4) reads the folder, "
+               "through stories.StoryStore(path).all() in tools/stories.py (lines 1-6).\n"
+               "4. hello.py has 900 lines; see line 880. Data ends up in data/items.json, version 1.2.")
+    put_right = ("1. lib/flow.py:48 defines `last_step` (with a comment). Inside its body: returns `x` (lines 48-49); "
+                 "`first_step` (line 4) is above it.\n2. I could not find where the sample is "
+                 "written: nothing I read writes one.\n3. server.py load_stories() (line 4) reads the folder.")
+    recm = run_job([says("", ("done", {"summary": made_up})),
+                    says("", ("read", {"path": "server.py"})),
+                    says("", ("done", {"summary": put_right}))],
+                   repo="jobContextMCP", look=1, task="Trace how a tone sample is picked and where it is written.")
+    back = shown()[0]
+    has("a report that cites what is not in the code is not handed over: the worker is told what does not hold, "
+        "a name that is nowhere, a file that is not there, a name that is not at the lines it gives, a line a "
+        "file does not have", back, "This program checked what your report cites against the code, and this "
+        "does not hold:", "- There is no file tools/missing.py in the repository.",
+        "- The name _write_sample is nowhere in the code.",
+        "- last_step is not at lines 4-9 of lib/flow.py: it is at line 48.",
+        "- hello.py has 6 lines: there is no line 880 in it.",
+        "say that in the report and name nothing")
+    check("and nothing that does hold is called wrong: a name where it is said to be, a data file's name, a "
+          "number with a point in it",
+          [w for w in ("load_stories", "StoryStore", "items.json", "1.2", "tools/stories.py") if w in back], [])
+    check("put right, the report is taken, and is said to have been checked: a name with its line after the "
+          "file's name, and another thing's lines said after it, are not held against it",
+          (recm["state"], recm["step"], recm["summary"] == put_right, recm["checks"][0]["ok"],
+           recm["checks"][0]["said"]), ("done", 3, True, True, ""))
+    slip = "lib/flow.py last_step() (lines 4-9) returns what it is given."
+    recs = run_job([says("", ("done", {"summary": slip}))] * 2, repo="jobContextMCP", look=1,
+                   task="Say what last_step in lib/flow.py does, with its lines.")
+    check("a line number that is off is sent back once to be put right, and is not held against the report as a "
+          "name that is nowhere would be",
+          (recs["step"], shown()[0][:61], recs["checks"][0]["ok"]),
+          (2, "Not finished yet. This program checked what your report cites", True))
+    recn = run_job([says("", ("done", {"summary": made_up}))] * 3,
+                   repo="jobContextMCP", look=1, task="Trace how a tone sample is picked and where it is written.")
+    check("a worker that does not put it right is sent back twice and no more, and its report goes out marked: "
+          "what it cites does not all hold",
+          (recn["state"], recn["step"], recn["checks"][0]["ok"], "nowhere in the code" in recn["checks"][0]["said"]),
+          ("done", 3, False, True))
+    has("and that is said with what became of it", ask(op="status")["text"],
+        "against the code: not all of it holds. There is no file tools/missing.py in the repository.")
+    check("in pieces too, for the line the person is shown",
+          [(c["ok"], "files, names and line numbers the report cites" in c["what"], "tools/missing.py" in c["said"])
+           for c in ask(op="status")["checks"]], [(False, True, True)])
+
     print("== what an independent reading of this found, each kept from coming back")
     names = ["zz-mallory", "bot-a[bot]", "bot-b[bot]", "bot-c[bot]", "bot-d[bot]"]
     TRACKER["inline"][7][:] = [{"id": 20 + i, "user": {"login": who}, "path": "hello.py", "line": 1,
@@ -1706,7 +1807,7 @@ else:
         "pushed job ", " to acme/jobContextMCP (1 commits)", "pull request 7 opened on acme/jobContextMCP",
         "issue acme/jobContextMCP:", "issues acme/jobContextMCP:", ", issue 3", "work: a yes is asked for first",
         ", going on from an earlier job's branch", "pull request 7 on acme/jobContextMCP has the new commits",
-        "checks acme/jobContextMCP:")
+        "checks acme/jobContextMCP:", ", to read and report")
     check("and never the token, the words searched for, the job's words or the code, nor what an issue or a "
           "comment says, nor who wrote it",
           [w for w in ("not-a-real-token", "load_stories", "zebra", "greeting", "Hello", "story store",

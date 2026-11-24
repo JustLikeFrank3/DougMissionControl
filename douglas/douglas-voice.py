@@ -880,7 +880,14 @@ def system_prompt() -> str:
         parts.append(
             "You can work with software repositories from GitHub, with the repo tool: clone "
             "one onto this machine, look things up in its code, read the issues in its "
-            "tracker, and have a job done on it. A job is a change to the code that is made "
+            "tracker, and have a job done on it. One lookup shows a little of the code, and "
+            "is all a turn has. When the person asks for something to be traced through the "
+            "code, gone through or worked out at length, a job reads through it file after "
+            "file, changing nothing, and what it found is told to them on their screens some "
+            "minutes later. The repo tool is on this machine and works: never say that it is "
+            "missing, that it has to be installed, or that it cannot show you code. Where "
+            "one lookup did not answer, say that, and that you can look into it at length "
+            "if they ask. A job is also a change to the code that is made "
             "for you, by itself, on a copy of the repository and on a branch of its own: on "
             "what the person asks for in their own words, on an issue from the tracker, or "
             "going on from an earlier job, with what was written on its pull request or what "
@@ -3162,7 +3169,7 @@ REPO_DO = {"list": "repos", "clone": "clone", "update": "update", "about": "abou
            "files": "files", "read": "read", "find": "find", "search": "search",
            "history": "log", "work": "work", "status": "status", "changes": "changes",
            "stop": "stop", "push": "offer", "issues": "issues", "issue": "issue", "fix": "work",
-           "revise": "work", "checks": "checks"}
+           "revise": "work", "checks": "checks", "study": "work"}
 # What each of those is sent with, besides the repository.
 REPO_ARGS = {"files": ("path", "find", "said"), "read": ("path", "line", "find", "said"),
              "find": ("words", "said"), "search": ("words", "path", "said"), "about": ("said",),
@@ -3173,6 +3180,7 @@ REPO_ARGS = {"files": ("path", "find", "said"), "read": ("path", "line", "find",
 REPO_ASKED_FOR = {"work": ("A job is started", "\"Fix ...\" or \"Add ...\"."),
                   "fix": ("A job is started", "\"Fix issue 12.\""),
                   "revise": ("A job is started", "\"Address the review comments.\""),
+                  "study": ("A job is started", "\"Trace how ... works.\""),
                   "clone": ("A repository is cloned", "\"Clone the ... repository.\""),
                   "push": ("A push is offered", "\"Push it.\"")}
 
@@ -3254,7 +3262,7 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
         return str(got.get("text") or "The workshop gave no answer.")
     if do == "clone":
         args = {"name": repo or said[:200]}
-    elif do in ("work", "fix", "revise"):
+    elif do in ("work", "fix", "revise", "study"):
         if not ctx.get("after"):
             return "A job cannot be started from here."
         args = {"repo": repo or CONVO["repo"], "task": " ".join(str(task or said).split())[:2000],
@@ -3263,6 +3271,8 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
             args.update(issue=number, words=have["words"] or ("" if number else "the issue"))
         elif do == "revise":        # on from an earlier job, with what is asked for on its pull request
             args["revise"] = 1
+        elif do == "study":         # a job that only reads: the code followed at length, and a report
+            args["look"] = 1
     else:
         args = dict({"repo": repo or CONVO["repo"]} if do not in ("list", "stop") else {},
                     **{k: have[k] for k in REPO_ARGS.get(do, ())})
@@ -3290,14 +3300,30 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
         log("repo job held for a yes")
         return ("No job has been started. Whose words it would be made of is being read back to the "
                 "person now, and they will be asked to say yes.")
-    if do in ("work", "fix", "revise") and got.get("ok") and got.get("job"):
-        WORKING["what"] = args["task"][:300]
+    if do == "list" and got.get("ok"):
+        # "Can you work on repositories?": what is cloned, and what he can do
+        # with it, in this program's words, for him to answer from. Left to
+        # himself after a lookup that fell short, he said the tool was missing.
+        got = dict(got, text=str(got.get("text") or "") + "\n\n" + REPO_CAN)
+    if do in ("work", "fix", "revise", "study") and got.get("ok") and got.get("job"):
+        if do != "study":           # a look changes nothing: no change of it to ask for more of
+            WORKING["what"] = args["task"][:300]
         ctx["after"](str(got["job"]))
     # Which thing was asked of it and whether it was done: never the words, and no name.
     log(f"repo {do}" + ("" if got.get("ok") else ": not done"))
     return str(got.get("text") or "The workshop gave no answer.")
 
 
+REPO_CAN = (
+    "What you can do with a repository that is cloned here, all of it with the repo tool, which "
+    "is on this machine and working now: answer a question from its code with one lookup (where "
+    "something is, what a file does); look into it at length, as a job that reads through the "
+    "code file after file, changes nothing, and reports back in some minutes with the files and "
+    "functions it read, when the person asks for something to be traced or gone through; read "
+    "the issues in its tracker on GitHub, and what GitHub's checks said of a pull request; have "
+    "a change made as a job, on the person's own words or on an issue; go on from an earlier "
+    "job with what was written on its pull request; and push a job's branch as a pull request "
+    "when the person asks and then says yes. Nothing has to be installed for any of that.")
 REPO_TOOL = (
     "Work with a software repository from GitHub on this machine: clone it, look things up "
     "in its code, read its issues, and have a job done that changes the code. do says which: "
@@ -3309,6 +3335,8 @@ REPO_TOOL = (
     "search (every line that has a text, words), history (the latest commits), "
     "issues (the open issues in its tracker on GitHub), issue (what one issue says: number, "
     "or words of its title), "
+    "study (start a job that only reads: it follows the code through file after file to "
+    "answer what the person asked, and reports back in some minutes), "
     "work (start a job that changes the code by itself; task says what is to be done), "
     "fix (start a job on an issue from the tracker: number, or words of its title), "
     "revise (start a job that goes on from an earlier job's branch: what the owner wrote on "
@@ -3335,8 +3363,8 @@ REPO_ASKED = (
     "of these:\n"
     "CLONE and the repository's name as the message gives it: the message asks to clone, "
     "download, fetch, pull or update a repository.\n"
-    "LIST: it asks which repositories the assistant has, or whether it can reach, clone or "
-    "work on repositories at all.\n"
+    "LIST: it asks which repositories the assistant has, what it can do with a repository, "
+    "or whether it can reach, clone, read or work on repositories at all.\n"
     "ISSUES: it asks which issues are open in the repository's tracker, or what there is "
     "in the tracker to work on.\n"
     "ISSUE and the issue's number, or a few words of its title if the message gives no "
@@ -3357,6 +3385,11 @@ REPO_ASKED = (
     "CHANGES: it asks to see what the job changed: the diff, the patch, the changed files.\n"
     "CHECKS: it asks whether the checks, the tests or the build passed on GitHub for the "
     "pull request, or what they said.\n"
+    "STUDY: it asks for something to be worked out by reading through the code at length, "
+    "more than one look at it can give: how something goes from one end to the other, traced "
+    "step by step, with the file and the function at each step; which test covers something "
+    "and what that test really checks; a part of the code gone through, reviewed, audited or "
+    "explained in full.\n"
     "STOP: it asks for the job to be stopped.\n"
     "PUSH: it asks for the job's work to be pushed to GitHub, or for a pull request to be "
     "opened for it. A message that says not to push, or to wait with it, is NO.\n"
@@ -3364,13 +3397,13 @@ REPO_ASKED = (
     "FILE and the file's name as the message gives it: it asks to see or read one file, or "
     "what one named file does.\n"
     "FIND and one to three words to search the code for, names from the message where it "
-    "gives any: it asks anything else about the code: how something works, where something "
-    "is done, whether it handles something.\n"
+    "gives any: it asks anything else about the code, that one look at it can answer: how "
+    "something works, where something is done, whether it handles something.\n"
     "NO: it asks for none of these: small talk, a question about something else, or about "
     "the world outside the code.\n\n"
     "Answers look like: CLONE jobcontextmcp. LIST. ISSUES. ISSUE 12. FIX 12. FIX login "
-    "crash. WORK. REVISE. STATUS. CHANGES. CHECKS. STOP. PUSH. ABOUT. FILE server.py. FIND "
-    "tone profile. NO.")
+    "crash. WORK. REVISE. STATUS. CHANGES. CHECKS. STUDY. STOP. PUSH. ABOUT. FILE server.py. "
+    "FIND tone profile. NO.")
 # What to do with what the program got for him, said in the turn that has it
 # (see SEARCHED): one answer to give from, and no further looking this turn.
 REPO_FOUND = (
@@ -3378,8 +3411,8 @@ REPO_FOUND = (
     "a lookup you made, and it is all the looking there is in this turn. Answer from it now, "
     "in a few sentences and in plain words: say which file a thing is in, and say nothing "
     "about the code that is not in what was found. If it does not answer the question, say "
-    "what it does show and what is missing: the person can ask again and you can look "
-    "further then.]")
+    "what it does show and what is missing, and that you can look into it at length if they "
+    "say so: that is a job that reads through the code and reports back in some minutes.]")
 REPO_DONE = (
     "[This program has done this already. What came of it follows, as a call you made. Tell "
     "the person what came of it in a sentence or two, from what is there and nothing else; "
@@ -3456,7 +3489,7 @@ def repo_wanted(said: str, ask=None, before: str = "", last: str = "") -> dict |
         m = re.fullmatch(r"(?:issue\s*)?(?:number\s*)?#?\s*(\d{1,7})", rest, re.I)
         return dict({"do": word.lower()}, **({"number": int(m[1])} if m else {"words": rest} if rest else {}))
     return {"do": word.lower()} if word in ("LIST", "STATUS", "CHANGES", "STOP", "PUSH", "ABOUT", "ISSUES",
-                                            "REVISE", "CHECKS") else None
+                                            "REVISE", "CHECKS", "STUDY") else None
 
 
 def work_line(got: dict) -> str:
@@ -3474,6 +3507,29 @@ def work_line(got: dict) -> str:
     if state not in ("done", "stopped", "failed"):
         return ("I have lost track of the job I started: the workshop stopped answering. Ask me "
                 "later what became of it.")
+    if got.get("kind") == "look":
+        # A job that only read: what it found is the whole of the line, with
+        # its line breaks, and with nothing in it that could pass for a
+        # note of this program's.
+        found = re.sub(r"[*`]+|^#+[ \t]*", "", readable(str(got.get("summary") or "")), flags=re.M)
+        found = re.sub(r"[\x00-\x09\x0b-\x1f]+", " ", found.replace("[", "(").replace("]", ")"))
+        found = "\n".join(" ".join(row.split()) for row in found.split("\n") if row.strip())
+        if len(found) > 3600:                   # cut at a word, and said to be cut
+            found = found[:3600].rsplit(" ", 1)[0] + " ...\n(The rest was too long to show here.)"
+        # What the report cites was checked against the code by the
+        # workshop's own program: said, since that much of it is not his word alone.
+        checks = [c for c in got.get("checks") or [] if isinstance(c, dict)][:1]
+        told = "".join(
+            f" The workshop checked {tame(c.get('what'), 120)}: "
+            + ("all of it is there." if c.get("ok") is True else
+               f"not all of it holds, so read it with care. {tame(c.get('said'), 240)}") for c in checks)
+        head = {"done": f"I have looked through {repo}.",
+                "stopped": f"I looked through {repo}, and stopped before I was finished"
+                           + (f": {error}." if error else "."),
+                "failed": f"The look through {repo} failed" + (f": {error}." if error else ".")}[state]
+        return no_dashes(head + (" What I found, from reading the code (my own reading; nobody has checked "
+                                 "what I say the code does):\n" + found + ("\n" + told.strip() if told else "")
+                                 if found.strip() else " I have no report to give."))
     try:
         issue = int(got.get("issue") or 0)
     except (TypeError, ValueError):
