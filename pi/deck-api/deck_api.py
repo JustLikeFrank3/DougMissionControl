@@ -8,6 +8,11 @@ fauxmo has always called, and it learns what that script is doing by
 following its journald output. flightsim-boot.sh is unmodified.
 
     GET  /api/state              current state as JSON
+    GET  /api/fleet              the machines, what each is for, whether it
+                                 answers and what it reports: a reading, for
+                                 something that may look and not touch. Opens
+                                 to DECK_READ_TOKEN as well, which opens
+                                 nothing else.
     GET  /api/events             the same, streamed (SSE) on every change
     POST /api/boot               {"target":"windows|linux","intent":"..."}
     POST /api/launch             target already up — fire greeting + profile
@@ -22,6 +27,10 @@ following its journald output. flightsim-boot.sh is unmodified.
     GET  /api/douglas/picture    ?id=<a transcript line's "image">: a picture he drew
     GET  /api/douglas/speech     ?id=<the turn's id>: his reply as a WAV, for
                                  the phone to play
+    GET  /api/douglas/memory     ?op=list|get|events|stats: what he remembers,
+                                 and the record of what he did
+    POST /api/douglas/memory     {"op":"correct|add|delete|restore|purge", ...}
+                                 the owner puts a memory right or takes it away
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -42,10 +51,12 @@ something to expose to the internet.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import sys
 import socket
@@ -56,7 +67,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 # ── configuration ─────────────────────────────────────────────────────────
 
@@ -205,6 +216,18 @@ MON_DEFAULT_INPUTS = [s for s in
 LINUX_MEDIA_PORT = int(cfg("LINUX_MEDIA_PORT", "9110"))
 LINUX_MEDIA_TOKEN = cfg("LINUX_MEDIA_TOKEN", "")
 DECK_TOKEN = cfg("DECK_TOKEN", "")
+# A second token, for something that should see the fleet and touch nothing
+# (Douglas). It opens GET /api/fleet and no other route: not the state the
+# panel is drawn from, not Douglas's conversation or memory, and none of the
+# routes that boot, shut down or change anything. Set to the deck's own
+# token it would be the deck's own token, so then it counts as unset.
+DECK_READ_TOKEN = cfg("DECK_READ_TOKEN", "")
+if DECK_READ_TOKEN and DECK_READ_TOKEN == DECK_TOKEN:
+    print("deck-api: DECK_READ_TOKEN is the same as DECK_TOKEN - ignored, nothing "
+          "opens to it until it is a token of its own", file=sys.stderr, flush=True)
+    DECK_READ_TOKEN = ""
+# This Pi's own services worth knowing the health of, by unit name.
+FLEET_UNITS = tuple(cfg("FLEET_UNITS", "deck-api fauxmo k3s tailscaled").split())
 # Where the phone page is on HTTPS, if pi/mobile-https.sh has put it there:
 # https://<this machine>.<tailnet>.ts.net. The plain page offers it, because
 # only an HTTPS page is lent a phone's microphone.
@@ -307,8 +330,11 @@ class Deck:
             # rendered `since` as "last seen", which reads "last seen 0 s" on a
             # host that just went dark. The moment it went dark is not the last
             # time it was seen.
-            "workstation": {"os": "unknown", "since": None, "last_alive": None,
-                            "ip": WS_LAN, "agent": False},
+            # `since_seen`: whether that change was seen happening. The first
+            # look after this program starts is a change too (from not
+            # knowing), and "running Linux since then" would be a lie.
+            "workstation": {"os": "unknown", "since": None, "since_seen": False,
+                            "last_alive": None, "ip": WS_LAN, "agent": False},
             "boot": {"in_flight": False, "target": None, "intent": None,
                      "phase": 0, "phase_name": "IDLE", "started": None,
                      "elapsed": 0, "result": None, "observable_max": PHASE_MAX_V01,
@@ -1392,6 +1418,7 @@ def poll_once(prev_os):
         w = s["workstation"]
         if changed:
             w["since"] = time.time()
+            w["since_seen"] = prev_os is not None
         if alive:
             w["last_alive"] = time.time()
         w["os"] = os_now
@@ -1775,6 +1802,156 @@ CONTENT_TYPES = {
 }
 
 
+# What Douglas remembers is kept on Douglas, and his agent has the owner's
+# door to it. This passes one question on and hands the answer back. Looking
+# and changing are separate lists, so that a GET changes nothing whatever it
+# asks; and only these names travel, each as one plain value.
+MEMORY_LOOKS = ("list", "get", "events", "stats")
+MEMORY_CHANGES = ("correct", "add", "delete", "restore", "purge")
+MEMORY_FIELDS = ("id", "kind", "status", "q", "limit", "offset", "text", "subject", "confidence", "done")
+
+
+def douglas_memory(op: object, fields: dict, change: bool) -> tuple[int, dict]:
+    """One question about what Douglas remembers, from the owner's screen:
+    to read it (change=False) or to put it right (change=True)."""
+    if not isinstance(op, str) or op not in (MEMORY_CHANGES if change else MEMORY_LOOKS):
+        return 400, {"ok": False, "text": "That is not something to ask of his memory this way."}
+    if not DOUGLAS_AGENT_TOKEN:
+        return 502, {"ok": False, "text": "DOUGLAS_AGENT_TOKEN unset in boot.env"}
+    ask = {k: fields[k] for k in MEMORY_FIELDS if isinstance(fields.get(k), (str, int, float))}
+    ask["op"] = op
+    url = f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/memory?token={DOUGLAS_AGENT_TOKEN}"
+    got = _ws_json(url, ask, timeout=8) if change else _ws_json(url + "&" + urlencode(ask), timeout=8)
+    if not isinstance(got, dict):
+        return 502, {"ok": False, "text": "douglas-agent did not answer"}
+    return 200, got
+
+
+# ── the fleet, as a reading ───────────────────────────────────────────────
+#
+# What this Pi knows about the machines in the house, put together for a
+# reader that may look and not touch: which machines there are, what each is
+# for, whether it answered the last probe and when it last did, and whatever
+# it reports about itself. It is made from the state the panel is drawn from,
+# so nothing new is probed for it, plus two things read here when asked: how
+# full this Pi's disk is and whether its own services are up.
+#
+# What is left out on purpose: addresses, anything that can be pressed, the
+# flight plan, and everything of Douglas's but his machine's health. His
+# conversation and his memory are not fleet state, and this route must never
+# be a way round to them.
+
+FLEET_ROLES = {
+    "node1": ("DOUG PRIME", "Raspberry Pi 4: runs Mission Control and draws the wall panel"),
+    "workstation": ("DOUG DUALBOOT", "the dual-boot workstation: Windows for the flight simulator "
+                                     "and games, Linux for work"),
+    "douglas": ("DOUGLAS", "the inference machine: the language model, the voice pipeline and "
+                           "the workshop"),
+    "dougvoice": ("DOUGVOICE", "Raspberry Pi Zero: the microphone and speaker in the room"),
+    "mini": ("MINIDOUG4", "Mac mini"),
+    "mobile": ("DOUGMOBILE", "MacBook: comes and goes"),
+}
+AN_ADDRESS = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+A_TOKEN = re.compile(r"(token|key|secret|password)=[^&\s]+", re.I)
+_units_kept: dict = {"at": 0.0, "value": None}
+_units_lock = threading.Lock()
+
+
+def own_units() -> list[dict] | None:
+    """Whether this Pi's own services are up, since when, and how often
+    systemd has had to start them again. Asked of systemd with a fixed
+    command, at most every fifteen seconds; None when it cannot be asked."""
+    with _units_lock:
+        if time.monotonic() - _units_kept["at"] < 15 and _units_kept["value"] is not None:
+            return _units_kept["value"]
+        try:
+            ran = subprocess.run(
+                ["systemctl", "show", *[u + ".service" for u in FLEET_UNITS], "-p",
+                 "Id,LoadState,ActiveState,SubState,NRestarts,ActiveEnterTimestampMonotonic,Result,UnitFileState"],
+                capture_output=True, text=True, timeout=4)
+            up = float(Path("/proc/uptime").read_text().split()[0])
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            return None
+        out = ran.stdout
+        if ran.returncode and not out.strip():
+            return None                            # systemd would not say: not known, which is not "none"
+        units, now = [], time.time()
+        for block in out.strip().split("\n\n"):
+            p = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+            if not p.get("Id") or p.get("LoadState") != "loaded":
+                continue                           # not installed here: not a service of this Pi
+            try:
+                since = now - (up - int(p.get("ActiveEnterTimestampMonotonic") or 0) / 1e6)
+                restarts = int(p.get("NRestarts") or 0)
+            except ValueError:
+                since, restarts = None, None
+            units.append({"unit": p["Id"].removesuffix(".service"), "state": p.get("ActiveState"),
+                          "sub": p.get("SubState"), "restarts": restarts, "result": p.get("Result"),
+                          "enabled": p.get("UnitFileState") or None,
+                          "since": round(since) if since and p.get("ActiveState") == "active" else None})
+        _units_kept.update(at=time.monotonic(), value=units)
+        return units
+
+
+def own_disk() -> dict | None:
+    try:
+        d = shutil.disk_usage("/")
+    except OSError:
+        return None
+    return {"path": "/", "total_bytes": d.total, "used_bytes": d.used, "free_bytes": d.free}
+
+
+def fleet() -> dict:
+    """The machines, for a reader. Every reading has when it was taken:
+    `seen` is the last time a machine answered a probe, `as_of` the moment
+    its numbers were read."""
+    s, now = DECK.snapshot(), time.time()
+    ws, tel, d, v = s["workstation"], s["telemetry"], s["douglas"], s["voice"]
+    boot = s["boot"]
+
+    def machine(key: str, up: bool, seen, **more) -> dict:
+        name, role = FLEET_ROLES[key]
+        return dict({"id": key, "name": name, "role": role, "up": bool(up), "seen": seen}, **more)
+
+    ws_up = ws["os"] in ("windows", "linux")
+    machines = [
+        machine("node1", True, now, as_of=now,
+                reports=dict({k: s["pi"].get(k) for k in ("temp_c", "load", "mem_pct", "cpu_pct")},
+                             uptime_s=s["pi"].get("uptime"), disk=own_disk()),
+                services=own_units()),
+        # How long it has been in this state is known only if the change was
+        # seen. Otherwise all there is to say is how long it has been watched.
+        machine("workstation", ws_up, ws["last_alive"], state=ws["os"],
+                since=ws["since"] if ws.get("since_seen") else None,
+                watched_since=None if ws.get("since_seen") else ws["since"],
+                as_of=tel["ts"] if ws_up else None, reports=tel["ws"] if ws_up else {},
+                booting=({"to": boot["target"], "phase": boot["phase_name"]} if boot["in_flight"] else None)),
+        machine("douglas", d["up"], d["last_alive"], model=d.get("model"),
+                doors={"chat page": d["chat"], "speech to text": d["stt"], "text to speech": d["tts"]}),
+        machine("dougvoice", v["up"], v["last_alive"], doors={"voice satellite": v["satellite"]}),
+        machine("mini", s["mini"]["up"], s["mini"]["last_alive"],
+                doors={"ssh": s["mini"]["ssh"], "screen sharing": s["mini"]["screen"]}),
+        machine("mobile", s["mobile"]["up"], s["mobile"]["last_alive"],
+                doors={"ssh": s["mobile"]["ssh"], "screen sharing": s["mobile"]["screen"]}),
+    ]
+    if d["up"] and DOUGLAS_AGENT_TOKEN:
+        # His machine's own account of itself, where it gives one. Only its
+        # health: never what was said to him, and never what he remembers.
+        got = douglas_status()
+        if got.get("agent"):
+            machines[2].update(as_of=got.get("ts"), reports={
+                k: got[k] for k in ("host", "gpu", "llm", "disks") if got.get(k) is not None},
+                services=got.get("units"))
+    events = [{"ts": e.get("ts"), "level": e.get("level"), "source": e.get("source"),
+               "text": A_TOKEN.sub(r"\1=...", AN_ADDRESS.sub("(an address)", str(e.get("text") or "")))[:200]}
+              for e in s["events"][:20]]
+    return {"ts": now, "machines": machines, "events": events,
+            "deck": {"version": s["version"].get("mtime"), "ui": s["version"].get("ui"),
+                     "panel_showing": s["surface"]["active"]},
+            "not_reported": "DOUGVOICE, MINIDOUG4 and DOUGMOBILE say only whether they answer; "
+                            "the workstation reports only while an exporter on it is running."}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "deck-api/0.1"
@@ -1816,6 +1993,15 @@ class Handler(BaseHTTPRequestHandler):
         if not DECK_TOKEN:
             return False
         return (query.get("token") or [""])[0] == DECK_TOKEN
+
+    def _may_read(self, query: dict) -> bool:
+        """For the one route that is a reading and nothing else: whoever may
+        use the deck, and whoever holds the read token. That token is looked
+        at here and nowhere else, so no other route can open to it."""
+        if self._authorised(query):
+            return True
+        given = (query.get("token") or [""])[0]
+        return bool(DECK_READ_TOKEN) and hmac.compare_digest(given.encode(), DECK_READ_TOKEN.encode())
 
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         try:
@@ -1960,6 +2146,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, out, "audio/wav")
             return self._json(code, out)
 
+        if path == "/api/fleet":
+            if not self._may_read(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, fleet())
+
+        # What he remembers and what he did, for the owner to read.
+        if path == "/api/douglas/memory":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            fields = {k: v[0] for k, v in query.items()}
+            code, out = douglas_memory(fields.get("op"), fields, change=False)
+            return self._json(code, out)
+
         # A picture he drew, for the line of his it came with.
         if path == "/api/douglas/picture":
             if not self._authorised(query):
@@ -2069,6 +2268,17 @@ class Handler(BaseHTTPRequestHandler):
                        + f" in {time.monotonic() - began:.1f} s")
             retry = not ok and msg == "douglas-agent did not answer"
             return self._json(200 if ok else 502, {"ok": ok, "message": msg, "retry": retry})
+
+        if path == "/api/douglas/memory":
+            op = body.get("op")
+            code, out = douglas_memory(op, body, change=True)
+            # Which change, to which memory, and whether it took. Never the
+            # words: what he remembers is not for the journal.
+            which = body.get("id")
+            self._note((op if isinstance(op, str) and op in MEMORY_CHANGES else "not a change")
+                       + (f" of memory {which}" if isinstance(which, int) else "")
+                       + ("" if out.get("ok") else " refused"))
+            return self._json(code, out)
 
         if path == "/api/douglas/ptt":
             action = str(body.get("action") or "")

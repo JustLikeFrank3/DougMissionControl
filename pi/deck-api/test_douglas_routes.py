@@ -14,6 +14,7 @@ def check(label, got, want):
 
 # Douglas is not here: the two calls that would reach him are stood in for.
 real_say = d.douglas_say
+real_ws = d._ws_json
 said = []
 def fake_say(text, via, image=None, ask_id=None):
     said.append((text, via, image))
@@ -329,6 +330,81 @@ gallery.shutdown()
 d.DOUGLAS_AGENT_PORT = 1
 check("Douglas not answering", picture("p-0123456789ab")[0], 502)
 d.DECK_TOKEN = ""
+
+print("-- what he remembers, for the owner to read and put right --")
+ASKED = []
+class Memory(d.BaseHTTPRequestHandler):
+    """Douglas's agent, as far as its /memory goes."""
+    def log_message(self, *a): pass
+    def answer(self, got):
+        u = d.urlparse(self.path); q = {k: v[0] for k, v in d.parse_qs(u.query).items()}
+        ASKED.append((self.command, u.path, q.pop("token", ""), got if got is not None else q))
+        op = (got if got is not None else q).get("op")
+        out = {"list": {"ok": True, "total": 1, "memories": [{"id": 7, "kind": "preference", "text": "Sam takes his coffee black."}]},
+               "stats": {"ok": True, "active": 1}, "delete": {"ok": True, "id": 7, "status": "deleted"},
+               "purge": {"ok": True}}.get(op, {"ok": False, "text": "There is no such memory."})
+        body = json.dumps(out).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def do_GET(self): self.answer(None)
+    def do_POST(self): self.answer(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+mem = d.ThreadingHTTPServer(("127.0.0.1", 0), Memory)
+threading.Thread(target=mem.serve_forever, daemon=True).start()
+d.DOUGLAS_AGENT_PORT = mem.server_address[1]
+d._ws_json = real_ws                      # the agent is really asked here, over HTTP
+def look(query, headers=None):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/douglas/memory?{query}", headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+code, out = look("op=list&kind=preference&q=coffee&limit=20&token=whatever&junk=1")
+check("the list, as his memory gave it", (code, out["memories"][0]["text"]), (200, "Sam takes his coffee black."))
+check("asked of the agent with the agent's token, and only with what a question may carry",
+      ASKED[-1], ("GET", "/memory", d.DOUGLAS_AGENT_TOKEN, {"op": "list", "kind": "preference", "q": "coffee", "limit": "20"}))
+n = len(ASKED)
+check("a GET that asks for a change is not passed on at all",
+      ([look(f"op={op}&id=7")[0] for op in ("delete", "purge", "correct", "restore", "add", "export", "recall", "")],
+       len(ASKED) - n), ([400] * 8, 0))
+code, out, log = post("/api/douglas/memory", {"op": "delete", "id": 7, "text": "ignored", "status": "x", "junk": [1]})
+check("a deletion is passed on", (code, out["status"], ASKED[-1][0], ASKED[-1][3]),
+      (200, "deleted", "POST", {"op": "delete", "id": 7, "text": "ignored", "status": "x"}))
+check("and leaves one line, with which memory and none of its words", log.strip(),
+      "http: /api/douglas/memory from 127.0.0.1: delete of memory 7")
+code, out, log = post("/api/douglas/memory", {"op": "correct", "id": 99, "text": "Sam takes his coffee with oat milk."})
+check("a refusal comes back as his memory worded it", (code, out), (200, {"ok": False, "text": "There is no such memory."}))
+check("and the journal has neither the old words nor the new", log.strip(),
+      "http: /api/douglas/memory from 127.0.0.1: correct of memory 99 refused")
+n = len(ASKED)
+code, out, log = post("/api/douglas/memory", {"op": "list\nhttp: forged line", "id": "7\nhttp: forged"})
+check("a POST cannot look, and what it sent cannot forge a line",
+      (code, len(ASKED) - n, log.strip()), (400, 0, "http: /api/douglas/memory from 127.0.0.1: not a change refused"))
+check("nor ask what only he asks of his memory",
+      [post("/api/douglas/memory", {"op": op, "text": "The sky is green."})[0] for op in ("remember", "consolidate", "forget", "log")],
+      [400] * 4)
+d.DECK_TOKEN = "deck-token"
+away = {"X-Forwarded-For": "100.64.0.9"}
+check("from anywhere but the panel itself, his memory wants the deck token",
+      (look("op=list", away)[0], look("op=list&token=deck-token", away)[0], look("op=list&token=wrong", away)[0]),
+      (403, 200, 403))
+def change(query, body):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/douglas/memory{query}", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+n = len(ASKED)
+check("and so does changing it", (change("", {"op": "purge", "id": 7}), len(ASKED) - n,
+                                  change("?token=deck-token", {"op": "purge", "id": 7}), len(ASKED) - n), (403, 0, 200, 1))
+d.DECK_TOKEN = ""
+mem.shutdown()
+d.DOUGLAS_AGENT_PORT = 1
+check("Douglas not answering", look("op=stats"), (502, {"ok": False, "text": "douglas-agent did not answer"}))
+token, d.DOUGLAS_AGENT_TOKEN = d.DOUGLAS_AGENT_TOKEN, ""
+check("no agent token set up", look("op=stats")[1]["text"], "DOUGLAS_AGENT_TOKEN unset in boot.env")
+d.DOUGLAS_AGENT_TOKEN = token
 
 server.shutdown()
 print()

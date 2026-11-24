@@ -1,0 +1,17 @@
+[Unit]
+Description=douglas-memory - the door Douglas himself uses: recall, note, hand in a conversation, and no more
+
+[Socket]
+ListenStream=/run/douglas-memory/assistant.sock
+SocketUser=douglas-memory
+# A group of its own, which only the voice pipeline's unit is given: the
+# other services that run as the pipeline's user cannot open this door.
+SocketGroup=douglas-memory-assistant
+SocketMode=0660
+DirectoryMode=0755
+FileDescriptorName=assistant
+Service=douglas-memory.service
+Accept=no
+
+[Install]
+WantedBy=sockets.target

@@ -1,15 +1,28 @@
 [Unit]
 Description=douglas-agent - Douglas's metrics, transcript and push-to-talk for Flight Deck
-After=network-online.target
+After=network-online.target douglas-agent-vitals.socket
 Wants=network-online.target
+# The machine's vitals for the programs on it: a socket systemd makes and
+# hands over. Wanted, not required: without it the panel is served as ever.
+Wants=douglas-agent-vitals.socket
 
 [Service]
 EnvironmentFile=/etc/douglas/agent.env
 ExecStart=/usr/bin/python3 /opt/douglas/douglas-agent.py
-DynamicUser=yes
-# Reads /proc, /sys and the voice pipeline's two files; writes nothing.
+# A user of its own with nothing to its name, made by setup.sh. Not one
+# systemd makes up at each start (DynamicUser): the system bus turns those
+# away, and this has to ask systemd how Douglas's services are.
+User=douglas-agent
+Group=douglas-agent
+# Reads /proc, /sys, the model folder, what is installed and the voice
+# pipeline's two files, and asks systemd how the services are; writes
+# nothing, anywhere.
 ReadOnlyPaths=/
+ProtectSystem=strict
 ProtectHome=yes
+PrivateTmp=yes
+RemoveIPC=yes
+RestrictSUIDSGID=yes
 NoNewPrivileges=yes
 Restart=always
 RestartSec=3

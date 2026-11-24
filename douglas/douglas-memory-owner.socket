@@ -1,0 +1,18 @@
+[Unit]
+Description=douglas-memory - the owner's door: read it all, correct, delete, restore, purge, and the record of what he did
+
+[Socket]
+ListenStream=/run/douglas-memory/owner.sock
+SocketUser=douglas-memory
+# Mission Control's hands on Douglas (douglas-agent) and nobody else. The
+# voice pipeline is not in this group, so nothing said to Douglas, and
+# nothing he reads, can reach what only the owner may do.
+SocketGroup=douglas-memory-owner
+SocketMode=0660
+DirectoryMode=0755
+FileDescriptorName=owner
+Service=douglas-memory.service
+Accept=no
+
+[Install]
+WantedBy=sockets.target

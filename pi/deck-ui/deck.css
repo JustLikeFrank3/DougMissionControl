@@ -1100,6 +1100,60 @@ html, body {
 .dgl-empty { margin: auto; color: var(--mut); font-size: 16px; text-align: center;
   max-width: 560px; line-height: 1.5; }
 
+/* The middle column's three readings, picked at its head. The one showing
+   is told by colour of the name alone, as the nav strip does it. */
+.dgl-tabs { flex: none; display: flex; gap: 26px; }
+.dgl-tabs button { padding: 0 0 6px; background: none; border: 0;
+  border-bottom: 2px solid transparent; color: var(--mut); font-family: inherit;
+  font-size: 14px; letter-spacing: .16em; cursor: pointer; }
+.dgl-tabs button.on { color: var(--fg); border-bottom-color: var(--acc); }
+.dgl-tabs small { font-size: 12px; letter-spacing: .1em; color: var(--mut); margin-left: 6px; }
+
+/* What he remembers: the owner's list. A row opens on a touch and shows
+   where the memory came from and what may be done with it. */
+.dgl-mem, .dgl-did { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.dgl-mem .mem-bar { flex: none; display: flex; flex-wrap: wrap; gap: 8px 26px; }
+.mem-states, .mem-kinds { display: flex; gap: 8px; }
+.mem-chip { min-height: 40px; padding: 0 14px; background: var(--pan); border: 1px solid var(--ln);
+  color: var(--mut); font-family: inherit; font-size: 13px; letter-spacing: .12em; cursor: pointer; }
+.mem-chip.on { color: var(--cy); border-color: var(--cy); }
+.dgl-mem .mem-list { flex: 1; min-height: 0; overflow-y: auto; display: flex;
+  flex-direction: column; padding-right: 6px; }
+.mem { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px;
+  border-top: 1px solid var(--ln); cursor: pointer; min-width: 0; }
+.mem:first-child { border-top: 0; }
+.mem.open { background: var(--pan); }
+.mem-top { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.mem-k { flex: none; font-weight: 400; font-size: 12px; letter-spacing: .14em; color: var(--acc); }
+.mem-s { min-width: 0; font-size: 14px; color: var(--mut); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.mem-t { font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
+.mem.done .mem-t { color: var(--mut); text-decoration: line-through; }
+.mem-p, .mem-h { font-size: 13px; color: var(--mut); overflow-wrap: anywhere; }
+.mem-h { padding-left: 10px; border-left: 1px solid var(--ln); }
+.mem-acts { display: flex; gap: 12px; margin-top: 8px; }
+.mem-acts button { position: relative; overflow: hidden; min-width: 200px; min-height: 56px;
+  padding: 0 18px; background: var(--bg); border: 1px solid var(--ln); color: var(--fg);
+  font-family: inherit; font-size: 15px; letter-spacing: .14em; cursor: pointer;
+  touch-action: none; user-select: none; }
+.mem-acts button span { position: relative; z-index: 1; }
+.mem-acts .warn { color: var(--am); }
+.mem-acts .bad { color: var(--rd); border-color: var(--rd); }
+.mem-acts .bad .hold { background: var(--rd); }
+.mem-more { flex: none; min-height: 44px; background: none; border: 1px solid var(--ln);
+  color: var(--cy); font-family: inherit; font-size: 13px; letter-spacing: .14em; cursor: pointer; }
+.mem-note { flex: none; font-size: 14px; color: var(--mut); min-height: 18px; }
+.mem-note.bad { color: var(--rd); }
+.mem-empty { margin: auto; max-width: 620px; color: var(--mut); font-size: 16px;
+  text-align: center; line-height: 1.5; }
+/* What he did: one line a call, newest first. */
+.dgl-did { overflow-y: auto; gap: 8px; font-size: 16px; color: var(--mut); padding-right: 6px; }
+.dgl-did .ev { flex: none; display: flex; gap: 14px; min-width: 0; color: var(--fg); }
+.dgl-did .ev time { flex: none; color: var(--mut); }
+.dgl-did .ev b { flex: none; min-width: 130px; font-weight: 400; color: var(--cy); }
+.dgl-did .ev span { min-width: 0; color: var(--mut); overflow-wrap: anywhere; }
+.dgl-did .ev.warn span { color: var(--am); }
+
 /* ASK bar: a big tap target that opens the on-screen keyboard. */
 .dgl-askbar { flex: none; display: flex; align-items: baseline; justify-content: space-between;
   padding: 16px 20px; background: var(--pan); border: 1px solid var(--acc); color: var(--acc);
@@ -1122,7 +1176,7 @@ html, body {
   background: var(--pan); border: 1px solid var(--ln); }
 .kbd-text::after { content: ""; width: 3px; height: 34px; margin-left: 2px; background: var(--acc);
   animation: kbd-caret 1s steps(1) infinite; }
-.kbd-text.empty::before { content: "type your question for Douglas"; color: var(--mut);
+.kbd-text.empty::before { content: attr(data-hint); color: var(--mut);
   margin-right: auto; }
 @keyframes kbd-caret { 50% { opacity: 0; } }
 .kbd-keys { display: flex; flex-direction: column; gap: 9px; }
@@ -1141,6 +1195,9 @@ html, body {
 @media (prefers-reduced-motion: reduce) { .kbd-text::after { animation: none; } }
 
 .dgl-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* The services row can run long: it wraps, and goes red when one is down. */
+#dgl-sys-rows .row .v { white-space: normal; text-align: right; overflow-wrap: anywhere; }
+#dgl-sys-rows .row.bad .v { color: var(--rd); }
 .dgl-m { background: var(--pan); border: 1px solid var(--ln); padding: 10px 12px; }
 .dgl-m .k { font-size: 13px; letter-spacing: .14em; color: var(--mut); }
 .dgl-m .v { font-size: 30px; line-height: 1.15; margin-top: 2px; }

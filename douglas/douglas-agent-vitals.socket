@@ -1,0 +1,18 @@
+[Unit]
+Description=douglas-agent - this machine's vitals, for the programs on it: one reading, nothing to ask for and nothing to change
+
+[Socket]
+ListenStream=/run/douglas-agent/vitals.sock
+# Open to every program on this machine, and that gives nothing away: what
+# comes out of it (load, memory, temperatures, which services are up, which
+# model files are on the disk) is what any of them can already read for
+# itself from /proc, /sys and systemctl. No conversation, no memory, no
+# relay, no token. Whatever is sent to it is not read.
+SocketMode=0666
+DirectoryMode=0755
+FileDescriptorName=vitals
+Service=douglas-agent.service
+Accept=no
+
+[Install]
+WantedBy=sockets.target

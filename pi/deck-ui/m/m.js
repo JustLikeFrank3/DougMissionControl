@@ -13,6 +13,8 @@
 
 import { wireHold } from '../js/ui.js';
 import { fmtAgo, fmtClock, fmtDur, fmtTime } from '../js/format.js';
+import { memoryView, didView } from '../js/memory.js';
+import { machineLine } from '../js/fleet.js';
 
 var $ = function (id) { return document.getElementById(id); };
 var KEY = 'dmc-deck-token';
@@ -248,24 +250,35 @@ function render(s) {
     (s.surface && s.surface.active ? ' · panel showing ' + s.surface.active.toUpperCase() : '');
 }
 
+// What each machine reports about itself, from /api/fleet: the same reading
+// Douglas is given. Kept beside the frame, which says whether a machine is
+// up; a reading that has stopped arriving is dropped, not left on screen.
+var fleetView = null;
+function gotFleet(f) {
+  fleetView = f && f.machines ? f : null;
+  if (state) paintFleet(state);
+}
+function tickFleet() { poll('fleet', '/api/fleet', gotFleet); }
+
 function paintFleet(s) {
   var ws = s.workstation || {}, mini = s.mini || {}, mob = s.mobile || {};
   var dgl = s.douglas || {}, voice = s.voice || {};
   var dm = dgl.model || {};
   var rows = [
     ['DOUG DUALBOOT', ws.os === 'windows' || ws.os === 'linux' ? ws.os
-      : ws.os === 'booting' ? 'booting' : 'off', ws.os === 'windows' || ws.os === 'linux'],
-    ['DOUG PRIME', 'up · drawing the panel', true],
-    ['MINIDOUG4', mini.up ? 'up' : 'off · seen ' + fmtAgo(mini.last_alive), !!mini.up],
-    ['DOUGMOBILE', mob.up ? 'up' : 'away', !!mob.up],
+      : ws.os === 'booting' ? 'booting' : 'off', ws.os === 'windows' || ws.os === 'linux', false,
+     'workstation'],
+    ['DOUG PRIME', 'up · drawing the panel', true, false, 'node1'],
+    ['MINIDOUG4', mini.up ? 'up' : 'off · seen ' + fmtAgo(mini.last_alive), !!mini.up, false, 'mini'],
+    ['DOUGMOBILE', mob.up ? 'up' : 'away', !!mob.up, false, 'mobile'],
     ['DOUGLAS', !dgl.up ? 'offline · seen ' + fmtAgo(dgl.last_alive)
       : dm.state === 'running' ? (dm.name || 'serving')
       : dm.state === 'loading' ? 'loading model' : 'model server down',
-     !!dgl.up, !dgl.up],
+     !!dgl.up, !dgl.up, 'douglas'],
     ['DOUGVOICE', voice.up ? (voice.satellite ? 'listening' : 'up · satellite down') : 'off',
-     !!voice.up],
+     !!voice.up, false, 'dougvoice'],
   ];
-  var el = $('fleet');
+  var el = $('fleet'), now = Date.now() / 1000;
   el.innerHTML = '';
   rows.forEach(function (r) {
     var d = document.createElement('div');
@@ -273,6 +286,14 @@ function paintFleet(s) {
     d.innerHTML = '<i></i><b></b><span></span>';
     d.querySelector('b').textContent = r[0];
     d.querySelector('span').textContent = r[1];
+    var m = fleetView && fleetView.machines.filter(function (x) { return x.id === r[4]; })[0];
+    var line = r[2] ? machineLine(m, now) : { text: '' };
+    if (line.text) {
+      var more = document.createElement('em');
+      more.textContent = line.text;
+      if (line.bad) more.className = 'bad';
+      d.appendChild(more);
+    }
     el.appendChild(d);
   });
 }
@@ -1052,6 +1073,33 @@ function tickDouglas(fresh) {
 }
 function tickNp() { poll('np', '/api/media', paintNp); }
 
+// ── what he remembers ────────────────────────────────────────────────────
+// Closed, the card asks only how much there is. Open, it reads the list and
+// the record of what he did, and looks again now and then: a conversation
+// that has gone quiet turns into memories a minute or so later.
+var OPEN_KEY = 'dmc-mem-open';
+var memOpen = (function () {
+  try { return localStorage.getItem(OPEN_KEY) === '1'; } catch (e) { return false; }
+})();
+var memory = memoryView($('mem'), { get: getJSON, post: post, count: $('mem-count') });
+var did = didView($('did'), { get: getJSON, rows: 12 });
+function tickMem() {
+  if (!memOpen) { memory.glance(); return; }
+  memory.refresh();
+  did.refresh();
+}
+function paintMemOpen() {
+  $('mem-body').hidden = !memOpen;
+  $('mem-head').setAttribute('aria-expanded', memOpen ? 'true' : 'false');
+}
+$('mem-head').addEventListener('click', function () {
+  memOpen = !memOpen;
+  try { localStorage.setItem(OPEN_KEY, memOpen ? '1' : '0'); } catch (e) { /* private mode */ }
+  paintMemOpen();
+  tickMem();
+});
+paintMemOpen();
+
 function busy() {
   var st = lastDgl && lastDgl.voice && lastDgl.voice.state;
   // A question waiting for the link is the best reason there is to look often.
@@ -1073,6 +1121,8 @@ function pollAll(on) {
   }
   every('dgl', 3000, tickDouglas);
   every('np', 3000, tickNp);
+  every('mem', 30000, tickMem);
+  every('fleet', 15000, tickFleet);
 }
 
 // ── boot controls ────────────────────────────────────────────────────────

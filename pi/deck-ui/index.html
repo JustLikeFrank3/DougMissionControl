@@ -533,12 +533,21 @@
         </div>
 
         <div class="dgl-convo">
-          <div class="lbl">CONVERSATION</div>
+          <!-- One column, three things to read in it: what was said, what
+               he remembers, what he did. The last two are the owner's view
+               of his memory, read through a door he has no key to. -->
+          <div class="dgl-tabs" id="dgl-tabs">
+            <button class="on" data-tab="convo">CONVERSATION</button>
+            <button data-tab="mem">MEMORY <small id="dgl-mem-count"></small></button>
+            <button data-tab="did">WHAT HE DID</button>
+          </div>
           <div class="dgl-log" id="dgl-log"></div>
           <!-- The panel has no keyboard, so asking opens one of its own. -->
           <button class="dgl-askbar" id="dgl-askbar">
             <span>ASK DOUGLAS</span><small id="dgl-askbar-s">tap to type</small>
           </button>
+          <div class="dgl-mem" id="dgl-mem" hidden></div>
+          <div class="dgl-did" id="dgl-did" hidden></div>
         </div>
 
         <div class="dgl-sys">

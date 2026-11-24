@@ -5,6 +5,7 @@ Runs ON DOUGLAS (the GEEKOM A9 Mega inference box), installed by
 douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
 
     GET  /status?token=<t>   one JSON: host, GPU and model-server metrics,
+                             disks, services, model files, what is installed,
                              voice-pipeline state, the recent transcript
     POST /ptt?token=<t>      {"action":"start|stop|cancel","via":"deck"}
                              relayed to the voice pipeline's own PTT endpoint
@@ -21,6 +22,11 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
     GET  /speech?token=<t>&id=<id>
                              the reply to that turn as a WAV, for the phone
                              to play; JSON saying where it stands until then
+    GET  /memory?token=<t>&op=list|get|events|stats[&kind=&status=&q=&limit=&offset=&id=]
+                             what Douglas remembers and the record of what
+                             he did, for the owner to read
+    POST /memory?token=<t>   {"op":"correct|add|delete|restore|purge", ...}
+                             the owner puts a memory right or takes it away
     GET  /health             200 "ok" — liveness, no token, no data
 
 Everything it reports is read at request time from where it already lives:
@@ -28,6 +34,19 @@ Everything it reports is read at request time from where it already lives:
 /v1/models for the model, and two files the voice pipeline owns for the
 conversation. It invents nothing: a value it cannot read is null, never 0,
 because "idle" and "unknown" are different facts on the panel.
+
+The machine's part of that (everything but the conversation) is also given
+to the programs on this machine that ask for it, at a socket of its own
+(douglas-agent-vitals.socket): one reading for each connection and nothing
+else. That is how Douglas can say how his own machine is doing without
+holding this agent's token, which also opens his conversation and his
+memory. Nothing can be asked for there and nothing changed: whatever is
+sent to it is not read.
+
+What Douglas remembers is kept by douglas-memory, which has two doors: one
+for Douglas, and one for the owner, which is the one this has the key to
+(MEMORY_OWNER_SOCKET, a socket this unit's group may open). So the owner's
+screen can read, correct and delete what he remembers, and he cannot.
 
 The voice pipeline contract (whatever implements DougVoice's brain):
     VOICE_STATE_FILE   JSON {"state": "idle|listening|thinking|speaking",
@@ -47,9 +66,12 @@ home LAN and a tailnet, not something to put on the internet.
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
+import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -70,6 +92,21 @@ VOICE_STALE_S = float(os.environ.get("VOICE_STALE_S", "30"))
 TRANSCRIPT_FILE = os.environ.get("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 TRANSCRIPT_TURNS = int(os.environ.get("TRANSCRIPT_TURNS", "40"))
 VOICE_PTT_URL = os.environ.get("VOICE_PTT_URL", "")
+MEMORY_OWNER_SOCKET = os.environ.get("MEMORY_OWNER_SOCKET", "")
+MEMORY_BODY_MAX = 64 * 1024              # a correction is a sentence or two
+MEMORY_ANSWER_MAX = 240_000              # what the panel's relay will carry on
+# What this machine is asked about itself, beyond the meters: the services
+# worth knowing the health of, the file systems worth knowing the room on,
+# where the model files are and where the programs are installed.
+AGENT_UNITS = tuple((os.environ.get("AGENT_UNITS") or
+                     "llama-server llama-eyes douglas-voice douglas-memory douglas-work douglas-job "
+                     "douglas-tts douglas-draw douglas-agent douglas-chatgpt open-webui "
+                     "wyoming-whisper wyoming-piper").split())
+AGENT_DISKS = tuple((os.environ.get("AGENT_DISKS") or "/ /srv/models").split())
+MODELS_DIR = os.environ.get("MODELS_DIR", "/srv/models")
+PROGRAMS_DIR = os.environ.get("PROGRAMS_DIR", "/opt/douglas")
+SYSTEMCTL = os.environ.get("SYSTEMCTL", "/usr/bin/systemctl")
+VITALS_SOCKET = os.environ.get("VITALS_SOCKET", "")     # run by hand: the socket is made here
 SYS = os.environ.get("SYSFS_ROOT", "/sys")     # overridable for tests
 PROC = os.environ.get("PROCFS_ROOT", "/proc")
 
@@ -120,6 +157,34 @@ class CpuMeter:
 CPU = CpuMeter()
 
 
+class Kept:
+    """A reading that costs something to take (a process started, a folder
+    walked, files hashed), taken again only once it is that many seconds old.
+    The panel asks every two seconds; the answer to "which model files are
+    on the disk" does not change that often."""
+
+    def __init__(self, take, seconds: float) -> None:
+        self.take, self.seconds = take, seconds
+        self.at, self.value = 0.0, None
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            if not self.at or time.monotonic() - self.at >= self.seconds:
+                self.value, self.at = self.take(), time.monotonic()
+            return self.value
+
+
+def _cpu_name() -> str | None:
+    for line in (_read(f"{PROC}/cpuinfo") or "").splitlines():
+        if line.startswith("model name"):
+            return " ".join(line.partition(":")[2].split()) or None
+    return None
+
+
+CPU_NAME = Kept(_cpu_name, 3600)
+
+
 def host_metrics() -> dict:
     mem = {}
     for line in (_read(f"{PROC}/meminfo") or "").splitlines():
@@ -130,7 +195,16 @@ def host_metrics() -> dict:
             pass
     total, avail = mem.get("MemTotal"), mem.get("MemAvailable")
     up = (_read(f"{PROC}/uptime") or "").split()
+    load = (_read(f"{PROC}/loadavg") or "").split()
+    try:
+        load1 = float(load[0]) if load else None
+    except ValueError:
+        load1 = None
     return {
+        "cpu": CPU_NAME(),
+        "cores": os.cpu_count(),
+        "kernel": os.uname().release,
+        "load": load1,
         "cpu_pct": CPU.sample(),
         "mem_total_bytes": total,
         "mem_used_bytes": total - avail if total and avail is not None else None,
@@ -183,6 +257,98 @@ def gpu_metrics() -> dict:
     return {}
 
 
+def disks() -> list[dict]:
+    """How full the file systems worth knowing about are: each once, however
+    many of the paths asked about are on it."""
+    out, seen = [], set()
+    for path in AGENT_DISKS:
+        try:
+            st, dev = os.statvfs(path), os.stat(path).st_dev
+        except OSError:
+            continue
+        if dev in seen:
+            continue
+        seen.add(dev)
+        total = st.f_blocks * st.f_frsize
+        out.append({"path": path, "total_bytes": total, "free_bytes": st.f_bavail * st.f_frsize,
+                    "used_bytes": total - st.f_bfree * st.f_frsize})
+    return out
+
+
+def _units() -> list[dict] | None:
+    """Douglas's services: which are up, since when, and how many times
+    systemd has had to start each again. Asked of systemd with one fixed
+    command: the unit names are this program's own list, never a caller's.
+    None when systemd cannot be asked, which is not the same as none up."""
+    try:
+        ran = subprocess.run(
+            [SYSTEMCTL, "show", *[u + ".service" for u in AGENT_UNITS], "-p",
+             "Id,LoadState,ActiveState,SubState,NRestarts,ActiveEnterTimestampMonotonic,Result,UnitFileState"],
+            capture_output=True, text=True, timeout=4, check=False)
+        up = float((_read(f"{PROC}/uptime") or "0").split()[0])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    out = ran.stdout
+    if ran.returncode and not out.strip():
+        return None                               # systemd would not say: not known, which is not "none"
+    units, now = [], time.time()
+    for block in out.strip().split("\n\n"):
+        p = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        if not p.get("Id") or p.get("LoadState") != "loaded":
+            continue                              # not installed on this machine
+        try:
+            since = now - (up - int(p.get("ActiveEnterTimestampMonotonic") or 0) / 1e6)
+            restarts = int(p.get("NRestarts") or 0)
+        except ValueError:
+            since, restarts = None, None
+        active = p.get("ActiveState") == "active"
+        units.append({"unit": p["Id"].removesuffix(".service"), "state": p.get("ActiveState"),
+                      "sub": p.get("SubState"), "restarts": restarts, "result": p.get("Result"),
+                      # Whether it is meant to run at all: one that is switched
+                      # off on purpose is not one that has gone down.
+                      "enabled": p.get("UnitFileState") or None,
+                      "since": round(since) if since and active else None})
+    return units
+
+
+def _models() -> list[dict]:
+    """The model files on the disk, biggest first: what he could be run on,
+    whether or not it is what he is running on now."""
+    found = []
+    base = MODELS_DIR.rstrip("/")
+    for root, dirs, files in os.walk(base):
+        if root[len(base):].count(os.sep) >= 3:
+            dirs[:] = []
+        for name in files:
+            if not name.lower().endswith((".gguf", ".safetensors", ".onnx")):
+                continue
+            try:
+                size = os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+            if size >= 100 * 1024 * 1024:           # a model, not a config beside one
+                found.append({"file": os.path.join(root, name)[len(base) + 1:], "bytes": size})
+    return sorted(found, key=lambda m: -m["bytes"])[:40]
+
+
+def _versions() -> list[dict]:
+    """What is installed: each of Douglas's programs, when it was put there
+    and the start of its checksum, which is what tells two versions apart."""
+    out = []
+    for path in sorted(glob.glob(f"{PROGRAMS_DIR}/*.py")):
+        try:
+            with open(path, "rb") as f:
+                digest = hashlib.sha256(f.read(8_000_000)).hexdigest()[:12]
+            out.append({"file": os.path.basename(path), "installed": round(os.path.getmtime(path)),
+                        "sha": digest})
+        except OSError:
+            continue
+    return out
+
+
+UNITS, MODELS, VERSIONS = Kept(_units, 10), Kept(_models, 120), Kept(_versions, 120)
+
+
 # ── model server ─────────────────────────────────────────────────────────
 
 def _get(path: str, timeout: float = 2.0) -> tuple[int, bytes]:
@@ -212,6 +378,9 @@ def llm_metrics() -> dict:
             if name and name.lower().endswith(".gguf"):
                 name = name[:-5]
             out["model"] = name
+            meta = (data[0].get("meta") or {}) if data else {}
+            if isinstance(meta, dict):              # how big a model it is, where the server says
+                out["params"], out["size_bytes"] = meta.get("n_params"), meta.get("size")
         except (ValueError, KeyError, IndexError, AttributeError):
             pass
     code, body = _get("/props")
@@ -219,7 +388,18 @@ def llm_metrics() -> dict:
         try:
             props = json.loads(body)
             out["ctx"] = (props.get("default_generation_settings") or {}).get("n_ctx")
+            out["slots"] = props.get("total_slots")       # conversations it can hold at once
+            out["build"] = props.get("build_info")
+            out["file"] = os.path.basename(str(props.get("model_path") or "")) or None
+            seen = props.get("modalities")
+            out["vision"] = bool(seen.get("vision")) if isinstance(seen, dict) else None
         except (ValueError, AttributeError):
+            pass
+    code, body = _get("/slots")
+    if code == 200:
+        try:                                        # how many are in use: never what is in them
+            out["busy_slots"] = sum(1 for s in json.loads(body) if isinstance(s, dict) and s.get("is_processing"))
+        except (ValueError, TypeError):
             pass
     code, body = _get("/metrics")
     if code == 200:
@@ -237,6 +417,9 @@ def llm_metrics() -> dict:
         rd = prom.get("llamacpp:requests_deferred")
         out["processing"] = int(rp) if rp is not None else None
         out["deferred"] = int(rd) if rd is not None else None
+        for key, name in (("prompt_tokens", "llamacpp:prompt_tokens_total"),
+                          ("predicted_tokens", "llamacpp:tokens_predicted_total")):
+            out[key] = int(prom[name]) if name in prom else None     # since the server started
     return out
 
 
@@ -403,10 +586,107 @@ def picture(pid: str) -> tuple[int, bytes | dict, str]:
     return 200, body, kind
 
 
+# ── what he remembers ────────────────────────────────────────────────────
+
+# What the owner's screen may ask of the memory through here, and what each
+# question may carry: one plain value per name. Reading is one list and
+# changing another, so that a GET can never change anything. Nothing else
+# the memory's door answers (the whole of it at once, say) is passed on.
+MEMORY_LOOKS = {"list": ("kind", "status", "q", "limit", "offset"), "get": ("id",),
+                "events": ("limit", "kind"), "stats": ()}
+MEMORY_CHANGES = {"correct": ("id", "text", "subject", "kind", "confidence", "done"),
+                  "add": ("kind", "subject", "text"),
+                  "delete": ("id",), "restore": ("id",), "purge": ("id",)}
+MEMORY_MOST = {"list": 50, "events": 200}        # rows at a time
+
+
+def memory(op: object, fields: dict, allowed: dict) -> tuple[int, dict]:
+    """One question to Douglas's memory through the owner's door, and its
+    answer as the memory gave it. `allowed` is which questions this request
+    may ask at all."""
+    if not isinstance(op, str) or op not in allowed:
+        return 400, {"ok": False, "text": "That is not something to ask of the memory this way."}
+    if not MEMORY_OWNER_SOCKET:
+        return 200, {"ok": False, "text": "Douglas has no memory installed."}
+    ask: dict = {"op": op}
+    for name in allowed[op]:
+        v = fields.get(name)
+        if isinstance(v, bool) or isinstance(v, (int, float)):
+            ask[name] = v
+        elif isinstance(v, str):
+            ask[name] = v[:4000]
+    if op in MEMORY_MOST:
+        try:
+            ask["limit"] = min(max(1, int(ask.get("limit") or MEMORY_MOST[op])), MEMORY_MOST[op])
+        except (TypeError, ValueError, OverflowError):
+            ask["limit"] = MEMORY_MOST[op]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect(MEMORY_OWNER_SOCKET)
+            s.sendall(json.dumps(ask).encode() + b"\n")
+            with s.makefile("rb") as f:
+                line = f.readline(MEMORY_ANSWER_MAX + 1)
+        if len(line) > MEMORY_ANSWER_MAX:
+            return 200, {"ok": False, "text": "That is more than can be shown at once: ask for less."}
+        out = json.loads(line)
+        if not isinstance(out, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        return 200, {"ok": False, "text": "Douglas's memory did not answer."}
+    return 200, out
+
+
+def vitals() -> dict:
+    """This machine and what runs on it, as read just now. No conversation
+    in it: this is what the vitals socket gives to whoever asks."""
+    return {"ts": time.time(), "host": host_metrics(), "gpu": gpu_metrics(), "llm": llm_metrics(),
+            "disks": disks(), "units": UNITS(), "models": MODELS(), "versions": VERSIONS()}
+
+
 def status() -> dict:
-    return {"ts": time.time(), "host": host_metrics(), "gpu": gpu_metrics(),
-            "llm": llm_metrics(), "voice": voice_state(),
-            "transcript": transcript()}
+    return dict(vitals(), voice=voice_state(), transcript=transcript())
+
+
+def vitals_socket() -> socket.socket | None:
+    """The socket the machine's vitals are given out at: the one systemd made
+    and handed over (douglas-agent-vitals.socket), or, run by hand, one made
+    here at VITALS_SOCKET."""
+    names = (os.environ.get("LISTEN_FDNAMES") or "").split(":")
+    if os.environ.get("LISTEN_PID") == str(os.getpid()) and "vitals" in names:
+        return socket.socket(fileno=3 + names.index("vitals"))
+    if not VITALS_SOCKET:
+        return None
+    try:
+        os.unlink(VITALS_SOCKET)
+    except OSError:
+        pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(VITALS_SOCKET)
+    os.chmod(VITALS_SOCKET, 0o666)
+    s.listen(16)
+    return s
+
+
+def serve_vitals(sock: socket.socket) -> None:
+    """One reading for each connection, then it is closed. Nothing is read
+    from the caller: there is nothing here to ask for, and nothing to change."""
+    def give(conn: socket.socket) -> None:
+        try:
+            conn.settimeout(5)
+            conn.sendall(json.dumps(vitals()).encode() + b"\n")
+        except (OSError, ValueError):
+            pass
+        finally:
+            conn.close()
+
+    while True:
+        try:
+            conn, _ = sock.accept()
+        except OSError:
+            time.sleep(0.5)
+            continue
+        threading.Thread(target=give, args=(conn,), daemon=True).start()
 
 
 # ── http ─────────────────────────────────────────────────────────────────
@@ -450,20 +730,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "forbidden"})
             code, out, kind = picture((parse_qs(urlparse(self.path).query).get("id") or [""])[0])
             return self._send(code, out, kind)
+        if path == "/memory":
+            if not self._authorised():
+                return self._send(403, {"error": "forbidden"})
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            code, out = memory(q.get("op"), q, MEMORY_LOOKS)
+            return self._send(code, out)
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        if path not in ("/ptt", "/say", "/hear"):
+        if path not in ("/ptt", "/say", "/hear", "/memory"):
             return self._send(404, {"error": "not found"})
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
         try:
             n = min(int(self.headers.get("Content-Length") or 0),
-                    {"/say": SAY_BODY_MAX, "/hear": HEAR_BODY_MAX}.get(path, 16384))
+                    {"/say": SAY_BODY_MAX, "/hear": HEAR_BODY_MAX,
+                     "/memory": MEMORY_BODY_MAX}.get(path, 16384))
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             body = {}
+        if path == "/memory":
+            body = body if isinstance(body, dict) else {}
+            code, out = memory(body.get("op"), body, MEMORY_CHANGES)
+            return self._send(code, out)
         relay = {"/say": relay_say, "/hear": relay_hear}.get(path, relay_ptt)
         code, out = relay(body if isinstance(body, dict) else {})
         return self._send(code, out)
@@ -474,8 +765,12 @@ def main() -> None:
         print("douglas-agent: DOUGLAS_AGENT_TOKEN is empty - every request "
               "but /health will be refused", flush=True)
     CPU.sample()                          # prime, so the first poll has an interval
+    door = vitals_socket()
+    if door is not None:
+        threading.Thread(target=serve_vitals, args=(door,), daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"douglas-agent: listening on :{PORT}, model at {LLM_URL}", flush=True)
+    print(f"douglas-agent: listening on :{PORT}, model at {LLM_URL}, vitals socket "
+          f"{'on' if door is not None else 'off'}", flush=True)
     srv.serve_forever()
 
 

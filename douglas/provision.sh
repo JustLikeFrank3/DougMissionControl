@@ -26,6 +26,9 @@
 #     douglas-work, douglas-job   his workshop: repositories he may clone, read
 #                         and have a job done on, the job fenced in
 #                         (./work-setup.sh; needs Linux 6.12 for the fence)
+#     douglas-memory      what he remembers from one conversation to the next,
+#                         with a door for him and one for Mission Control
+#                         (./memory-setup.sh)
 #
 # Idempotent: every config file under /etc/douglas is written only if it is
 # missing, so re-running upgrades code and units and keeps your settings.
@@ -495,6 +498,17 @@ if ! grep -q '^VOICE_PTT_URL=' "$agent_env"; then
     sed -i '/^#VOICE_PTT_URL=/d' "$agent_env"
     echo "VOICE_PTT_URL=$ptt_url" >> "$agent_env"
     systemctl restart douglas-agent
+fi
+
+# ── his memory ───────────────────────────────────────────────────────────
+# After the agent: it is the agent's settings the owner's door goes into.
+# Both this and the agent's installer add a line to voice.env, so the
+# pipeline is restarted once more, here, where nobody can be talking to him.
+step "douglas-memory"
+if "$here/memory-setup.sh"; then
+    systemctl try-restart douglas-voice 2>/dev/null || true
+else
+    warn "the memory was not set up - he remembers nothing past a conversation (./memory-setup.sh says why)"
 fi
 
 # ── what is up ───────────────────────────────────────────────────────────

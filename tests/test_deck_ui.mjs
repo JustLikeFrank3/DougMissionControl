@@ -21,6 +21,8 @@ const sim = await import(pathToFileURL(path.join(UI, 'simmath.js')));
 const descent = await import(pathToFileURL(path.join(UI, 'descent.js')));
 const spd = await import(pathToFileURL(path.join(UI, 'speedprofile.js')));
 const nav = await import(pathToFileURL(path.join(UI, 'nav.js')));
+const mem = await import(pathToFileURL(path.join(UI, 'memory.js')));
+const fleet = await import(pathToFileURL(path.join(UI, 'fleet.js')));
 
 let passed = 0;
 const failures = [];
@@ -426,6 +428,80 @@ test('deviation is signed, and never invented from a reading the mode lacks', ()
   assert.deepEqual(spd.speedDeviation(mach, 250, 0.81), { off: -0.04, unit: 'MACH' });
   assert.equal(spd.speedDeviation(mach, 250, undefined), null,
     'an old agent sends no mach — no deviation, not a lie from IAS');
+});
+
+/* ── what Douglas remembers ─────────────────────────────────────────────── */
+
+test('a memory says where it came from, how old it is and how sure, in that order', () => {
+  const day = 86400, now = 2000000000;
+  assert.equal(mem.provenance({ source: 'said', via: 'phone', updated: now - 3 * day,
+                                confidence: 0.8, uses: 4 }, now),
+               'you said so · phone · 3 d ago · sure 80% · used 4×');
+  assert.equal(mem.provenance({ source: 'owner', via: 'deck', updated: now - 30, confidence: 1 }, now),
+               'you set this · deck · 30 s ago · sure 100%');
+  assert.equal(mem.provenance({ source: 'inferred', updated: now - 7200, confidence: 0.55 }, now),
+               'he worked it out · 2 h 0 m ago · sure 55%',
+               'a guess of his is called one, and never rounded up to certain');
+  assert.equal(mem.provenance({ source: 'observed', updated: now - 60, confidence: 0.9,
+                                done: now - 60 }, now),
+               'he saw it happen · 60 s ago · sure 90% · done 60 s ago');
+  assert.equal(mem.provenance({ source: 'elsewhere', updated: now, confidence: null }, now),
+               'elsewhere · 0 s ago · sure 0%',
+               'a source this page does not know is shown as it came, not dressed up');
+});
+
+test('what happened to a memory earlier keeps the words it had then', () => {
+  const now = 2000000000, m = { text: 'Sam takes his coffee with milk.' };
+  assert.equal(mem.pastLine({ action: 'corrected', who: 'owner', at: now - 120,
+                              before: 'Sam takes his coffee black.' }, m, now),
+               'corrected by you · 2 m ago · was: Sam takes his coffee black.');
+  assert.equal(mem.pastLine({ action: 'restored', who: 'owner', at: now - 60, before: m.text }, m, now),
+               'brought back by you · 60 s ago', 'the same words are not repeated as what it was');
+  assert.equal(mem.pastLine({ action: 'kept over a weaker note', who: 'douglas', at: now - 60,
+                              after: 'Sam takes tea.' }, m, now),
+               'kept over a weaker note by him · 60 s ago · the note: Sam takes tea.');
+  assert.equal(mem.pastLine({ action: 'let go for room', who: 'memory', at: now - 60 }, m, now),
+               'let go for room by the memory itself · 60 s ago');
+});
+
+/* ── what the machines report ───────────────────────────────────────────── */
+
+test('services: how many should be up and are, what is down, and never a fault made of one switched off', () => {
+  const u = (unit, state, more) => Object.assign({ unit, state, restarts: 0 }, more);
+  assert.deepEqual(fleet.servicesLine([u('a', 'active'), u('b', 'active')]),
+                   { text: '2 of 2 services up', bad: false, known: true });
+  assert.deepEqual(fleet.servicesLine([u('a', 'active'), u('eyes', 'inactive', { enabled: 'disabled' })]),
+                   { text: '1 of 1 services up · off: eyes', bad: false, known: true },
+                   'switched off on purpose is not down');
+  assert.deepEqual(fleet.servicesLine([u('a', 'active', { restarts: 14 }), u('b', 'failed'),
+                                       u('c', 'inactive', { enabled: 'enabled' })]),
+                   { text: '1 of 3 services up · DOWN: b, c · restarted: a 14×', bad: true, known: true },
+                   'one that is set to run and is not running is down');
+  assert.deepEqual(fleet.servicesLine(null), { text: 'services not readable', bad: false, known: false },
+                   'not asked is not the same as none, and is not a fault either');
+  assert.equal(fleet.servicesLine([]).text, '');
+});
+
+test('a machine line carries only what was read, and says when it is old', () => {
+  const now = 2000000000;
+  assert.deepEqual(fleet.machineLine({ id: 'node1', up: true, as_of: now, services: [
+    { unit: 'k3s', state: 'active', restarts: 14 }],
+    reports: { temp_c: 51.6, load: 0.41, disk: { total_bytes: 28e9, used_bytes: 21e9 } } }, now),
+    { text: '52 °C · load 0.41 · disk 75 % · 1 of 1 services up · restarted: k3s 14×', bad: false });
+  assert.deepEqual(fleet.machineLine({ id: 'douglas', up: true, as_of: now - 400, services: [
+    { unit: 'voice', state: 'failed', restarts: 0 }],
+    reports: { host: { temp_c: 40.2, power_w: 48.3 }, disks: [{ total_bytes: 2e12, used_bytes: 3e11 }] } }, now),
+    { text: '40 °C · 48 W · disk 15 % · 0 of 1 services up · DOWN: voice · 6 m old', bad: true });
+  assert.deepEqual(fleet.machineLine({ id: 'workstation', up: true, as_of: now,
+    reports: { gpu_temp_c: 47, gpu_util_pct: 0 } }, now), { text: 'GPU 47 °C · GPU 0 %', bad: false },
+    'a reading of zero is a reading');
+  assert.deepEqual(fleet.machineLine({ id: 'dougvoice', up: true, doors: {} }, now), { text: '', bad: false },
+    'a machine that reports nothing gets no line, not a row of dashes or zeros');
+  assert.deepEqual(fleet.machineLine({ id: 'workstation', up: false, reports: { gpu_temp_c: 47 } }, now),
+    { text: '', bad: false }, 'a machine that is off is not shown its last numbers');
+  assert.equal(fleet.machineLine({ up: true, reports: { temp_c: null, load: undefined } }, now).text, '');
+  assert.equal(fleet.diskPct({ total_bytes: 0, used_bytes: 5 }), null);
+  assert.equal(fleet.diskPct(null), null);
 });
 
 if (failures.length) {

@@ -6,14 +6,30 @@
 # Installs only the panel's window into Douglas. The model server, chat UI
 # and voice services come from ./provision.sh, which runs this at its end.
 # Idempotent: re-running updates the agent and keeps the existing token.
+#
+# With it comes the socket the agent gives this machine's vitals out at
+# (douglas-agent-vitals.socket), and, where the voice pipeline is installed,
+# VITALS_SOCKET in its settings: that is how Douglas can say how his own
+# machine is doing. He learns of it when douglas-voice is next restarted,
+# which this does not do. To take it away again, remove that line from
+# /etc/douglas/voice.env and restart douglas-voice.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)"; exit 1; }
 
 install -d -m 755 /opt/douglas /etc/douglas
+# The agent's own user: no home, no shell, nothing it owns. (It used to run
+# as a user systemd made up at each start, and that one is still in use by
+# the running agent under the same name: it is stopped first.)
+if ! getent passwd douglas-agent 2>/dev/null | grep -q ':/nonexistent:'; then
+    systemctl stop douglas-agent 2>/dev/null || true
+    getent passwd douglas-agent >/dev/null 2>&1 \
+        || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin douglas-agent
+fi
 install -m 755 "$here/douglas-agent.py" /opt/douglas/douglas-agent.py
 install -m 644 "$here/douglas-agent.service" /etc/systemd/system/douglas-agent.service
+install -m 644 "$here/douglas-agent-vitals.socket" /etc/systemd/system/douglas-agent-vitals.socket
 
 env=/etc/douglas/agent.env
 if [ ! -f "$env" ]; then
@@ -36,9 +52,29 @@ CONF
 fi
 
 systemctl daemon-reload
-systemctl enable --now douglas-agent
-systemctl restart douglas-agent
+# The socket first: a door cannot be made while the service behind it is up,
+# and the agent takes it over when it starts.
+systemctl stop douglas-agent 2>/dev/null || true
+systemctl enable douglas-agent-vitals.socket >/dev/null 2>&1
+systemctl restart douglas-agent-vitals.socket
+systemctl enable douglas-agent >/dev/null 2>&1
+systemctl start douglas-agent
+voice=/etc/douglas/voice.env
+if [ -f "$voice" ] && ! grep -q '^VITALS_SOCKET=' "$voice"; then
+    printf "\n# This machine's vitals, from douglas-agent: how Douglas knows how his own machine is doing.\nVITALS_SOCKET=/run/douglas-agent/vitals.sock\n" >> "$voice"
+    echo "VITALS_SOCKET is in $voice now: restart douglas-voice when nobody is talking to him."
+fi
 sleep 1
 curl -fsS "http://127.0.0.1:${DOUGLAS_AGENT_PORT:-9111}/health" >/dev/null \
     && echo "douglas-agent up on :9111" \
     || { echo "douglas-agent did not answer - journalctl -u douglas-agent"; exit 1; }
+# The vitals, asked for the way the voice pipeline asks: as its user.
+if id douglas >/dev/null 2>&1; then
+    runuser -u douglas -- python3 -I -c '
+import json, socket
+s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect("/run/douglas-agent/vitals.sock")
+v = json.loads(s.makefile().readline())
+assert "transcript" not in v and "host" in v
+print("the vitals socket answers: %d services read, %d model files on the disk" % (len(v.get("units") or []), len(v.get("models") or [])))' \
+        || { echo "the vitals socket did not answer - journalctl -u douglas-agent"; exit 1; }
+fi

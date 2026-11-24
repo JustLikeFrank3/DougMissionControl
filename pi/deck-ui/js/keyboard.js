@@ -22,6 +22,7 @@ var LABEL = { BKSP: '⌫', SHIFT: '⇧', SPACE: 'space', CLOSE: 'CLOSE', SEND: '
 var MAX = 2000;
 
 var root = null, text = '', shift = false, onSend = null, busy = false;
+var draft = null;       // the question set aside while something else is typed
 
 function build() {
   root = $('kbd');
@@ -111,9 +112,17 @@ function send() {
  *   title  — what it is for, shown in its header
  *   send   — function(text) -> Promise resolving to null on success, or an
  *            error message to show (the text is kept so it can be resent)
+ *   start  — text to begin from, for putting something right instead of
+ *            asking something new. A question half typed is set aside and
+ *            is there again the next time the keyboard opens without one.
  */
-export function openKeyboard(title, send) {
+export function openKeyboard(title, send, start) {
   if (!root) build();
+  if (draft !== null) { text = draft; draft = null; }
+  if (typeof start === 'string') { draft = text; text = start.slice(0, MAX); }
+  // What the empty box invites: a question, unless it was opened for something else.
+  $('kbd-text').dataset.hint = typeof start === 'string' ? 'type here'
+    : 'type your question for Douglas';
   onSend = send;
   shift = false;
   busy = false;
@@ -127,6 +136,7 @@ export function closeKeyboard() { close(); }
 
 function close() {
   if (root) root.hidden = true;
+  if (draft !== null) { text = draft; draft = null; }
 }
 
 export function keyboardOpen() { return !!root && !root.hidden; }

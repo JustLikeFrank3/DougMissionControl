@@ -18,9 +18,13 @@
 import { $, rows, post, getJSON } from './ui.js';
 import { openKeyboard, closeKeyboard, keyboardOpen } from './keyboard.js';
 import { fmtAgo } from './format.js';
+import { memoryView, didView } from './memory.js';
+import { servicesLine, diskPct } from './fleet.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
+var MEM_MS = 20000;                       // his memory moves by the minute, not the second
+var tab = 'convo', memory = null, did = null, memTimer = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -51,11 +55,39 @@ export function paintDouglasTile(dgl) {
 
 export function douglasPoll(on) {
   if (!on && keyboardOpen()) closeKeyboard();     // leaving the surface
+  memoryPoll(on);
   var want = !on ? 0 : pressed || isBusy(last) ? POLL_FAST_MS : POLL_MS;
   if (want === timerMs) return;
   if (timer) { clearInterval(timer); timer = null; }
   timerMs = want;
   if (want) { tick(); timer = setInterval(tick, want); }
+}
+
+/* What he remembers and what he did are read only while their tab shows;
+   the count beside MEMORY is kept while the surface does. */
+function tickMemory() {
+  if (!memory) return;
+  if (tab === 'mem') memory.refresh();
+  else memory.glance();
+  if (tab === 'did') did.refresh();
+}
+
+function memoryPoll(on) {
+  if (!on === !memTimer) return;
+  if (memTimer) { clearInterval(memTimer); memTimer = null; }
+  if (on) { tickMemory(); memTimer = setInterval(tickMemory, MEM_MS); }
+}
+
+function showTab(name) {
+  tab = name;
+  [].forEach.call($('dgl-tabs').children, function (b) {
+    b.classList.toggle('on', b.dataset.tab === name);
+  });
+  $('dgl-log').hidden = $('dgl-askbar').hidden = name !== 'convo';
+  $('dgl-mem').hidden = name !== 'mem';
+  $('dgl-did').hidden = name !== 'did';
+  if (name === 'convo') { var log = $('dgl-log'); log.scrollTop = log.scrollHeight; }
+  tickMemory();
 }
 
 function isBusy(d) {
@@ -221,12 +253,24 @@ function paintSys(d) {
     }
   });
 
+  // His services and his disk, as his own machine reads them: the same
+  // reading he is given when asked how he is. An agent from before it could
+  // tell has no such field, and the row is a dash, not "none".
+  var svc = d && 'units' in d ? servicesLine(d.units) : null;
+  var disk = d && d.disks && d.disks[0], full = diskPct(disk);
   rows($('dgl-sys-rows'), [
     ['requests', d ? (llm.processing != null ? llm.processing + ' active' : '—') +
-      (llm.deferred ? ' · ' + llm.deferred + ' queued' : '') : '—'],
+      (llm.deferred ? ' · ' + llm.deferred + ' queued' : '') +
+      (llm.slots ? ' · ' + (llm.busy_slots != null ? llm.busy_slots + ' of ' : '') + llm.slots + ' slots' : '')
+      : '—'],
     ['context', d && llm.ctx ? llm.ctx.toLocaleString() + ' tokens' : '—'],
+    ['services', svc && svc.text ? svc.text : '—'],
+    ['disk', full != null ? full + ' % of ' + Math.round(gb(disk.total_bytes)) + ' GB used' : '—'],
     ['up', d && host.uptime_s ? fmtAgo(Date.now() / 1000 - host.uptime_s).replace(/ ago$/, '') : '—'],
   ]);
+  // Colour is state: a service that should be up and is not is a fault.
+  var srow = $('dgl-sys-rows').children[2];
+  if (srow) srow.classList.toggle('bad', !!(svc && svc.bad));
 }
 
 /* ── push-to-talk ─────────────────────────────────────────────────────── */
@@ -234,6 +278,17 @@ function paintSys(d) {
 export function wireDouglas() {
   var ptt = $('dgl-ptt');
   if (!ptt) return;
+
+  // The panel is the owner's own screen, on the Pi itself: what it asks of
+  // his memory needs no token. Typing goes through the on-screen keyboard.
+  memory = memoryView($('dgl-mem'), {
+    get: getJSON, post: post, count: $('dgl-mem-count'),
+    type: function (title, text, save) { openKeyboard(title, save, text); },
+  });
+  did = didView($('dgl-did'), { get: getJSON, rows: 40 });
+  [].forEach.call($('dgl-tabs').children, function (b) {
+    b.addEventListener('click', function () { showTab(b.dataset.tab); });
+  });
 
   function note(msg, sticky) {
     var n = $('dgl-note');

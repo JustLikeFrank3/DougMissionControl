@@ -163,6 +163,61 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .ptt[data-state="speaking"] { border-color: var(--cy); }
 .ptt[data-state="speaking"] small { color: var(--cy); }
 
+/* ── what he remembers ── */
+/* The card's head is its switch: a whole row to tap, nothing to aim at. */
+.head.tap { width: 100%; padding: 0; background: none; border: 0; cursor: pointer; text-align: left; }
+.mem-body, .memv { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sub2 { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--ln); }
+.mem-find input { width: 100%; padding: 12px; background: #0f151e; color: var(--fg);
+                  border: 1px solid var(--ln); font: inherit; font-size: 16px; border-radius: 0;
+                  -webkit-appearance: none; appearance: none; }
+.mem-find input:focus { outline: none; border-color: var(--acc); }
+.mem-bar { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mem-states, .mem-kinds { display: flex; gap: 6px; min-width: 0; }
+/* The kinds are one row that slides under a thumb, out to the card's edges:
+   wrapped, nine of them put the first memory a screen away. */
+.mem-kinds { margin: 0 -14px; padding: 0 14px; overflow-x: auto; scrollbar-width: none; }
+.mem-kinds::-webkit-scrollbar { display: none; }
+.mem-kinds:empty { display: none; }
+.mem-chip { flex: none; min-height: 36px; padding: 0 10px; background: #0f151e;
+            border: 1px solid var(--ln); color: var(--mut); font-size: 11px;
+            letter-spacing: .12em; cursor: pointer; white-space: nowrap; }
+.mem-chip.on { color: var(--cy); border-color: var(--cy); }
+.mem-list { display: flex; flex-direction: column; }
+.mem { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; min-width: 0;
+       border-top: 1px solid var(--ln); cursor: pointer; }
+.mem:first-child { border-top: 0; }
+.mem.open { margin: 0 -14px; padding: 10px 14px; background: #0f151e; }
+.mem-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mem-k { flex: none; font-weight: 400; font-size: 10px; letter-spacing: .14em; color: var(--acc); }
+.mem-s { min-width: 0; font-size: 12px; color: var(--mut); overflow: hidden;
+         text-overflow: ellipsis; white-space: nowrap; }
+.mem-t { overflow-wrap: anywhere; }
+.mem.done .mem-t { color: var(--mut); text-decoration: line-through; }
+.mem-p, .mem-h { font-size: 11px; color: var(--mut); overflow-wrap: anywhere; }
+.mem-h { padding-left: 8px; border-left: 1px solid var(--ln); }
+.mem-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.mem-acts button { position: relative; overflow: hidden; flex: 1; min-height: 44px; padding: 0 10px;
+                   background: var(--pan); border: 1px solid var(--ln); font-size: 12px;
+                   letter-spacing: .12em; cursor: pointer; white-space: nowrap; }
+.mem-acts button span { position: relative; z-index: 1; }
+.mem-acts .go { color: var(--acc); border-color: var(--acc); }
+.mem-acts .warn { color: var(--am); }
+/* The one thing here that cannot be taken back is held, not tapped. */
+.mem-acts .bad { color: var(--rd); border-color: var(--rd); touch-action: none;
+                 user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.mem-acts .bad .hold { background: var(--rd); }
+.mem-edit { width: 100%; padding: 10px; background: var(--bg); color: var(--fg);
+            border: 1px solid var(--acc); font: inherit; font-size: 16px; border-radius: 0;
+            resize: vertical; }
+.mem-edit:focus { outline: none; }
+.mem-more { min-height: 44px; background: none; border: 1px solid var(--ln); color: var(--cy);
+            font-size: 12px; letter-spacing: .14em; cursor: pointer; }
+.mem-note { font-size: 12px; color: var(--mut); }
+.mem-note:empty { display: none; }
+.mem-note.bad { color: var(--rd); }
+.mem-empty { padding: 6px 0; font-size: 13px; color: var(--mut); }
+
 /* ── now playing ── */
 .np { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
 .art { width: 64px; height: 64px; object-fit: cover; flex: none; }
@@ -189,6 +244,11 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .host b { font-weight: 400; letter-spacing: .1em; flex: none; }
 .host span { margin-left: auto; color: var(--mut); font-size: 13px; text-align: right;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* What the machine reports about itself, on a line of its own under its name. */
+.host { flex-wrap: wrap; row-gap: 2px; }
+.host em { flex-basis: 100%; padding-left: 19px; font-style: normal; font-size: 11px;
+           color: var(--mut); overflow-wrap: anywhere; }
+.host em.bad { color: var(--rd); }
 
 /* ── events ── */
 .events { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
