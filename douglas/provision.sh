@@ -23,6 +23,9 @@
 #                         once its model is on disk)
 #     douglas-voice       DougVoice's pipeline, PTT on :10800
 #     douglas-agent       the deck's window into all of it, :9111 (./setup.sh)
+#     douglas-work, douglas-job   his workshop: repositories he may clone, read
+#                         and have a job done on, the job fenced in
+#                         (./work-setup.sh; needs Linux 6.7 for the fence)
 #
 # Idempotent: every config file under /etc/douglas is written only if it is
 # missing, so re-running upgrades code and units and keeps your settings.
@@ -420,6 +423,12 @@ TRANSCRIPT_FILE=/var/lib/douglas/transcript.jsonl
 CONF
 fi
 chown root:douglas "$env" && chmod 640 "$env"
+
+# ── the workshop ─────────────────────────────────────────────────────────
+# Before the units below are restarted: it adds WORK_SOCKET to voice.env,
+# which is how the voice pipeline learns that it has one.
+step "douglas-work"
+"$here/work-setup.sh" || warn "the workshop was not set up - he has no repo tool (./work-setup.sh says why)"
 
 # ── units ────────────────────────────────────────────────────────────────
 step "systemd units"

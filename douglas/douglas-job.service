@@ -1,0 +1,69 @@
+[Unit]
+Description=douglas-job - one job on a copy of a repository, fenced in (douglas-work's runner)
+After=douglas-work.service douglas-job-fence.service llama-server.service
+# Without the firewall rule for its user it does not run at all.
+Requires=douglas-job-fence.service
+StartLimitIntervalSec=0
+
+[Service]
+User=douglas-job
+Group=douglas-job
+SupplementaryGroups=douglas-spool
+UMask=0007
+Environment=WORK_JOBS=/var/lib/douglas-spool WORK_JOB_DIR=/var/lib/douglas-job HOME=/var/lib/douglas-job
+EnvironmentFile=-/etc/douglas/job.env
+ExecStart=/usr/bin/python3 /opt/douglas/douglas-work.py runner
+StateDirectory=douglas-job
+StateDirectoryMode=0700
+# One job a run: when it is over the runner exits, and the unit ending
+# clears away whatever a command left running. Then it waits for the next.
+Restart=always
+RestartSec=2
+KillMode=control-group
+
+# The fence, from the outside in (douglas-work.py has the rest). A job runs
+# commands the model chooses, over code somebody else may have written.
+#
+# Its own user, which owns nothing and can become nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+# A file system with nothing of the owner's in it: the system's programs to
+# read, and of everything that holds state (/var, /run, /srv, /opt, /home)
+# only its own work trees, the directory it shares with the manager, and its
+# own program.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+TemporaryFileSystem=/var:ro /run:ro /srv:ro /opt:ro /mnt:ro /media:ro /boot:ro
+BindPaths=/var/lib/douglas-job /var/lib/douglas-spool
+BindReadOnlyPaths=/opt/douglas/douglas-work.py
+InaccessiblePaths=/etc/douglas -/etc/flightsim -/etc/ssh -/etc/NetworkManager -/etc/netplan -/etc/sudoers.d
+# No address but this machine's own, and (douglas-job-fence) no port there
+# but the model server's.
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+# Room to work, and not all of the machine's: the voice comes first.
+MemoryMax=16G
+TasksMax=512
+CPUQuota=800%
+CPUWeight=20
+Nice=10
+IOWeight=20
+LimitFSIZE=2G
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

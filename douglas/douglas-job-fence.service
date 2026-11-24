@@ -1,0 +1,12 @@
+[Unit]
+Description=douglas-job-fence - what runs as douglas-job reaches the model server on this machine and nothing else
+Before=douglas-job.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/douglas/job-fence.nft
+ExecStop=/usr/sbin/nft delete table inet douglas_job
+
+[Install]
+WantedBy=multi-user.target

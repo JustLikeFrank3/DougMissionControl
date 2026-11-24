@@ -1,0 +1,36 @@
+[Unit]
+Description=douglas-work - repositories Douglas may clone, read and have worked on (the manager)
+After=network-online.target
+Wants=network-online.target
+Requires=douglas-work.socket
+
+[Service]
+User=douglas-work
+Group=douglas-work
+# The directory it passes files through with the runner, and nothing else of the runner's.
+SupplementaryGroups=douglas-spool
+Environment=WORK_DIR=/var/lib/douglas-work WORK_JOBS=/var/lib/douglas-spool WORK_SOCKET=/run/douglas-work.sock
+EnvironmentFile=/etc/douglas/work.env
+ExecStart=/usr/bin/python3 /opt/douglas/douglas-work.py manager
+StateDirectory=douglas-work
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/douglas-spool
+# It holds the GitHub token and the network, and runs nothing a repository
+# brings along: git only, on bare clones, with hooks off. What Douglas's
+# other services keep is none of its business.
+InaccessiblePaths=/etc/douglas /var/lib/douglas -/srv/models
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+MemoryMax=4G
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
