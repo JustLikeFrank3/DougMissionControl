@@ -1307,6 +1307,10 @@ whether it worked and how long it took. Never the words.
   weather lookup in it was gone through on its own six minutes after it went
   quiet, in 12 seconds of the model's time: the three things said were kept as
   said, a summary as worked out, and nothing of the forecast.
+- Switched off with its installer and on again: in between he ran as he
+  had before he had a memory (no door, no group on either unit, no setting,
+  "memory off" in the pipeline's first line, and an ordinary answer), and
+  afterwards the database was as it had been and sound.
 - The question that routes a message: 72 of 72 right on messages that do ask
   something of the memory, each asked twice, at 0.6 s a question; of 32 that do
   not, 27 right, and the five it took for memory requests are ones a person

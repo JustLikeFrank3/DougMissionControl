@@ -84,6 +84,8 @@ chown root:douglas-memory "$env" && chmod 640 "$env"
 for u in $units; do
     install -m 644 "$here/$u" "/etc/systemd/system/$u"
 done
+# The database is the service's alone to read, whatever made it.
+chmod -f go-rwx /var/lib/douglas-memory/memory.db* 2>/dev/null || true
 # Each of the two callers is given its group, and only its group: the
 # pipeline's unit may open Douglas's door, the agent's the owner's.
 for pair in douglas-voice:douglas-memory-assistant douglas-agent:douglas-memory-owner; do

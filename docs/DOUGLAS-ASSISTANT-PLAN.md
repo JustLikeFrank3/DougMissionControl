@@ -194,43 +194,118 @@ Douglas itself against eighteen routes.
 
 ### Phase 3: proactive notices (designed)
 
-A watcher in deck-api, where the poll already is: rules over state
-*changes* (a machine gone, a temperature over a line for a time, a unit
-failed, disk under a floor, a task due), each with a severity, a key for
-deduplication and a cool-down. No model is asked anything to raise a
-notice; one is asked only to word a digest when the owner wants one. Notices
-go to the panel and the phone, to Douglas as news for the next turn, and
-(by preference, per severity) aloud. Kept on Douglas, not on the Pi.
+A watcher where the readings already are, and no model in it. deck-api's
+poll turns each cycle into a state; the watcher compares it with the last
+one and applies rules to what *changed*. Douglas's agent does the same for
+his own machine, so that the Pi being down is not the end of noticing. A
+rule is data, not code:
+
+| Rule | Raised when | Severity | One notice per | Quiet for |
+|---|---|---|---|---|
+| a machine gone | it has not answered for 3 cycles, and it is one that should be on (not the laptop, not the workstation when it was shut down from the deck) | warning; critical for Douglas and the Pi | machine | until it is back, then one "back" notice |
+| too hot | over its line for 2 minutes (a line per machine, in the settings) | warning; critical 10 degrees further | machine | 30 minutes, unless it gets worse |
+| a service down | a unit that should run is failed, or has been restarted 3 times in 10 minutes | critical for the model server, the pipeline, the memory, deck-api; warning for the rest | unit | until it is up for 5 minutes |
+| a deployment that did not take | the checksum of an installed program changed and its unit is not up a minute later | critical | unit | until it is up |
+| disk nearly full | under 10% free; critical under 5% | as given | file system | a day, unless it crosses the next line |
+| something due | a task in his memory whose day has come | information | task | a day; gone when marked done |
+
+Each notice is a row: when, rule, key (what "one notice per" names),
+severity, the reading that raised it, and when it was acknowledged. The key
+is what deduplicates: a notice that is already open for a key is updated,
+not raised again, and a reading that flaps inside its quiet time raises
+nothing. Notices are kept in the memory service's database, which is where
+durable things on Douglas live, in a table of their own with the owner's
+door on it; the Pi keeps nothing, as before, and hands what it raises to
+Douglas's agent.
+
+Where a notice goes is the owner's preference, by severity, set in Mission
+Control and kept with the notices: on the panel and the phone always; aloud
+through DougVoice for critical, within the hours it may speak; and to
+Douglas as news for his next turn, so that "anything I should know?" has an
+answer. The model is asked nothing to raise a notice. It is asked one
+thing, and only when the owner asks for it: to word the day's notices as a
+sentence or two.
+
+*Depends on:* phase 2's readings; a history of readings is not needed (a
+rule keeps the two or three it compares). *Risks:* noise, which is what
+ends anyone's trust in a notice (met by keys, quiet times, "should be on",
+and a week of dry running that only writes what it would have said); a
+watcher that is itself down (the Pi and Douglas each watch the other).
 
 *Accepted when:* pulling a machine's plug raises one notice, not one per
-poll; a flapping reading raises none inside its cool-down; quiet hours and
-per-severity preferences hold; a day of normal running raises nothing.
+poll; a flapping reading raises none inside its quiet time; quiet hours and
+per-severity preferences hold; a week of normal running raises nothing.
 
 ### Phase 4: tasks, approvals, capability switches (designed)
 
-What is read back today and answered with a yes becomes an approval that
-also shows in Mission Control, with what it would do and until when. Tasks
-he has taken on are listed with their state. Each tool gets a switch the
-owner can turn off from the panel; the switch file is the owner's to write
-and the pipeline's only to read.
+Three things that today live inside a conversation and belong on a screen.
+
+*Approvals.* What is read back and answered with a yes (a push, a change
+to the owner's records, forgetting) becomes a row as well: what it would
+do, in the words that were read back; who asked, from where; and until
+when it can be answered. Mission Control shows the open ones, and a hold on
+APPROVE or a tap on REFUSE answers one, from the owner's door. The yes in
+the conversation still works, and is the same row answered another way.
+The rule that does not change: the program acts on a yes to exactly the
+text that was read back, and nothing the model says can stand in for one.
+
+*Tasks.* The jobs he has under way in the workshop and the tasks in his
+memory, in one list: what, since when, where it stands, what it is waiting
+for.
+
+*Capability switches.* One file, `/etc/douglas/capabilities`, a line a
+tool: on or off. The pipeline reads it at the start of every turn and
+offers only what is on; it is root's to write and the pipeline's unit
+cannot write it, so no conversation can turn anything on. Mission Control
+changes it through a helper that does that one thing (a socket-activated
+unit that takes "tool, on or off" from the owner's door and nothing else),
+with a hold to turn something on and a tap to turn it off. Until then a
+capability is revoked by taking its line out of `voice.env` and restarting
+the pipeline, which the README says for each.
 
 *Accepted when:* an approval can be given or refused from the panel and is
 void after its time; a tool switched off is not offered within one turn and
-cannot be switched on from a conversation.
+cannot be switched on from a conversation; the record of what he did shows
+who approved what, and from where.
 
 ### Phase 5: one Douglas on every interface (designed)
 
-The ChatGPT connector and Open WebUI go through the pipeline, so that they
-share instructions, tools and memory. An MCP face on the memory's and the
-fleet's read operations for desktop clients.
+The ChatGPT connector and Open WebUI go through the pipeline's `/say`, so
+that they get his instructions, his tools and his memory instead of the
+bare model. For other programs on the owner's machines, an MCP server on
+Douglas with read operations only: recall from his memory (the assistant's
+door, so the same limits), the fleet view (the read token), his vitals. It
+gets an identity of its own, and nothing it offers changes anything.
+
+*Accepted when:* the same question gets the same remembered answer from the
+phone, the panel, the voice satellite, Open WebUI and the connector, and a
+note made on one is recalled on the others.
 
 ### Phase 6: the house (designed, nothing granted)
 
-Awareness first: what devices exist and their state, read from what already
-knows (the emulated devices on the Pi are the starting list). Control only
-after that has proved itself, device by device, each behind an approval, and
-never through a general "run this" tool. No device control is part of
-phases 1 to 5.
+In three steps, each proved before the next, and the last one never
+without a yes.
+
+1. *See.* A `house` reading beside `fleet`: which devices there are, what
+   each is, and its state, from whatever already knows. The emulated
+   switches on the Pi are the start; a hub, if there is one, is read
+   through its own read-only token. A reading, with the same rules as the
+   fleet's: its age, what is not reported, no guessing.
+2. *Suggest.* He may say "the porch light has been on since yesterday";
+   the owner acts. Notices from phase 3 can carry such things.
+3. *Act, one device at a time.* A device is put on a list by the owner in
+   Mission Control, with what may be done to it (on, off; not "anything").
+   A request to act is an approval from phase 4: read back, answered with a
+   yes or from the panel, void after a minute. What is never on the list:
+   locks, alarms, garage doors, anything that heats, and the workstation's
+   power. The helper that acts is a unit of its own that knows only the
+   listed devices and the listed verbs: there is no general "run this" tool
+   and no path from a conversation to one.
+
+*Accepted when (step 1):* he answers "is the porch light on" from a
+reading and says so when the hub does not answer. Steps 2 and 3 get their
+own criteria when they are asked for. No device control is part of phases
+1 to 5.
 
 ## 4. What needs the owner
 
@@ -252,7 +327,9 @@ Each phase is additive and has an off switch. `douglas/memory-setup.sh off`
 stops and disables the memory service and takes its settings and the two
 units' groups away again; the pipeline then runs exactly as before (it
 treats a missing memory as no memory). The database stays where it is, and
-`douglas-memory.py backup` takes a copy of it at any time.
+`douglas-memory.py backup` takes a copy of it at any time. (Off and on
+again was run on Douglas: he ran as before in between, and the database
+was as it had been.)
 `pi/fleet-read.sh off` on the Pi removes the read token, which closes
 `/api/fleet` to whoever holds it; taking `FLEET_URL` and `FLEET_TOKEN` out
 of `voice.env` takes the `fleet` tool away, and `VITALS_SOCKET` the `self`

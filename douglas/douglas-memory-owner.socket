@@ -13,6 +13,8 @@ DirectoryMode=0755
 FileDescriptorName=owner
 Service=douglas-memory.service
 Accept=no
+# Switched off, the door is taken away, not left as a file nobody answers at.
+RemoveOnStop=yes
 
 [Install]
 WantedBy=sockets.target

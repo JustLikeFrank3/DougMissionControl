@@ -3267,7 +3267,9 @@ def audit(kind: str, name: str, action: str = "", ok: bool = True, ms: float = 0
     if not MEMORY_SOCKET:
         return
     via = str((getattr(TURN, "ctx", None) or {}).get("via") or "")
-    threading.Thread(target=memory, daemon=True, args=("log", 1.0), kwargs={
+    # Off the turn's own thread, so it may wait for a slow disk: a line that
+    # gives up after a second is a call missing from the record.
+    threading.Thread(target=memory, daemon=True, args=("log", 5.0), kwargs={
         "kind": kind, "name": name, "action": str(action)[:40], "ok": bool(ok), "ms": int(ms),
         "via": via, "detail": str(detail)[:120]}).start()
 
