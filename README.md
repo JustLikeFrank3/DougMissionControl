@@ -933,34 +933,59 @@ pictures. So the part that runs them holds nothing:
   token. It runs nothing a repository brings: git, on bare clones, with
   hooks off. What comes back from a job it reads as data: a report that is a
   link is not followed, and a result is taken only if it is a git bundle of
-  the job's own branch, built on the code that was handed over. It is also
-  the only way a job has to the model: what the runner would ask, it writes
-  down, and the manager asks, with the list of tools its own.
+  the job's own branch, built on the code that was handed over. A job is
+  what the manager wrote down for itself when it started one: a directory
+  that turns up among the shared ones is no job. It is also the only way a
+  job has to the model: what the runner would ask, it writes down, and the
+  manager asks, with the list of tools its own and the conversation rebuilt
+  from its parts, words only (a model that sees would go and fetch a
+  picture's address). A job's time is the manager's to keep as well: past
+  it the job is told to stop, and one that does not is ended.
 - `douglas-job`, the runner, is another user in a unit with nothing of the
   owner's in it: an empty `/var`, `/run`, `/srv` and `/opt` but for its own
   work trees and the one directory the two share, `/etc/douglas` and the
   home directories shut, the system read-only, and a network of its own with
   nothing on it. There is a loopback that only the job's own programs are
   on, so a test can start a server and talk to it; there is no other
-  machine, and nothing of this one, the model server included.
+  machine, and nothing of this one, the model server included. It has no
+  home, its Python reads nothing from one (`-I`), its shared memory is its
+  own, and its work trees are in a private `/var/tmp` that systemd removes
+  each time the unit ends.
 - Every command a job runs is started through Landlock
-  (`douglas-work.py fence`): no file written outside the job's own
-  directory, no signal to anything outside, and, wherever the network is
-  not the job's own, no TCP at all. A command cannot take that off, nor can
-  what it starts.
-- The file tools the model is given open every path with
+  (`douglas-work.py fence`): it may write the work tree, a home and a
+  temporary directory of the job's own, and not the directory those are in,
+  so the tree cannot be moved aside and a link put in its place. No signal
+  to anything outside, and, wherever the network is not the job's own, no
+  TCP at all. A command cannot take that off, nor can what it starts.
+- The file tools the model is given go by a handle on the work tree taken
+  before any command has run, and open every path under it with
   `openat2(RESOLVE_BENEATH)`: a link planted in the tree leads nowhere
   outside it.
 - One job a run. When it is over the runner exits and systemd, ending the
-  unit, clears away whatever a command left running.
+  unit, kills whatever a command left running, at once.
+- A job is started, and a repository cloned, only when the person asks for
+  it in their own message and this program has seen that. A call he thinks
+  up himself is refused: what he has just read on a web page or in a
+  repository may be telling him to.
 
 Tried from inside the unit on Douglas, as its user: the settings, the chat
 log, the pictures, the clones, the journal and the home directories could
 not be read, and nothing connected: not the model server, not this
 machine's other services, not the home network, not the internet. A server
 started inside a job could be reached from inside it and from nowhere else.
-The kernel has to be able to do this (Landlock 4, Linux 6.7): on one that
-cannot, the runner does not start.
+The kernel has to be able to do this (Landlock 6, Linux 6.12): on one that
+cannot, or in a unit that did not get a network of its own, the runner runs
+no job.
+
+An independent review of all this, done after it was built, found a way
+past the inner fence, which the tests now hold shut: a command could move
+the work tree aside and put a link in its place, and the file tools, which
+opened the tree by name, would then have written wherever the link led,
+into the runner's own home, where Python would have run it at the next
+start. It could not have reached the owner's files or the network from
+there, but it would have stayed. The tree is opened once now, the
+directory it is in is not a command's to write, and the runner has no
+home.
 
 *What it cannot do.* Nothing can be installed in a job: there is no network
 to fetch it with. A job runs the tests that run with what the machine has
@@ -1415,8 +1440,8 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job watched to its end and the line the person is then shown, a workshop that is not answering, and none of the names or words in the journal |
-| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). Where the kernel has no Landlock 4 the job checks are left out, and the run says so |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job or a clone he thinks of himself refused, a job watched to its end and the line the person is then shown (with nothing in it that could pass for a note of the program's), a workshop that is not answering or still at it, and none of the names or words in the journal |
+| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). a tree moved aside for a link; a job nobody started, a report of the wrong kinds of thing and a question with a picture's address in it, none of them taken up; a job past its time ended by the manager; a model server that gives out with the work kept. Where the kernel has no Landlock 6 the job checks are left out, and the run says so |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 
@@ -1513,8 +1538,8 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   On Douglas: `systemctl status douglas-work douglas-job`
   and `journalctl -u douglas-work -u douglas-job -o cat -n 40` (which names
   the repository and how a job ended, never what was asked). A runner that
-  exits straight away with "cannot fence a job in" is on a kernel without
-  Landlock 4 (Linux 6.7): nothing runs unfenced, so nothing runs. "He has no repo tool" after an install means `douglas-voice` has
+  that says "cannot fence a job in" is on a kernel without Landlock 6
+  (Linux 6.12): nothing runs unfenced, so nothing runs. "He has no repo tool" after an install means `douglas-voice` has
   not been restarted since `WORK_SOCKET` went into `voice.env`. To ask the
   workshop something by hand, the way the pipeline does:
   `echo '{"op": "repos"}' | sudo -u douglas nc -U -N /run/douglas-work.sock`.

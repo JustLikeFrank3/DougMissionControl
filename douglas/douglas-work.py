@@ -9,9 +9,10 @@ One file, three programs, each started its own way:
     douglas-work.py runner       as douglas-job, fenced in. Does one job: it
                                  drives the model server through a small loop
                                  of tools on a copy of the code, then stops.
-    douglas-work.py fence ROOT -- CMD ...
+    douglas-work.py fence DIR ... -- CMD ...
                                  What the runner starts every command through:
-                                 it shuts itself in, then becomes CMD.
+                                 it shuts itself in to those directories, then
+                                 becomes CMD.
 
 Why three. A job runs commands the model chooses, on the machine that holds
 the owner's keys, chat log and pictures, over code somebody else may have
@@ -40,8 +41,11 @@ The fence, from the outside in:
      job's own directory can be written, no signal sent out, and, wherever
      the network is not the job's own, no TCP at all. A command cannot take
      it off, and neither can anything it starts.
-  3. The runner's own file tools open paths with openat2(RESOLVE_BENEATH),
-     so a link planted in the tree leads nowhere outside it.
+  3. The runner's own file tools go by a handle on the work tree taken
+     before any command has run, and open paths under it with
+     openat2(RESOLVE_BENEATH): a link planted in the tree leads nowhere
+     outside it, and the tree cannot be swapped for a link, because what a
+     command may write is the tree and not the directory it is in.
 One job a run: the runner exits when the job is over, and systemd, ending the
 unit, clears away whatever a command left running.
 
@@ -116,6 +120,8 @@ SLOT = E("WORK_SLOT")
 LLM_URL = E("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 LLM_MODEL = E("LLM_MODEL", "douglas")
 DISK_MB = int(E("WORK_DISK_MB", "4096"))            # what one job's work tree may grow to
+DISK_SLACK_MB = 8192                                # room for other programs to write meanwhile
+GRACE = int(E("WORK_GRACE", "300"))                 # seconds past its time before a job is ended for it
 LLM_TOKENS = int(E("WORK_MAX_TOKENS", "3000"))      # one step's reply, at most
 CONTEXT_MAX = int(E("WORK_CONTEXT_MAX", "48000"))   # tokens of conversation before a job wraps up
 GIT = E("WORK_GIT", "/usr/bin/git")
@@ -123,6 +129,7 @@ GIT = E("WORK_GIT", "/usr/bin/git")
 REPOS = os.path.join(WORK_DIR, "repos")
 JOBS = E("WORK_JOBS", os.path.join(WORK_DIR, "jobs"))     # the one directory both sides see
 DONE = os.path.join(WORK_DIR, "done")       # what became of each job; the manager's alone
+LIVE = os.path.join(WORK_DIR, "live")       # the jobs under way, as the manager itself wrote them down
 HOLD = os.path.join(JOBS, "hold")
 
 RESULT_MAX = 3400           # characters of one answer: the pipeline hands Douglas 4,000 a lookup
@@ -204,6 +211,9 @@ FS_REFER, FS_TRUNCATE, FS_IOCTL_DEV = 1 << 13, 1 << 14, 1 << 15
 FS_FIRST = (1 << 13) - 1                    # everything the first Landlock knew
 NET_BIND_TCP, NET_CONNECT_TCP = 1 << 0, 1 << 1
 SCOPE_ABSTRACT_UNIX, SCOPE_SIGNAL = 1 << 0, 1 << 1
+# The oldest Landlock a job is run under: the first that keeps a command
+# from signalling what is outside its fence (the runner, for one).
+LANDLOCK_NEEDED = 6
 # What under /etc a command has no business reading. The unit hides the
 # owner's own (/etc/douglas) as well; this is the same wall a second time.
 ETC_NOT = {"douglas", "flightsim", "dougvoice", "shadow", "shadow-", "gshadow", "gshadow-",
@@ -240,23 +250,25 @@ def alone() -> bool:
         return False
 
 
-def fence_in(root: str, loopback: bool = False) -> None:
+def fence_in(roots: list[str], loopback: bool = False) -> None:
     """Shut this process in, for good, and everything it starts after: it
-    may read the system's programs and libraries, do as it likes inside
-    `root` and the temporary directory, and nothing else. No TCP connection
-    out and none in (unless `loopback`: the caller has seen that the network
-    has nothing on it but this job); no signal to, and no abstract socket
-    of, anything outside. Raises if any part of that cannot be had: half a
-    fence is not put up."""
+    may read the system's programs and libraries, do as it likes inside the
+    directories in `roots` and the temporary directory, and nothing else.
+    Not the directory those are in: what holds a job's work tree cannot be
+    renamed or replaced from inside. No TCP connection out and none in
+    (unless `loopback`: the caller has seen that the network has nothing on
+    it but this job); no signal to, and no abstract socket of, anything
+    outside. Raises if any part of that cannot be had: half a fence is not
+    put up."""
     abi = landlock_abi()
-    if abi < 4:
-        raise OSError(f"this kernel cannot refuse network connections to a program (Landlock {abi})")
-    fs = FS_FIRST | FS_REFER | FS_TRUNCATE | (FS_IOCTL_DEV if abi >= 5 else 0)
+    if abi < LANDLOCK_NEEDED:
+        raise OSError(f"this kernel cannot shut a program in as far as a job needs (it has "
+                      f"Landlock {abi}, and {LANDLOCK_NEEDED} is needed: Linux 6.12)")
+    fs = FS_FIRST | FS_REFER | FS_TRUNCATE | FS_IOCTL_DEV
     attr = RulesetAttr(fs, 0 if loopback else NET_BIND_TCP | NET_CONNECT_TCP,
-                       (SCOPE_ABSTRACT_UNIX | SCOPE_SIGNAL) if abi >= 6 else 0)
+                       SCOPE_ABSTRACT_UNIX | SCOPE_SIGNAL)
     ruleset = int(LIBC.syscall(ctypes.c_long(444), ctypes.byref(attr),
-                               ctypes.c_size_t(ctypes.sizeof(attr) if abi >= 6 else 16),
-                               ctypes.c_uint32(0)))
+                               ctypes.c_size_t(ctypes.sizeof(attr)), ctypes.c_uint32(0)))
     if ruleset < 0:
         raise OSError(ctypes.get_errno(), "landlock_create_ruleset")
     of_a_file = FS_EXECUTE | FS_WRITE_FILE | FS_READ_FILE | FS_TRUNCATE | FS_IOCTL_DEV
@@ -290,9 +302,15 @@ def fence_in(root: str, loopback: bool = False) -> None:
         pass
     for path in ("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"):
         allow(path, FS_READ_FILE | FS_WRITE_FILE | FS_IOCTL_DEV)
+    # The shared temporary directories, unless one of this job's own
+    # directories is inside one: then granting it whole would hand over the
+    # directory the work tree is in, and the job has a temporary directory
+    # of its own.
     for path in ("/dev/shm", "/tmp"):
-        allow(path, fs)
-    allow(root, fs, must=True)
+        if not any(r == path or r.startswith(path + "/") for r in roots):
+            allow(path, fs)
+    for root in roots:
+        allow(root, fs, must=True)
     if LIBC.prctl(ctypes.c_int(38), ctypes.c_ulong(1), ctypes.c_ulong(0), ctypes.c_ulong(0),
                   ctypes.c_ulong(0)):                    # PR_SET_NO_NEW_PRIVS
         raise OSError(ctypes.get_errno(), "prctl(no new privileges)")
@@ -304,20 +322,22 @@ def fence_in(root: str, loopback: bool = False) -> None:
 def fence_main(argv: list[str]) -> None:
     loopback = argv[:1] == ["--loopback"]
     argv = argv[1:] if loopback else argv
-    if len(argv) < 3 or argv[1] != "--":
-        sys.exit("usage: douglas-work.py fence [--loopback] ROOT -- COMMAND [ARGUMENT ...]")
+    cut = argv.index("--") if "--" in argv else -1
+    roots, cmd = argv[:max(cut, 0)], argv[cut + 1:] if cut >= 0 else []
+    if not roots or not cmd:
+        sys.exit("usage: douglas-work.py fence [--loopback] DIRECTORY [DIRECTORY ...] -- COMMAND [ARGUMENT ...]")
     try:
         if loopback and not alone():
             raise OSError("this network is not the job's own, so a command gets none of it")
-        fence_in(os.path.realpath(argv[0]), loopback)
+        fence_in([os.path.realpath(r) for r in roots], loopback)
     except OSError as e:
         print(f"douglas-work: the fence could not be put up, so nothing was started: {e}",
               file=sys.stderr)
         sys.exit(126)
     try:
-        os.execvp(argv[2], argv[2:])
+        os.execvp(cmd[0], cmd)
     except OSError as e:
-        print(f"douglas-work: {argv[2]}: {e.strerror}", file=sys.stderr)
+        print(f"douglas-work: {cmd[0]}: {e.strerror}", file=sys.stderr)
         sys.exit(127)
 
 
@@ -345,6 +365,52 @@ def open_beneath(dirfd: int, path: str, flags: int, mode: int = 0o644) -> int:
 
 class Problem(Exception):
     """Something that went wrong, in words for Douglas to pass on."""
+
+
+def whole_number(value, most: int = 1_000_000) -> int:
+    """A count out of something the other side wrote: whatever is there,
+    this is a number between nothing and `most`."""
+    try:
+        return min(max(0, int(value)), most)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def conversation(messages) -> list[dict]:
+    """What a job wrote down to ask the model, rebuilt from its parts: who
+    said it, the words, and the tools called. Words only: a picture, or the
+    address of one, is no part of a job's conversation, and a model server
+    that sees would go and fetch it. Raises ValueError for anything else."""
+    if not isinstance(messages, list) or not 0 < len(messages) <= 700:
+        raise ValueError("what the job wrote down is no conversation")
+    out, size = [], 0
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in ("system", "user", "assistant", "tool"):
+            raise ValueError("what the job wrote down is no conversation")
+        content = m.get("content")
+        if content is None and m["role"] == "assistant":
+            content = ""
+        if not isinstance(content, str):
+            raise ValueError("what the job wrote down is no conversation: words only")
+        new = {"role": m["role"], "content": content}
+        size += len(content)
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            calls = []
+            for c in m["tool_calls"] if isinstance(m["tool_calls"], list) else [None]:
+                f = c.get("function") if isinstance(c, dict) else None
+                if not isinstance(f, dict) or not isinstance(f.get("name"), str) \
+                        or not isinstance(f.get("arguments"), str) or not isinstance(c.get("id"), str):
+                    raise ValueError("what the job wrote down is no conversation: a tool call is not one")
+                calls.append({"id": c["id"][:80], "type": "function",
+                              "function": {"name": f["name"][:40], "arguments": f["arguments"]}})
+                size += len(f["arguments"])
+            new["tool_calls"] = calls
+        if m["role"] == "tool":
+            new.update(tool_call_id=str(m.get("tool_call_id") or "")[:80], name=str(m.get("name") or "")[:40])
+        out.append(new)
+    if size > 3_000_000:
+        raise ValueError("what the job wrote down is more than one conversation holds")
+    return out
 
 
 PROTOCOLS = "file" if GIT_URL.startswith("file://") else "https"
@@ -453,7 +519,9 @@ class Manager:
         self.listed: dict[str, tuple[float, list]] = {}
         self.names_of: dict[str, list[str]] = {}
         self.held = 0.0                                   # when the hold was last wanted
-        for d in (REPOS, JOBS, DONE):
+        self.slow = threading.Lock()                      # one clone, fetch or job start at a time
+        self.room: tuple[float, int] = (0.0, 0)           # what the model server holds, and when asked
+        for d in (REPOS, JOBS, DONE, LIVE):
             os.makedirs(d, exist_ok=True)
         os.chmod(JOBS, 0o2770)                            # what is made in it keeps its group
         self.recover()
@@ -617,10 +685,10 @@ class Manager:
         name = " ".join(str(name).split())[:200]
         if not name:
             raise Problem("Say which repository to clone.")
-        with self.lock:
+        with self.slow:
             have = self.pick(name, self.cloned(), loose=False)
             if len(have) == 1:
-                text, more = self.op_update("/".join(have[0]))
+                text, more = self.op_update("/".join(have[0]), locked=True)
                 return "It was cloned already, so I fetched the latest instead. " + text, more
             owner, repo, info = self.on_github(name)
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", owner) or \
@@ -639,6 +707,11 @@ class Manager:
                     if p.returncode:
                         raise Problem(why(p.stderr))
                 self.fetch(part)
+                # GitHub does not always say how large a repository is; what came says so itself.
+                size = subprocess.run(["du", "-sm", "--", part], capture_output=True, text=True).stdout.split()
+                if size and size[0].isdigit() and int(size[0]) > MAX_MB:
+                    raise Problem(f"{owner}/{repo} came to {size[0]} MB, and I keep nothing larger "
+                                  f"than {MAX_MB} MB: it was not kept.")
                 meta = {"owner": owner, "name": repo, "cloned": time.time(), "fetched": time.time(),
                         "default": self.head_of(part, info.get("default_branch") or ""),
                         # Unknown is taken for private: read with a token and
@@ -653,8 +726,8 @@ class Manager:
             return (f"Cloned {owner}/{repo} onto this machine. " + self.about(owner, repo, meta),
                     {"repo": self.last, "private": meta["private"]})
 
-    def op_update(self, repo: str = "") -> tuple[str, dict]:
-        with self.lock:
+    def op_update(self, repo: str = "", locked: bool = False) -> tuple[str, dict]:
+        with (threading.Lock() if locked else self.slow):       # a clone that turns into a fetch has it already
             owner, name, meta = self.need(repo)
             path = self.path(owner, name)
             before = self.sha(path, meta)
@@ -705,17 +778,19 @@ class Manager:
                 f"{len(self.names(path, sha))} files on branch {meta.get('default')}. "
                 f"Its last commit, {clip(last, 120)}")
 
-    def op_repos(self) -> str:
+    def op_repos(self) -> tuple[str, dict]:
         have = self.cloned()
         if not have:
             return ("No repository is cloned on this machine yet."
-                    + (f" A bare name is looked up on {OWNER}'s GitHub." if OWNER else ""))
-        lines = []
+                    + (f" A bare name is looked up on {OWNER}'s GitHub." if OWNER else "")), {}
+        lines, private = [], False
         for owner, name in have:
             meta = self.meta(owner, name)
+            private = private or bool(meta.get("private"))
             lines.append("- " + self.about(owner, name, meta)
                          + f" Fetched {ago(time.time() - float(meta.get('fetched') or 0))} ago.")
-        return clip("Cloned on this machine:\n" + "\n".join(lines), RESULT_MAX)
+        # A private repository's last commit is in that list: it is the owner's own.
+        return clip("Cloned on this machine:\n" + "\n".join(lines), RESULT_MAX), {"private": private}
 
     # -- reading the code ----------------------------------------------------
 
@@ -992,17 +1067,33 @@ class Manager:
     # -- jobs ----------------------------------------------------------------
 
     def recover(self) -> None:
-        """After a restart: the jobs still in the shared directory are the
-        ones not yet over."""
-        for jid in sorted(os.listdir(JOBS)):
-            if not JOB_ID.fullmatch(jid):
-                continue
+        """After a restart: the jobs under way are the ones this program
+        wrote down for itself. What is in the shared directory is for the
+        runner to read and is never read back as a job: a directory there
+        that is not on the list was not made by this program, and goes."""
+        for n in sorted(os.listdir(LIVE)):
+            jid = n[:-5]
             try:
-                spec = json.loads(read_small(os.path.join(JOBS, jid, "job.json")))
-                self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time())
-                threading.Thread(target=self.relay, args=(jid,), daemon=True).start()
+                with open(os.path.join(LIVE, n)) as f:
+                    spec = json.load(f)
+                if not (n.endswith(".json") and JOB_ID.fullmatch(jid) and isinstance(spec, dict)
+                        and spec.get("id") == jid):
+                    raise ValueError
             except (OSError, ValueError):
-                shutil.rmtree(os.path.join(JOBS, jid), ignore_errors=True)
+                os.unlink(os.path.join(LIVE, n))
+                continue
+            self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time(), worked=0.0)
+            threading.Thread(target=self.relay, args=(jid,), daemon=True).start()
+        for name in os.listdir(JOBS):
+            if name not in self.jobs and name != "hold":
+                path = os.path.join(JOBS, name)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
 
     def records(self) -> list[dict]:
         out = []
@@ -1025,17 +1116,21 @@ class Manager:
         if len(task) < 8:
             raise Problem("Say what should be done to the code, in a sentence.")
         before = [" ".join(str(b).split())[:600] for b in (before if isinstance(before, list) else [])][-3:]
-        with self.lock:
+        if not self.slow.acquire(timeout=20):
+            raise Problem("The workshop is busy cloning or fetching. Ask again in a minute.")
+        try:
             owner, name, meta, bare, sha = self.at(repo, "", task)
-            if self.jobs:
-                raise Problem("A job is still under way (" + self.line(next(iter(self.jobs.values())))
-                              + "). One at a time: ask how it is going, or have it stopped.")
+            with self.lock:
+                if self.jobs:
+                    raise Problem("A job is still under way (" + self.line(next(iter(self.jobs.values())))
+                                  + "). One at a time: ask how it is going, or have it stopped.")
             jid = secrets.token_hex(4)
             slug = "-".join(re.findall(r"[a-z0-9]+", task.lower())[:5])[:40].strip("-") or "work"
             spec = {"id": jid, "repo": f"{owner}/{name}", "branch": f"douglas/{slug}-{jid[:6]}",
                     "base": sha, "base_ref": f"refs/remotes/origin/{meta.get('default')}",
                     "task": task, "before": [b for b in before if b and b != task],
-                    "created": time.time(), "steps": STEPS, "seconds": SECONDS}
+                    "created": time.time(), "steps": STEPS, "seconds": SECONDS,
+                    "disk_mb": DISK_MB, "context": CONTEXT_MAX}
             d = os.path.join(JOBS, jid)
             os.mkdir(d)
             os.chmod(d, 0o2770)
@@ -1045,18 +1140,28 @@ class Manager:
                 if p.returncode:
                     raise Problem("The code could not be packed up for the job: " + why(p.stderr))
                 os.chmod(os.path.join(d, "base.bundle"), 0o640)
+                # Written down here first, where only this program can write:
+                # this is the job, whatever the shared directory says later.
+                write_whole(os.path.join(LIVE, jid + ".json"), json.dumps(spec).encode())
                 write_whole(os.path.join(d, "job.json"), json.dumps(spec).encode())   # last: it starts the job
                 os.chmod(os.path.join(d, "job.json"), 0o640)
             except BaseException:
                 shutil.rmtree(d, ignore_errors=True)
+                try:
+                    os.unlink(os.path.join(LIVE, jid + ".json"))
+                except OSError:
+                    pass
                 raise
-            self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time())
+            with self.lock:
+                self.jobs[jid] = dict(spec, state="queued", step=0, doing="", seen=time.time(), worked=0.0)
             threading.Thread(target=self.relay, args=(jid,), daemon=True).start()
             log(f"job {jid} started on {owner}/{name}")
             return (f"Started: job {jid} on {owner}/{name}. It works on a copy, on its own branch "
                     f"({spec['branch']}), for up to {SECONDS // 60} minutes, and pauses while "
                     "someone is talking to you. Nothing on GitHub is touched. The person will be "
                     "told when it is done.", dict(self.tag(owner, name, meta), job=jid))
+        finally:
+            self.slow.release()
 
     @staticmethod
     def line(job: dict) -> str:
@@ -1159,13 +1264,18 @@ class Manager:
     def finish(self, jid: str, status: dict) -> None:
         """A job is over. Its result is taken out of the shared directory,
         checked, and kept; the directory goes."""
-        job, d = self.jobs[jid], os.path.join(JOBS, jid)
+        with self.lock:
+            job = self.jobs.get(jid)
+            if job is None or job.get("ending"):
+                return
+            job["ending"] = True                 # once: the watch does not start on it twice
+        d = os.path.join(JOBS, jid)
         owner, name = job["repo"].split("/", 1)
         bare, meta = self.path(owner, name), self.meta(owner, name)
         state = status.get("state") if status.get("state") in ("done", "stopped", "failed") else "failed"
         r = {k: job.get(k) for k in ("id", "repo", "branch", "base", "task", "created", "started")}
         r.update(state=state, finished=time.time(), private=bool(meta.get("private")),
-                 step=int(status.get("step") or job.get("step") or 0),
+                 step=whole_number(status.get("step") or job.get("step"), 10_000),
                  summary=clip(str(status.get("summary") or ""), 1500),
                  error=clip(str(status.get("error") or ""), 400), commits=0, stat="", files=[])
         got = os.path.join(DONE, f".{jid}.bundle")
@@ -1190,25 +1300,31 @@ class Manager:
                                                cwd=bare).stdout.split("\n") if l][:60])
                 if not r["commits"]:
                     git("update-ref", "-d", ref, cwd=bare)
-        except (Problem, OSError) as e:
+        except Exception as e:                   # noqa: BLE001 - whatever it was, the job is over
             r.update(state="failed", commits=0,
-                     error=clip(f"{r['error']} {e}".strip(), 400))
+                     error=clip(f"{r['error']} {e if isinstance(e, (Problem, OSError)) else type(e).__name__}"
+                                .strip(), 400))
         finally:
             try:
                 os.unlink(got)
             except OSError:
                 pass
-        write_whole(os.path.join(DONE, jid + ".json"), json.dumps(r).encode())
-        for old in self.records()[:-40]:
-            try:
+        try:
+            write_whole(os.path.join(DONE, jid + ".json"), json.dumps(r).encode())
+            for old in self.records()[:-40]:
                 os.unlink(os.path.join(DONE, f"{old.get('id')}.json"))
-            except OSError:
-                pass
+        except OSError as e:
+            log(f"job {jid}: what became of it could not be written down: {e}")
         shutil.rmtree(d, ignore_errors=True)
-        del self.jobs[jid]
+        try:
+            os.unlink(os.path.join(LIVE, jid + ".json"))
+        except OSError:
+            pass
         log(f"job {jid} {r['state']}: {r['commits']} commits, {len(r['files'])} files, "
             f"{r['step']} steps")
-        self.changed.notify_all()
+        with self.changed:
+            self.jobs.pop(jid, None)
+            self.changed.notify_all()
 
     def relay(self, jid: str) -> None:
         """A job has no network, so what it would ask the model it writes
@@ -1216,30 +1332,31 @@ class Manager:
         answer back: the conversation and nothing else. While someone is
         talking to Douglas, or once the job is told to stop, a question
         under way is dropped and said to be."""
-        d, done = os.path.join(JOBS, jid), 0
+        d, done, asked = os.path.join(JOBS, jid), 0, 0
+        # A job asks once a step, and again for each question that was
+        # dropped while someone was talking: that many and some more.
+        most = whole_number((self.jobs.get(jid) or {}).get("steps") or STEPS, 1000) * 4 + 40
         try:
-            done = int(json.loads(read_small(os.path.join(d, "answer.json"), 4 << 20)).get("n") or 0)
+            done = whole_number(json.loads(read_small(os.path.join(d, "answer.json"), 4 << 20)).get("n"))
         except (OSError, ValueError, AttributeError, TypeError):
             pass
         while jid in self.jobs:
             time.sleep(0.1)
             try:
                 ask = json.loads(read_small(os.path.join(d, "ask.json"), 4 << 20))
-                n = int(ask.get("n") or 0)
+                n = whole_number(ask.get("n"))
             except (OSError, ValueError, AttributeError, TypeError):
                 continue
             if n <= done:
                 continue
-            answer = {"n": n}
+            answer, asked = {"n": n}, asked + 1
             try:
-                messages = ask.get("messages")
-                if not isinstance(messages, list) or not 0 < len(messages) <= 600 or not all(
-                        isinstance(x, dict) and x.get("role") in ("system", "user", "assistant", "tool")
-                        for x in messages):
-                    raise ValueError("what the job wrote down is no conversation")
-                answer.update(ask_model(messages, lambda: (
+                if asked > most:
+                    raise ValueError("more questions than a job may ask")
+                answer.update(ask_model(conversation(ask.get("messages")), lambda: (
                     os.path.exists(HOLD) or os.path.exists(os.path.join(d, "cancel"))
                     or jid not in self.jobs)))
+                answer["ctx"] = self.holds()
             except Held:
                 answer["dropped"] = True
             except Exception as e:               # noqa: BLE001 - told to the job, which gives up
@@ -1252,6 +1369,21 @@ class Manager:
             except OSError:
                 pass                             # the job is over and its directory gone
 
+    def holds(self) -> int:
+        """How many tokens of one conversation the model server keeps, as it
+        says itself (asked now and then): a job is told, so that it wraps up
+        before it has more to say than the server will read."""
+        if time.time() - self.room[0] > 600:
+            n = 0
+            try:
+                with urllib.request.urlopen(LLM_URL + "/props", timeout=5) as r:
+                    n = whole_number((json.loads(r.read(200_000)).get("default_generation_settings")
+                                      or {}).get("n_ctx"), 10_000_000)
+            except (OSError, ValueError, AttributeError):
+                pass
+            self.room = (time.time(), n)
+        return self.room[1]
+
     def someone_talking(self) -> bool:
         try:
             with open(VOICE_STATE) as f:
@@ -1259,49 +1391,78 @@ class Manager:
         except (OSError, ValueError, AttributeError):
             return False
 
+    def report_from(self, jid: str) -> dict:
+        """What the runner last reported of a job, with nothing in it taken
+        on trust: the state is one of the four or none, the rest is cut to
+        size. No report yet is an empty one; one that cannot be read is a
+        failure."""
+        try:
+            raw = json.loads(read_small(os.path.join(JOBS, jid, "status.json")))
+            if not isinstance(raw, dict):
+                raise ValueError
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            return {"state": "failed", "error": "the worker's report could not be read"}
+        return {"state": raw.get("state") if raw.get("state") in ("running", "done", "stopped", "failed") else "",
+                "step": whole_number(raw.get("step"), 10_000), "stamp": repr(raw.get("updated"))[:40],
+                "doing": clip(" ".join(str(raw.get("doing") or "").split()), 100),
+                "summary": str(raw.get("summary") or "")[:4000], "error": str(raw.get("error") or "")[:1000]}
+
     def watch(self) -> None:
         """Follow the jobs under way, and keep them out of the way of
-        anyone talking to Douglas: the model server is one machine."""
+        anyone talking to Douglas: the model server is one machine. The
+        limits of a job are kept here too, whatever the runner does about
+        them: past its time it is told to stop, and if it does not, it is
+        ended."""
+        last = time.time()
         while True:
             time.sleep(0.3)
             try:
+                over = []
                 with self.lock:
+                    now, passed = time.time(), min(5.0, time.time() - last)
+                    last = now
                     if not self.jobs:
                         if os.path.exists(HOLD):
                             os.unlink(HOLD)
                         continue
-                    now = time.time()
                     if self.someone_talking():
                         self.held = now
-                    if now - self.held < 1.5:
-                        if not os.path.exists(HOLD):
-                            write_whole(HOLD, b"")
-                            os.chmod(HOLD, 0o640)
-                    elif os.path.exists(HOLD):
+                    held = now - self.held < 1.5
+                    if held and not os.path.exists(HOLD):
+                        write_whole(HOLD, b"")
+                        os.chmod(HOLD, 0o640)
+                    elif not held and os.path.exists(HOLD):
                         os.unlink(HOLD)
                     for jid, job in list(self.jobs.items()):
-                        try:
-                            status = json.loads(read_small(os.path.join(JOBS, jid, "status.json")))
-                            if not isinstance(status, dict):
-                                raise ValueError
-                        except FileNotFoundError:
-                            status = {}
-                        except (OSError, ValueError):
-                            status = {"state": "failed", "error": "the worker's report could not be read"}
-                        if os.path.exists(HOLD):
+                        if job.get("ending"):
+                            continue
+                        status = self.report_from(jid)
+                        if held:
                             job["seen"] = now            # a job told to wait is not a job gone quiet
                         if status.get("state") == "running":
-                            if job.get("stamp") != status.get("updated"):
-                                job.update(stamp=status.get("updated"), seen=now)
-                            job.update(state="running", step=int(status.get("step") or 0),
-                                       doing=clip(" ".join(str(status.get("doing") or "").split()), 100),
-                                       started=job.get("started") or now)
+                            if job.get("stamp") != status["stamp"]:
+                                job.update(stamp=status["stamp"], seen=now)
+                            job.update(state="running", step=status["step"], doing=status["doing"],
+                                       started=job.get("started") or now,
+                                       worked=job.get("worked", 0.0) + (0 if held else passed))
                         elif status.get("state") in ("done", "stopped", "failed"):
-                            self.finish(jid, status)
+                            over.append((jid, status))
                             continue
-                        if now - job["seen"] > 900:
-                            self.finish(jid, {"state": "failed", "error":
-                                              "the worker went quiet for fifteen minutes and was given up on"})
+                        limit = whole_number(job.get("seconds") or SECONDS, 86_400) * 1.3 + GRACE
+                        if job.get("worked", 0.0) > limit and not job.get("cancelled"):
+                            write_whole(os.path.join(JOBS, jid, "cancel"), b"")
+                            job["cancelled"] = now
+                            log(f"job {jid} is past its time: told to stop")
+                        if job.get("worked", 0.0) > limit + min(120, 5 + GRACE):
+                            over.append((jid, {"state": "failed", "error":
+                                               "it did not stop when its time was up, and was ended"}))
+                        elif now - job["seen"] > 900:
+                            over.append((jid, {"state": "failed", "error":
+                                               "the worker went quiet for fifteen minutes and was given up on"}))
+                for jid, status in over:           # taking a result in can take a while: not under the lock
+                    self.finish(jid, status)
             except Exception as e:               # noqa: BLE001 - this thread outlives a bad file
                 log(f"the watch tripped: {type(e).__name__}: {e}")
 
@@ -1524,17 +1685,26 @@ class Worker:
                 and re.fullmatch(r"refs/[A-Za-z0-9._/-]+", str(s.get("base_ref") or ""))):
             raise ValueError("the job as handed over makes no sense")
         self.root = os.path.join(JOB_DIR, jid)
-        self.src = os.path.join(self.root, "src")
+        # What a command may write: the tree, a home and a temporary
+        # directory. Not the directory they are in.
+        self.src, self.home, self.tmp = (os.path.join(self.root, d) for d in ("src", "home", "tmp"))
+        self.top = -1                            # the work tree, opened once (see prepare)
         self.ask = ask or self.model
         self.step, self.steps = 0, min(int(s.get("steps") or STEPS), 200)
         self.seconds = min(int(s.get("seconds") or SECONDS), 4 * 3600)
+        self.disk_mb = min(max(1, int(s.get("disk_mb") or DISK_MB)), 200_000)
+        self.context = min(max(2000, int(s.get("context") or CONTEXT_MAX)), 1_000_000)
         self.spent = 0.0                         # seconds worked, the waiting not counted
         self.summary, self.tokens, self.full, self.asked = "", 0, False, 0
+        self.room = 0                            # tokens the model server holds of one conversation
+        self.free = 0                            # MB of disk free when the job began
+        self.said: tuple = ("running", "", {})   # what was last reported, for the heartbeat
+        self.stamp, self.over = threading.RLock(), threading.Event()
         # Only where the network is the job's own (see alone) may a command
         # open a connection: there, to its own programs and nothing else.
         self.fence = ["fence", "--loopback"] if alone() else ["fence"]
         self.env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8", "TERM": "dumb",
-                    "HOME": os.path.join(self.root, "home"), "TMPDIR": os.path.join(self.root, "tmp"),
+                    "HOME": self.home, "TMPDIR": self.tmp,
                     "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_AUTHOR_NAME": "Douglas", "GIT_AUTHOR_EMAIL": "douglas@localhost",
                     "GIT_COMMITTER_NAME": "Douglas", "GIT_COMMITTER_EMAIL": "douglas@localhost",
@@ -1544,9 +1714,24 @@ class Worker:
     # -- telling the manager -------------------------------------------------
 
     def status(self, state: str, doing: str = "", **more) -> None:
-        write_whole(os.path.join(self.spool, "status.json"), json.dumps(dict(
-            more, state=state, step=self.step, doing=doing, updated=time.time(),
-            summary=self.summary)).encode())
+        with self.stamp:
+            self.said = (state, doing, more)
+            write_whole(os.path.join(self.spool, "status.json"), json.dumps(dict(
+                more, state=state, step=self.step, doing=doing, updated=time.time(),
+                summary=self.summary)).encode())
+
+    def beat(self) -> None:
+        """Say that the job is alive, for as long as it is. Unpacking a large
+        repository, one long command or one long answer from the model would
+        otherwise look to the manager like a job gone quiet."""
+        while not self.over.wait(20):
+            with self.stamp:
+                if self.over.is_set():
+                    return
+                try:
+                    self.status(self.said[0], self.said[1], **self.said[2])
+                except OSError:
+                    pass
 
     def waited(self) -> None:
         """Stand aside while someone is talking to Douglas; go when told to."""
@@ -1559,20 +1744,32 @@ class Worker:
 
     # -- commands, all of them behind the fence --------------------------------
 
-    def fenced(self, cmd: list[str], seconds: float = 120, cwd: str | None = None) -> tuple[int | None, str]:
-        """Run a command shut in to this job's directory, with no network.
-        Its exit code (None if it ran out of time) and what it printed, the
-        end of it if that was long. Nothing it started is left running."""
+    def fenced(self, cmd: list[str], seconds: float = 120) -> tuple[int | None, str]:
+        """Run a command in the work tree, shut in to this job's own
+        directories. Its exit code (None if it ran out of time, or the job
+        out of disk) and what it printed, the end of it if that was long.
+        Nothing it started is left running."""
         out_path = os.path.join(JOB_DIR, f".{self.id}.out")
         with open(out_path, "w+b") as out:
             p = subprocess.Popen(
-                [sys.executable, "-I", os.path.abspath(__file__), *self.fence, self.root, "--", *cmd],
-                cwd=cwd or self.src, env=self.env, stdin=subprocess.DEVNULL, stdout=out,
-                stderr=subprocess.STDOUT, start_new_session=True)
+                # The tree is named to the fence, and the command started in
+                # it, by its handle and not by its name.
+                [sys.executable, "-I", os.path.abspath(__file__), *self.fence,
+                 f"/proc/self/fd/{self.top}", self.home, self.tmp, "--", *cmd],
+                cwd=f"/proc/self/fd/{self.top}", pass_fds=(self.top,), env=self.env,
+                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+            deadline, code = time.time() + seconds, None
             try:
-                code = p.wait(seconds)
-            except subprocess.TimeoutExpired:
-                code = None
+                while True:
+                    try:
+                        code = p.wait(max(0.05, min(10.0, deadline - time.time())))
+                        break
+                    except subprocess.TimeoutExpired:
+                        if time.time() >= deadline:
+                            break
+                        if self.heavy():          # not when it is over: while it is writing
+                            self.full = True
+                            break
             finally:
                 try:
                     os.killpg(p.pid, signal.SIGKILL)
@@ -1610,11 +1807,7 @@ class Worker:
 
     def tool_list(self, path: str = "") -> str:
         path = self.inside(path)
-        top = os.open(self.src, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fd = open_beneath(top, path, os.O_RDONLY | os.O_DIRECTORY)
-        finally:
-            os.close(top)
+        fd = open_beneath(self.top, path, os.O_RDONLY | os.O_DIRECTORY)
         try:
             rows = sorted((e.name + ("/" if e.is_dir(follow_symlinks=False) else "")
                            for e in os.scandir(fd) if e.name != ".git"),
@@ -1625,11 +1818,7 @@ class Worker:
                 + "\n".join(rows[:300]) + ("\n[... and more]" if len(rows) > 300 else ""))
 
     def slurp(self, path: str, limit: int = 2_000_000) -> bytes:
-        top = os.open(self.src, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fd = open_beneath(top, path, os.O_RDONLY | os.O_NONBLOCK)
-        finally:
-            os.close(top)
+        fd = open_beneath(self.top, path, os.O_RDONLY | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise ValueError(f"{path} is not a file")
@@ -1639,10 +1828,9 @@ class Worker:
         return data
 
     def spill(self, path: str, data: bytes) -> None:
-        top = os.open(self.src, os.O_RDONLY | os.O_DIRECTORY)
+        top = at = self.top
         try:
-            folder, at = os.path.dirname(path), top
-            for part in [p for p in folder.split("/") if p]:
+            for part in [p for p in os.path.dirname(path).split("/") if p]:
                 try:
                     os.mkdir(part, 0o755, dir_fd=at)
                 except FileExistsError:
@@ -1651,11 +1839,10 @@ class Worker:
                 if at != top:
                     os.close(at)
                 at = nxt
+        finally:
             if at != top:
                 os.close(at)
-            fd = open_beneath(top, path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
-        finally:
-            os.close(top)
+        fd = open_beneath(top, path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
         with os.fdopen(fd, "wb") as f:
             f.write(data)
 
@@ -1766,34 +1953,59 @@ class Worker:
                 raise Held
             if got.get("error") or not isinstance(got.get("message"), dict):
                 raise RuntimeError("the model server: " + clip(got.get("error") or "no answer", 200))
-            self.tokens = int(got.get("tokens") or 0)
+            self.tokens, self.room = int(got.get("tokens") or 0), int(got.get("ctx") or 0)
             return got["message"]
         raise RuntimeError("the model was not heard from in twenty-five minutes")
 
     # -- the job ----------------------------------------------------------------
 
-    def weight(self) -> int:
-        """How many MB this job's directory holds. A command may write what
-        it likes in there, and the disk is the whole machine's."""
+    def weight(self) -> int | None:
+        """How many MB this job's directory holds, or None if that could not
+        be found out in half a minute."""
         try:
             out = subprocess.run(["du", "-sm", "--", self.root], capture_output=True, text=True,
-                                 timeout=60).stdout
+                                 timeout=30).stdout
             return int(out.split()[0])
         except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            return None
+
+    def room_left(self) -> int:
+        try:
+            st = os.statvfs(JOB_DIR)
+            return st.f_bavail * st.f_frsize // (1 << 20)
+        except OSError:
             return 0
+
+    def heavy(self) -> bool:
+        """Has this job taken more of the disk than it may? Told two ways,
+        since neither is the whole truth: what its directory weighs (a folder
+        a command has shut to itself is not weighed), and how much less room
+        the disk has than when the job began (other programs' writing counts
+        toward that, so it is given slack)."""
+        weight = self.weight()
+        gone = self.free - self.room_left() if self.free else 0
+        return ((weight is not None and weight > self.disk_mb) or gone > self.disk_mb + DISK_SLACK_MB
+                or (weight is None and gone > self.disk_mb))
 
     def prepare(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
-        for d in (self.src, self.env["HOME"], self.env["TMPDIR"]):
+        for d in (self.src, self.home, self.tmp):
             os.makedirs(d)
-        copy_plain(os.path.join(self.spool, "base.bundle"), os.path.join(self.root, "base.bundle"), 2 << 30)
+        # The work tree is opened here, once, before any command has run, and
+        # from here on it is this handle that the file tools and the commands
+        # go by: whatever a command does to the tree's name afterwards, the
+        # tools stay in the tree.
+        self.top = os.open(self.src, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.free = self.room_left()
+        bundle = os.path.join(self.tmp, "base.bundle")
+        copy_plain(os.path.join(self.spool, "base.bundle"), bundle, 2 << 30)
         self.git("init", "--quiet", ".")
-        self.git("fetch", "--quiet", "--no-tags", os.path.join(self.root, "base.bundle"),
+        self.git("fetch", "--quiet", "--no-tags", bundle,
                  f"+{self.spec['base_ref']}:refs/heads/base", seconds=600)
         if self.git("rev-parse", "refs/heads/base").strip() != self.spec["base"]:
             raise RuntimeError("the code handed over is not the code the job names")
         self.git("checkout", "--quiet", "-b", self.spec["branch"], "refs/heads/base", seconds=600)
-        os.unlink(os.path.join(self.root, "base.bundle"))
+        os.unlink(bundle)
 
     def loop(self) -> None:
         msgs = [{"role": "system", "content": WORKER},
@@ -1846,11 +2058,15 @@ class Worker:
                              "name": str((c.get("function") or {}).get("name") or ""),
                              "content": "Not done: four tools a step at most. Call it again."})
             self.spent += time.time() - began
-            if self.weight() > DISK_MB:
+            if self.full or self.heavy():
                 self.full = True
                 break
-            late = self.spent > self.seconds or self.tokens > CONTEXT_MAX or self.step >= self.steps - 2
-            if self.spent > self.seconds * 1.15 or self.tokens > CONTEXT_MAX * 1.2:
+            # Room is what the job was given, or what the model server can
+            # hold of one conversation if that is less: asked for more than it
+            # holds, the server refuses, and the job would end there.
+            ceiling = min(self.context, int(self.room * 0.7)) if self.room else self.context
+            late = self.spent > self.seconds or self.tokens > ceiling or self.step >= self.steps - 2
+            if self.spent > self.seconds * 1.15 or self.tokens > ceiling * 1.2:
                 break
             if late and msgs[-1]["role"] in ("tool", "user") and WRAP_UP not in str(msgs[-1]["content"]):
                 msgs[-1] = dict(msgs[-1], content=str(msgs[-1]["content"]) + WRAP_UP)
@@ -1867,7 +2083,9 @@ class Worker:
         count = self.git("rev-list", "--count", f"{self.spec['base']}..HEAD").strip()
         if not count.isdigit() or not int(count):
             return 0
-        out = os.path.join(self.root, "out.bundle")
+        out = os.path.join(self.tmp, "out.bundle")
+        if os.path.lexists(out):
+            os.unlink(out)
         # Wherever the work ended up (he may have made a branch of his own),
         # the job's branch is what is handed over.
         self.git("update-ref", f"refs/heads/{self.spec['branch']}", "HEAD")
@@ -1879,8 +2097,12 @@ class Worker:
     def run(self) -> None:
         state, error = "done", ""
         self.status("running", doing="unpacking the code")
+        threading.Thread(target=self.beat, daemon=True).start()
         try:
             self.prepare()
+        except Exception as e:                   # noqa: BLE001 - nothing to work on: the job is over
+            state, error = "failed", f"the code could not be unpacked: {type(e).__name__}: {clip(e, 300)}"
+        else:
             try:
                 self.loop()
             except Stopped:
@@ -1889,18 +2111,25 @@ class Worker:
                          else "it filled more of the disk than a job may, and what it made was "
                               "thrown away" if self.full
                          else f"it ran out of {'steps' if self.step >= self.steps else 'time or room'}")
+            except Exception as e:               # noqa: BLE001 - the model server gone, a tool that
+                # tripped: the job ends here, and what it had changed is kept.
+                state, error = "stopped", f"{type(e).__name__}: {clip(e, 300)}"
             try:
                 if self.full:
                     shutil.rmtree(self.root, ignore_errors=True)
                 else:
                     self.keep()
-            except (RuntimeError, OSError) as e:
-                state, error = "failed", f"what it changed could not be packed up: {e}"
-        except Exception as e:                   # noqa: BLE001 - whatever it was, the job is over
-            state, error = "failed", f"{type(e).__name__}: {clip(e, 300)}"
+            except Exception as e:               # noqa: BLE001
+                state, error = "failed", ((error + "; and " if error else "")
+                                          + f"what it changed could not be packed up: {clip(e, 200)}")
         log(f"job {self.id} {state} after {self.step} steps, {self.spent:.0f} s of work"
             + (f": {error}" if error else ""))
-        self.status(state, error=error)
+        with self.stamp:                         # the last word, after which the heartbeat says no more
+            self.over.set()
+            self.status(state, error=error)
+        if self.top >= 0:
+            os.close(self.top)
+            self.top = -1
 
 
 def next_job() -> str:
@@ -1921,11 +2150,30 @@ def next_job() -> str:
     return min(waiting)[1] if waiting else ""
 
 
+def cannot_run() -> str:
+    """Why this runner will run no job, or nothing if it will. A job needs a
+    kernel that can fence it in, and a network that is the job's own: its
+    unit gives it one, and if that did not happen (systemd says of that
+    setting that it may not be applied) no job is run on the machine's own.
+    WORK_SHARED_NETWORK=1 says to run all the same, with no network at all
+    for a job's commands: that is for trying this out, not for Douglas."""
+    if landlock_abi() < LANDLOCK_NEEDED:
+        return (f"this kernel cannot fence a job in (Landlock {LANDLOCK_NEEDED} or later is "
+                "needed: Linux 6.12)")
+    if not alone() and E("WORK_SHARED_NETWORK") != "1":
+        return ("this runner's network is not its own: its unit is to give it one "
+                "(PrivateNetwork), and without that no job is run")
+    return ""
+
+
 def runner_main() -> None:
     os.umask(0o007)
     os.makedirs(JOB_DIR, exist_ok=True)
-    if landlock_abi() < 4:
-        sys.exit("this kernel cannot fence a job in (Landlock 4 or later is needed): not started")
+    why_not = cannot_run()
+    if why_not:
+        log(why_not + ": not started")
+        time.sleep(30)                            # systemd starts it again; not in a spin
+        sys.exit(1)
     # A job that was under way when this last stopped is over: say so.
     for jid in os.listdir(JOBS) if os.path.isdir(JOBS) else []:
         path = os.path.join(JOBS, jid, "status.json")

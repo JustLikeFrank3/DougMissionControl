@@ -4,7 +4,7 @@ a small API server), a stand-in model server, and the kernel's real fence.
 
     python3 douglas/test_douglas_work.py
 
-The fence needs Landlock 4 or later (Linux 6.7). Where the kernel has less,
+The fence needs Landlock 6 or later (Linux 6.12). Where the kernel has less,
 the checks that run a job are left out, and the run says so.
 """
 
@@ -140,9 +140,10 @@ class Api(BaseHTTPRequestHandler):
 MODEL = {"script": [], "seen": [], "dropped": 0}
 
 
-def says(content="", *calls, delay=0.0):
-    """One reply of the model's: words, and the tools it calls."""
-    return {"content": content, "calls": list(calls), "delay": delay}
+def says(content="", *calls, delay=0.0, status=0):
+    """One reply of the model's: words, and the tools it calls. Or, with
+    `status`, the server refusing to answer."""
+    return {"content": content, "calls": list(calls), "delay": delay, "status": status}
 
 
 class Model(BaseHTTPRequestHandler):
@@ -167,6 +168,11 @@ class Model(BaseHTTPRequestHandler):
                 MODEL["dropped"] += 1
                 return
             time.sleep(0.05)
+        if reply["status"]:
+            self.send_response(reply["status"])
+            self.end_headers()
+            self.wfile.write(b'{"error": "the context is full"}')
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -206,7 +212,7 @@ os.environ.update(
     WORK_SOCKET=os.path.join(root, "work.sock"), WORK_JOB_DIR=os.path.join(root, "job"),
     WORK_GIT_URL="file://" + remotes, WORK_API_URL=f"http://127.0.0.1:{serve(Api)}",
     WORK_OWNER="acme", WORK_GITHUB_TOKEN="", WORK_VOICE_STATE=voice, WORK_MAX_MB="500",
-    WORK_CLIENTS="", WORK_STEPS="30", WORK_SECONDS="600", WORK_SLOT="",
+    WORK_CLIENTS="", WORK_STEPS="30", WORK_SECONDS="600", WORK_SLOT="", WORK_SHARED_NETWORK="",
     LLM_URL=f"http://127.0.0.1:{serve(Model)}", LLM_MODEL="stand-in")
 here = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("douglas_work", os.path.join(here, "douglas-work.py"))
@@ -409,17 +415,24 @@ has("and reading it says so each time", str(ask(op="read", repo="vault", path="s
 work.TOKEN = ""
 m.listed.clear()
 
-LANDLOCK = work.landlock_abi() >= 4
-abi, work.landlock_abi = work.landlock_abi, lambda: 3
+LANDLOCK = work.landlock_abi() >= work.LANDLOCK_NEEDED
+abi, work.landlock_abi = work.landlock_abi, lambda: 5
 try:
-    work.fence_in(root)
-    check("a kernel that cannot refuse the network gets no fence at all", "no error", "an error")
+    work.fence_in([root])
+    check("a kernel that cannot keep a command from signalling out gets no fence at all", "no error", "an error")
 except OSError as e:
-    has("a kernel that cannot refuse the network gets no fence at all", e, "cannot refuse network")
+    has("a kernel that cannot keep a command from signalling out gets no fence at all", e,
+        "it has Landlock 5, and 6 is needed")
+has("and its runner runs no job", work.cannot_run(), "cannot fence a job in")
 work.landlock_abi = abi
+if LANDLOCK and not work.alone():
+    has("a runner whose network is not its own runs no job", work.cannot_run(), "network is not its own")
+    os.environ["WORK_SHARED_NETWORK"] = "1"
+    check("unless told to, for trying it out: then with no network at all for a job's commands",
+          (work.cannot_run(), work.Worker.__init__.__code__.co_names.count("alone")), ("", 1))
 
 if not LANDLOCK:
-    print("== NOT RUN: jobs (this kernel has no Landlock 4, so nothing can be fenced in)")
+    print("== NOT RUN: jobs (this kernel has no Landlock 6, so nothing can be fenced in)")
 else:
     print("== a job")
     threading.Thread(target=m.watch, daemon=True).start()
@@ -531,6 +544,9 @@ else:
              ("list", {"path": "sub/up"}), ("replace", {"path": "link.txt", "old": "root", "new": "toor"})),
         says("", ("run", {"command": f"(exec -a {marker} sleep 300 &) ; sleep 30", "seconds": 5})),
         says("", ("run", {"command": "echo inside > kept.txt; cat kept.txt; id -un > /dev/null; echo fine"})),
+        says("", ("run", {"command": "cd .. && mv src moved; echo \"mv said $?\"; ln -s /etc src2; "
+                                     "echo x > planted.txt; echo x > $HOME/ok.txt && echo home-ok; "
+                                     "echo x > $TMPDIR/ok.txt && echo tmp-ok; ls -d src"})),
         says("", ("done", {"summary": "Tried."})),
     ])
     got = shown()
@@ -566,6 +582,10 @@ else:
     check("and what it left running is gone with it",
           subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout.strip(), "")
     has("inside its own tree it works as usual", got[13], "inside", "fine", "Exit code 0")
+    has("the directory its tree is in is not its to write: the tree cannot be moved aside or a link put in "
+        "its place, though its home and its temporary directory are its own", got[14],
+        "mv: cannot move 'src'", "mv said 1", "ln: failed to create symbolic link 'src2'",
+        "planted.txt: Permission denied", "home-ok", "tmp-ok", "\nsrc")
     if not work.alone():
         out = subprocess.run([sys.executable, "-I", os.path.join(here, "douglas-work.py"), "fence", "--loopback",
                               root, "--", "/bin/true"], capture_output=True, text=True)
@@ -574,6 +594,34 @@ else:
             "not the job's own, so a command gets none of it")
     check("this process is still here", (rec["state"], os.getpid() > 0), ("done", True))
     listener.close()
+
+    r = ask(op="work", repo="jobContextMCP", task="A tree swapped for a link by somebody outside the fence.")
+    w = work.Worker(r["job"])
+    w.status("running", doing="being tested")
+    w.prepare()
+    lure = tempfile.mkdtemp(dir=root)
+    os.rename(w.src, w.src + ".real")
+    os.symlink(lure, w.src)
+    with open(os.path.join(lure, "hello.py"), "w") as f:
+        f.write("somebody else's file\n")
+    read_back = w.tool("read", {"path": "hello.py"})
+    os.unlink(os.path.join(lure, "hello.py"))
+    wrote, listed = w.tool("write", {"path": "notes/planted.txt", "content": "x"}), w.tool("list", {"path": ""})
+    code, where = w.fenced(["/bin/sh", "-c", "pwd -P; echo y > by-command.txt"])
+    check("and if the tree's name did come to point elsewhere, the tools and the commands would still be in "
+          "the tree: they go by a handle taken before any command ran",
+          (wrote, "hello.py" in listed and read_back.startswith("1: def greet(name):"), os.listdir(lure),
+           where.strip() == w.src + ".real",
+           sorted(n for n in os.listdir(w.src + ".real") if "planted" in n or n.startswith(("by-", "notes")))),
+          ("Wrote notes/planted.txt (1 lines).", True, [], True, ["by-command.txt", "notes"]))
+    with w.stamp:
+        w.over.set()
+        w.status("failed", error="ended by the test")
+    os.close(w.top)
+    for _ in range(80):
+        if r["job"] not in m.jobs:
+            break
+        time.sleep(0.1)
 
     print("== a job stands aside, stops, and runs out")
     with open(voice, "w") as f:
@@ -673,8 +721,14 @@ else:
     url, work.LLM_URL = work.LLM_URL, "http://127.0.0.1:9"
     rec = job("Think with a model server that is not there.", [])
     work.LLM_URL = url
-    has("with the model server not answering, the job fails and says why",
-        (rec["state"], rec["error"], rec["commits"]), "failed", "the model server", "0")
+    has("with the model server not answering, the job ends there and says why",
+        (rec["state"], rec["error"], rec["commits"]), "stopped", "the model server", "0")
+    rec = job("Write a note, then lose the model.", [
+        says("", ("write", {"path": "notes/kept.txt", "content": "written before the model went\n"})),
+        says(status=500)])
+    has("when the model server gives out in the middle, what the job had changed is kept",
+        (rec["state"], rec["commits"], rec["files"], rec["error"]), "stopped", "1", "notes/kept.txt",
+        "the model server", "it answered 500")
 
     print("== what the worker hands back is checked")
 
@@ -682,7 +736,7 @@ else:
         r = ask(op="work", repo="jobContextMCP", task="A result made up by hand.")
         d = os.path.join(work.JOBS, r["job"])
         make(d, m.jobs[r["job"]])
-        for _ in range(60):
+        for _ in range(200):
             if r["job"] not in m.jobs:
                 break
             time.sleep(0.1)
@@ -775,7 +829,56 @@ else:
     handed(odd_ask)
     has("a question that is no conversation is not passed on to the model", ODD.get("error", ""),
         "no conversation")
-    check("and the model server never saw it", len(MODEL["seen"]) - n, 0)
+
+    def picture_ask(d, j):
+        with open(os.path.join(d, "ask.json"), "w") as f:
+            json.dump({"n": 1, "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "http://example.com/out?what=it+read"}}]}]}, f)
+        for _ in range(50):
+            if os.path.exists(os.path.join(d, "answer.json")):
+                break
+            time.sleep(0.1)
+        with open(os.path.join(d, "answer.json")) as f:
+            ODD.update(json.load(f))
+        status_of(d, state="failed")
+
+    handed(picture_ask)
+    has("nor one with a picture's address in it, which a model server that sees would go and fetch",
+        ODD.get("error", ""), "words only")
+    check("and the model server saw neither", len(MODEL["seen"]) - n, 0)
+    rec = handed(lambda d, j: status_of(d, step="many", summary=["x"] * 3, updated={"a": 1}, doing=7))
+    check("a report with the wrong kinds of thing in it is cut to size, not tripped over",
+          (rec["state"], rec["step"], rec["summary"]), ("done", 0, "['x', 'x', 'x']"))
+
+    DEAD = {}
+    work.SECONDS, work.GRACE = 1, 0
+
+    def never_ends(d, j):
+        status_of(d, state="running")
+        for _ in range(100):
+            if os.path.exists(os.path.join(d, "cancel")):
+                break
+            time.sleep(0.1)
+        DEAD["told"] = os.path.exists(os.path.join(d, "cancel"))
+
+    rec = handed(never_ends)
+    work.SECONDS, work.GRACE = 600, 300
+    check("a job's time is the manager's to keep as well: past it the job is told to stop, and one that does "
+          "not is ended", (DEAD["told"], rec["state"], rec["error"]),
+          (True, "failed", "it did not stop when its time was up, and was ended"))
+
+    stray, forged = os.path.join(work.JOBS, "deadbeef"), os.path.join(work.JOBS, "0badc0de")
+    os.mkdir(stray)
+    os.mkdir(forged)
+    with open(os.path.join(stray, "job.json"), "w") as f:
+        f.write("[1]")
+    with open(os.path.join(forged, "job.json"), "w") as f:
+        json.dump({"id": "0badc0de", "repo": "../../elsewhere", "branch": "douglas/forged", "base": "0" * 40,
+                   "base_ref": "refs/remotes/origin/main", "task": "a job nobody asked for"}, f)
+    again = work.Manager()
+    check("a job is what the manager wrote down for itself: a directory that turns up among the shared ones "
+          "is no job, whatever it holds, and is cleared away at the next start",
+          (again.jobs, os.path.exists(stray), os.path.exists(forged)), ({}, False, False))
 
     print("== what the journal holds")
     journal = "\n".join(LOG)

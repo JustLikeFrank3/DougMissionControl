@@ -11,7 +11,7 @@ Group=douglas-work
 SupplementaryGroups=douglas-spool
 Environment=WORK_DIR=/var/lib/douglas-work WORK_JOBS=/var/lib/douglas-spool WORK_SOCKET=/run/douglas-work.sock
 EnvironmentFile=/etc/douglas/work.env
-ExecStart=/usr/bin/python3 /opt/douglas/douglas-work.py manager
+ExecStart=/usr/bin/python3 -I /opt/douglas/douglas-work.py manager
 StateDirectory=douglas-work
 StateDirectoryMode=0750
 ReadWritePaths=/var/lib/douglas-spool

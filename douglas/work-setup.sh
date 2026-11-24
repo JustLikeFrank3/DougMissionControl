@@ -14,9 +14,9 @@
 #   units    douglas-work.socket, douglas-work, douglas-job
 #   config   /etc/douglas/work.env (written only if missing)
 #   and      WORK_SOCKET in /etc/douglas/voice.env, if it has none
-# The clones are in /var/lib/douglas-work, a job's work tree in
-# /var/lib/douglas-job, and what the two pass each other in
-# /var/lib/douglas-spool.
+# The clones are in /var/lib/douglas-work, what the two pass each other in
+# /var/lib/douglas-spool, and a job's work tree in the runner's private
+# /var/tmp, which is gone when the job is.
 #
 # It does not restart douglas-voice, which is how he learns of the tool: do
 # that when nobody is talking to him (sudo systemctl restart douglas-voice).
@@ -44,9 +44,9 @@ fi
 
 command -v git >/dev/null || { echo "git is not installed (apt install git)"; exit 1; }
 id douglas >/dev/null 2>&1 || { echo "there is no douglas user yet: run provision.sh first"; exit 1; }
-# A job is fenced in by the kernel (Landlock 4 or later: Linux 6.7).
-python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None).syscall(444, None, 0, 1) >= 4 else 1)' \
-    || { echo "this kernel cannot fence a job in (it needs Landlock 4, Linux 6.7 or later): not installed"; exit 1; }
+# A job is fenced in by the kernel (Landlock 6 or later: Linux 6.12).
+python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None).syscall(444, None, 0, 1) >= 6 else 1)' \
+    || { echo "this kernel cannot fence a job in (it needs Landlock 6, Linux 6.12 or later): not installed"; exit 1; }
 
 getent group douglas-spool >/dev/null || groupadd --system douglas-spool
 for u in douglas-work douglas-job; do
@@ -98,7 +98,20 @@ if [ -e /etc/systemd/system/douglas-job-fence.service ]; then
     rm -f /etc/systemd/system/douglas-job-fence.service
 fi
 nft delete table inet douglas_job 2>/dev/null || true
+# What job.env said that was not the default now belongs in work.env: the
+# manager is the one that asks the model.
+if [ -f /etc/douglas/job.env ]; then
+    for key in LLM_URL WORK_SLOT; do
+        value="$(envval /etc/douglas/job.env "$key")"
+        if [ -n "$value" ] && [ "$value" != "http://127.0.0.1:8081" ] && ! grep -q "^$key=" /etc/douglas/work.env; then
+            printf '%s=%s\n' "$key" "$value" >> /etc/douglas/work.env
+        fi
+    done
+fi
 rm -f /etc/douglas/job-fence.nft /etc/douglas/job.env
+# The runner's work trees live in its unit's private /var/tmp now, which
+# systemd clears; it has no directory of its own any more.
+rm -rf /var/lib/douglas-job
 
 for u in $units; do
     install -m 644 "$here/$u" "/etc/systemd/system/$u"

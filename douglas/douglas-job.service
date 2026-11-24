@@ -8,15 +8,19 @@ User=douglas-job
 Group=douglas-job
 SupplementaryGroups=douglas-spool
 UMask=0007
-Environment=WORK_JOBS=/var/lib/douglas-spool WORK_JOB_DIR=/var/lib/douglas-job HOME=/var/lib/douglas-job
-ExecStart=/usr/bin/python3 /opt/douglas/douglas-work.py runner
-StateDirectory=douglas-job
-StateDirectoryMode=0700
+# Its work trees are in its private /var/tmp: on the disk, and removed by
+# systemd, as root, each time the unit ends. It has no home, and Python is
+# started with -I, which reads nothing from a home or from the environment.
+Environment=WORK_JOBS=/var/lib/douglas-spool WORK_JOB_DIR=/var/tmp/douglas-job HOME=/nonexistent
+ExecStart=/usr/bin/python3 -I /opt/douglas/douglas-work.py runner
 # One job a run: when it is over the runner exits, and the unit ending
-# clears away whatever a command left running. Then it waits for the next.
+# clears away whatever a command left running, at once and without asking.
+# Then it waits for the next.
 Restart=always
 RestartSec=2
 KillMode=control-group
+KillSignal=SIGKILL
+TimeoutStopSec=5
 
 # The fence, from the outside in (douglas-work.py has the rest). A job runs
 # commands the model chooses, over code somebody else may have written.
@@ -29,6 +33,10 @@ RestrictNamespaces=yes
 LockPersonality=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native
+# Refused outright: what a job has no use for, and io_uring, which can open
+# sockets past the rule on address families below.
+SystemCallFilter=~@mount @swap @reboot @raw-io @module @cpu-emulation @obsolete @clock io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
 # A file system with nothing of the owner's in it: the system's programs to
 # read, and of everything that holds state (/var, /run, /srv, /opt, /home)
 # only its own work trees, the directory it shares with the manager, and its
@@ -44,7 +52,12 @@ ProtectKernelLogs=yes
 ProtectClock=yes
 ProtectHostname=yes
 TemporaryFileSystem=/var:ro /run:ro /srv:ro /opt:ro /mnt:ro /media:ro /boot:ro
-BindPaths=/var/lib/douglas-job /var/lib/douglas-spool
+BindPaths=/var/lib/douglas-spool
+# Shared memory and message queues of its own: /dev/shm would otherwise be
+# the machine's, where what a command left would outlive the job.
+PrivateIPC=yes
+RemoveIPC=yes
+TemporaryFileSystem=/dev/shm:rw,nosuid,nodev,size=1G,mode=1777
 BindReadOnlyPaths=/opt/douglas/douglas-work.py
 InaccessiblePaths=/etc/douglas -/etc/flightsim -/etc/ssh -/etc/NetworkManager -/etc/netplan -/etc/sudoers.d
 # A network of its own with nothing on it: a loopback that only the job's

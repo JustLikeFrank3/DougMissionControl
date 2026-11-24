@@ -25,7 +25,7 @@
 #     douglas-agent       the deck's window into all of it, :9111 (./setup.sh)
 #     douglas-work, douglas-job   his workshop: repositories he may clone, read
 #                         and have a job done on, the job fenced in
-#                         (./work-setup.sh; needs Linux 6.7 for the fence)
+#                         (./work-setup.sh; needs Linux 6.12 for the fence)
 #
 # Idempotent: every config file under /etc/douglas is written only if it is
 # missing, so re-running upgrades code and units and keeps your settings.
