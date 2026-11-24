@@ -2155,8 +2155,10 @@ def cannot_run() -> str:
     kernel that can fence it in, and a network that is the job's own: its
     unit gives it one, and if that did not happen (systemd says of that
     setting that it may not be applied) no job is run on the machine's own.
-    WORK_SHARED_NETWORK=1 says to run all the same, with no network at all
-    for a job's commands: that is for trying this out, not for Douglas."""
+    WORK_SHARED_NETWORK=1 says to run all the same, with Landlock refusing
+    TCP to a job's commands. That is for trying this out, not for Douglas:
+    Landlock's rule is for plain TCP sockets, and an MPTCP one gets past it
+    (tried on Linux 7.0), so on a shared network a command is not cut off."""
     if landlock_abi() < LANDLOCK_NEEDED:
         return (f"this kernel cannot fence a job in (Landlock {LANDLOCK_NEEDED} or later is "
                 "needed: Linux 6.12)")

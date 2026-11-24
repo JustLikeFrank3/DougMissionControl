@@ -975,7 +975,9 @@ machine's other services, not the home network, not the internet. A server
 started inside a job could be reached from inside it and from nowhere else.
 The kernel has to be able to do this (Landlock 6, Linux 6.12): on one that
 cannot, or in a unit that did not get a network of its own, the runner runs
-no job.
+no job. (It can be told to run on a shared network all the same, for trying
+it out, with Landlock refusing TCP to a job's commands. That is not a fence
+to rely on: an MPTCP socket gets past Landlock's rule.)
 
 An independent review of all this, done after it was built, found a way
 past the inner fence, which the tests now hold shut: a command could move
@@ -988,7 +990,9 @@ directory it is in is not a command's to write, and the runner has no
 home.
 
 *What it cannot do.* Nothing can be installed in a job: there is no network
-to fetch it with. A job runs the tests that run with what the machine has
+to fetch it with. How much disk a job may take is watched, every ten
+seconds while a command runs, not walled off: a job that goes over is
+stopped and what it made thrown away, a little after the fact. A job runs the tests that run with what the machine has
 (Python's own `unittest` does, and so does a test that starts a server on
 the machine and talks to it; a suite that needs pytest or a project's
 dependencies does not), and says so when it could not check its work. The
