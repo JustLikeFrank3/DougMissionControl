@@ -587,7 +587,7 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `eyes.env` | `llama-eyes`, the vision model on `:8082` (loopback): `EYES_MODEL_FILE`, `EYES_MMPROJ` (its projector), `EYES_ARGS` (default `-ngl 999 --load-mode none --jinja -c 8192 --parallel 1 --image-min-tokens 1024 --image-max-tokens 2048 --alias eyes`), `EYES_HOST`/`EYES_PORT`. The unit is enabled by `provision.sh` only once the model file exists and `voice.env`'s `EYES_URL` points at it: a model that sees for itself needs no second one |
 | `draw.env` | `douglas-draw`, the image server on `:8083` (loopback): `DRAW_MODEL_DIR` (default `/srv/models/draw`, holding `diffusion_models/`, `text_encoders/` and `vae/`: the files themselves, since the server refuses links that lead out of the directory), `DRAW_ARGS` (empty by default), `DRAW_HOST`/`DRAW_PORT`. It starts with no model in memory: the pipeline tells it which to hold before each picture. `provision.sh` builds stable-diffusion.cpp and enables the unit only once a model is in `diffusion_models/` |
 | `chatgpt.env` | `douglas-chatgpt`, ChatGPT's chat-only line to Douglas: `CHATGPT_SECRET` (required, at least 24 URL-safe characters: it is the path of the connector's address, and changing it revokes the connector), `CHATGPT_PORT` (default `9120`, loopback), `CHATGPT_PER_HOUR` (default `60`), `LLM_URL`. Not created by `provision.sh`: the connector is set up by hand, see `douglas-chatgpt.py` |
-| `work.env` | `douglas-work`, his workshop (see below): `WORK_OWNER` (the GitHub account a bare name such as "my kettle repo" is looked up on; without it a repository is named as owner/name), `WORK_GITHUB_TOKEN` (optional, for private repositories and for pushing: a fine-grained token limited to the repositories he may work with; read-only "Contents" is enough to read private ones), `WORK_PUSH` (`1`: a job's branch may be pushed and a pull request opened for it, each time only after a read-back and a yes; the token then needs "Contents" and "Pull requests" read and write), `WORK_MAX_MB` (the largest repository cloned, default 500), `WORK_STEPS` and `WORK_SECONDS` (how long one job may go on: 60 steps of the model, 1800 seconds of work), `WORK_DISK_MB` (how large one job's work tree may grow, default 4096), `LLM_URL` (the model server jobs think with, asked by the manager on their behalf) and `WORK_SLOT` (optional: a model server slot jobs keep to). Readable by `douglas-work` only |
+| `work.env` | `douglas-work`, his workshop (see below): `WORK_OWNER` (the GitHub account a bare name such as "my kettle repo" is looked up on; without it a repository is named as owner/name), `WORK_GITHUB_TOKEN` (optional, for private repositories and for pushing: a fine-grained token limited to the repositories he may work with; read-only "Contents" is enough to read private ones), `WORK_PUSH` (`1`: a job's branch may be pushed and a pull request opened for it, each time only after a read-back and a yes; the token then needs "Contents" and "Pull requests" read and write), `WORK_BASE` (where a repository's work goes when that is not its default branch, as `owner/name=branch ...`: the code is read from that branch, jobs start from it, and pull requests are opened against it), `WORK_MAX_MB` (the largest repository cloned, default 500), `WORK_STEPS` and `WORK_SECONDS` (how long one job may go on: 100 steps of the model, 3600 seconds of work), `WORK_REVIEW` (`0`: a job's changes are not read over a second time before it ends), `WORK_DISK_MB` (how large one job's work tree may grow, default 4096), `LLM_URL` (the model server jobs think with, asked by the manager on their behalf) and `WORK_SLOT` (optional: a model server slot jobs keep to). Readable by `douglas-work` only |
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
@@ -876,9 +876,11 @@ at a time, a cap an hour and a cap on length; every exchange is in the
 journal (`journalctl -u douglas-chatgpt -o cat`).
 
 **A workshop.** Douglas can clone a repository from GitHub onto his own
-machine, answer questions from its code, and have a job done on it: "clone
-my kettle repo", "how does the boil timer work?", "make it stop at ninety
-degrees and add a test". It is a service of its own, `douglas-work`
+machine, answer questions from its code, read its issue tracker, and have a
+job done on it: "clone my kettle repo", "how does the boil timer work?",
+"make it stop at ninety degrees and add a test", "what issues are open?",
+"fix issue 12", "address the review comments", "did the checks pass?". It is
+a service of its own, `douglas-work`
 (`sudo ./douglas/work-setup.sh` on Douglas, which `provision.sh` runs), and
 the voice pipeline only asks it things, through a Unix socket that nobody
 but the pipeline's user may open.
@@ -890,12 +892,20 @@ left to pick a tool from everything he is told, this model picks the right
 one six to nine times in ten. So a message that speaks of repositories or of
 pushing, or comes while one is in the conversation or a job is under way or
 not an hour over, is first put
-to a question of its own (`REPO_ASKED`: clone, list, work, status, changes,
+to a question of its own (`REPO_ASKED`: clone, list, the issues, one issue,
+fix an issue, work, more work on a job's branch, status, changes, checks,
 stop, push, about, a file, find, or none of these; one line for an answer).
 The program then does that, and he is handed what came of it as a call he
-made. On 110 messages of every kind, twice each, the answer was right every
-time, in half a second ("Push the meeting to Friday" is none of these, and
-neither is "Don't push it yet"). A message that points back ("clone it") is
+made. On 164 messages of every kind, twice each, 326 answers of 328 were
+right, in half a second ("Push the meeting to Friday" is none of these, and
+neither are "Don't push it yet" and "I have an issue with my knee"). The two
+that were not are one message, "Fix the bug where the tone profile comes
+back empty", taken for an issue of that name: the workshop finds no such
+issue and makes a job of the person's words, which is what was wanted. A
+change asked for within the hour after a job ("also add a test for that")
+is put to one more question, whether it is more of that job's work or a
+change of its own: more of it goes on from that job's branch, where the work
+is. A message that points back ("clone it") is
 first said again with the one before it, so that it stands alone; "push it"
 is the exception, and is asked about as it stands, because it points at a
 job's work and not at what was last said. Said again after a question about
@@ -917,13 +927,69 @@ most of it the model reading what was found.
 become a job. The manager packs the code up and a second service,
 `douglas-job`, unpacks it into a work tree and puts the model to work on it
 with seven tools (list, read, search, replace, write, run, done), a step at
-a time, for at most 60 steps or 30 minutes. He answers at once that it has
+a time, for at most 100 steps or an hour. He answers at once that it has
 started; when it ends, a line of his appears on the screens saying what
 changed, with the counts taken from git and his own account of the work
 marked as that. While anyone is talking to him a job stands aside (the
 model server is one machine): it drops the answer it was waiting for and
 asks again afterwards. "How is it going?", "what did you change?" and "stop
 that" work at any time. One job at a time.
+
+*What a job is held to.* Before its first step the worker is handed what the
+repository says to whoever works on it: `AGENTS.md`, `CLAUDE.md`,
+`.github/copilot-instructions.md` or `CONTRIBUTING.md`, the first of them it
+has, as it stands on the branch the job starts from. When the worker says it
+is done, the runner looks for itself, behind the same fence as any command:
+every file that was changed has to parse (Python, JSON, shell; one that did
+not parse before the job is not held against it), and a failure sends the
+worker back to it, twice at most. Then the change is read over. The model is
+asked once more, with no tools and nothing in front of it but the job, the
+repository's notes, the worker's account and the diff, what is wrong with
+the change; an answer other than OK goes back to the worker as somebody's
+reading of it, to act on where it is right, and the second time the worker
+says done the job is over. What was run on the result (the runner's checks,
+the commands the worker ran after its last change and how each ended, what
+the second look came to) is the runner's own record, and is told beside the
+worker's account, which stays marked as unchecked. A long job makes room in
+its conversation by cutting the oldest lookups down to a note of what they
+were.
+
+*An issue.* "What issues are open?" and "what does issue 37 say?" are read
+from the repository's tracker on GitHub and handed to him as something read:
+information, and no instruction. "Fix issue 37", or "fix the tenant leakage
+issue" (words of the title will do), starts a job whose task is the issue as
+GitHub has it: its title, its text, what its owner said on it, and what the
+person said in asking. What a reader of the page would not see is taken out
+first: comments hidden in the markup, characters that do not show. Whose
+words they are is the whole question. The owner's own issue is the owner's
+asking, and the job starts. Anybody else's is somebody else's text, and on
+a public repository anybody may open an issue: no job starts, the program
+reads back whose it is, and only a yes starts one, on the issue as it stood
+when it was read back. Comments by anyone but the owner and the issue's
+author are left out, and counted. The branch is named for the issue, and so
+is the pull request, which says `Fixes #37` where it goes into the default
+branch and says that merging it closes nothing where it goes anywhere else.
+
+*More work, from what is said on the pull request.* "Address the review
+comments", "fix the failing checks", "also add a test for that": a job that
+goes on from the branch an earlier job left and adds commits to it. What is
+written on the pull request is handed to it when the person points there
+("the review comments", "what I said on the PR"), and what GitHub's checks
+printed when they speak of checks that failed; "also add a test" is the
+person's own words and nothing more. Of what is written there since the
+last time, the owner's own comments go to the job as they stand: on a line,
+with the line; on the whole of it; in the conversation. The rest is
+somebody else's text, and waits for a yes like a stranger's issue: the
+comment that an answer of the owner's was to, what a reviewer or a bot
+wrote where the owner wrote nothing, and what a failed check printed (its
+own words, its annotations, the end of its log where the token may read
+that). The read-back says whose it is and how much. Where the owner has added to the branch on
+GitHub (a suggestion taken), the job goes on from that; where the two have
+gone different ways, or the pull request is closed or merged, no job
+starts. The new commits are pushed like any others, on a yes, to the same
+branch, and the pull request that is open has them: a second is not opened.
+"Did the checks pass?" is answered from GitHub's check runs for the commit
+it has.
 
 *Where the work goes.* Onto a branch of its own, `douglas/<a few
 words>-<id>`, in his clone, committed under the name Douglas, and there it
@@ -941,8 +1007,13 @@ and that is the whole of the turn's reply, word for word, with the model not
 asked. Only if the next message is a plain yes, from the same device and
 within three minutes, is it pushed, by the program: that job's branch, as it
 stood when it was read back, to a branch of the same name, never forced,
-and then a pull request against the default branch, whose description says
-whose work it is and marks his account of it as his own. Anything else for
+and then a pull request against the branch the repository's work goes to,
+whose description says whose work it is, what was run on it, and marks his
+account of it as his own. That branch is the default one unless `WORK_BASE`
+names another for the repository (one whose rule is "branch, pull request,
+qa, main" wants `owner/name=qa`): the code is then read from that branch,
+jobs start from it, and work made from any other is not offered. Anything
+else for
 an answer and nothing is pushed. No other branch can be pushed, the default
 one least of all; a push he thinks of himself, after reading a page or a
 repository, is refused before it is offered. The token should be a
@@ -1015,6 +1086,31 @@ there, but it would have stayed. The tree is opened once now, the
 directory it is in is not a command's to write, and the runner has no
 home.
 
+The part that reads issues and pull requests was read by somebody else in
+the same way, and what was found there is closed too. The worst of it: the
+owner's answer to a comment was handed to a job with the comment it
+answered, whoever had written that one, so a stranger's comment rode in on
+the owner's "ok", and could be edited afterwards. Somebody else's text is
+now one thing wherever it comes from: an issue the owner did not open, a
+comment the owner answered, comments where the owner wrote none, what a
+failed check printed. A job is given none of it until the owner has been
+told whose it is and has said yes, and the yes is to that text to the
+letter: a mark of it goes back with the yes, and a word changed since is
+another text. A comment changed after the owner answered it is left out
+altogether. Every author is named in the read-back, or no yes is asked for.
+What goes into a pull request or a commit from an issue's title or the
+worker's own account is set down as text: a number in it refers to nothing,
+a name calls nobody, `closes` closes nothing. A push names the commit that
+was read back, not the branch. The runner's checks and the second look count
+a job's changes from the code it was given, so a worker that commits its own
+work is checked all the same, and they see the whole of a long diff, which
+they did not: a command's output is cut to its ends, and git's was a
+command's. And a job hands over one commit, made by the runner under the one
+name: commits the worker makes by itself are folded into it, so that no
+message of its own wording and no author of its own naming goes to GitHub,
+and the manager takes no other kind. 38 of these safeguards, each broken on
+purpose, were caught by the tests.
+
 *What it cannot do.* Nothing can be installed in a job: there is no network
 to fetch it with. How much disk a job may take is watched, every ten
 seconds while a command runs, not walled off: a job that goes over is
@@ -1027,13 +1123,33 @@ default and wrote a module with nine passing tests in one to two minutes
 each, and it fixed a real bug in this repository's `deck_api.py` (a refused
 POST leaving its body on the connection) in nine minutes and 25 steps, the
 suite's 51 checks passing when run elsewhere: the same job, on the same
-model, that took Codex CLI nine minutes. Nothing larger has been tried. Private
+model, that took Codex CLI nine minutes. Given as issues, two bugs that were
+once in the owner's own repository of 757 files (each put back by starting
+from the commit before its fix, and scored with the tests that came with the
+real fix, which fail on the unfixed code): a hostname check that took
+look-alike domains for the real one (4 minutes, 23 steps), and a parser that
+merged C# with C++ and missed skills written in parentheses (12 minutes, 30
+steps). Both fixes pass every test in their files, 106 and 85, and each is
+in substance the change that was made at the time. The tests he wrote for
+them are another matter: the first's ten cases pass, and one of the second's
+two fails, wrong about what the function wants around its input. He had no
+way to find that out, with no pytest on the machine: a job writes tests it
+cannot run. Nothing larger than a bug of that size has been tried, and the
+issues open in that repository are all larger. Private
 repositories need the token, which only the owner can create; what is
 cloned with it is treated as the owner's own, like their records: once he
 has read such code in a conversation he fetches nothing from the web, and
-makes no search of his own, until it ends. Neither the token nor the push
-has met GitHub itself yet: both were built to its documentation and tried
-against a stand-in.
+makes no search of his own, until it ends. The token has met GitHub: it
+signs in, the tracker, the review comments and the check runs of a real
+repository are read with it, and a dry run of a push was accepted. No push
+and no pull request has been made with it yet: those were built to GitHub's
+documentation and tried against a stand-in, and the first real one is the
+owner's to ask for. The log of a failed check needs "Actions: Read" on the
+token, which the one in use does not have; without it a job is given the
+check's own summary and annotations. Issues of a private repository need
+"Issues: Read". Whose a comment is goes by the account GitHub names for it:
+what another program posts with the owner's own account, or an issue of the
+owner's that a collaborator has edited, is taken for the owner's.
 
 **How he sounds.** Piper, the voice he started with, is quick and clear and
 sounds like a machine reading. He speaks with Kokoro instead: a small neural
@@ -1472,8 +1588,8 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
-| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job, a clone or a push he thinks of himself refused, a push read back word for word with the model not asked and made only on a yes (not on a no, on anything else, or on a yes that comes too late), a job watched to its end and the line the person is then shown (with nothing in it that could pass for a note of the program's), a workshop that is not answering or still at it, and none of the names or words in the journal |
-| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; a push (not offered without a token or with pushing off; what would go said and nothing sent; another commit than the one read back refused; the branch on the stand-in GitHub afterwards and its main as it was; the pull request's branch, base, title and description; one that is open already, one that is refused after the branch went, and a push that is not taken; nothing but a job's branch ever pushed); and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). a tree moved aside for a link; a job nobody started, a report of the wrong kinds of thing and a question with a picture's address in it, none of them taken up; a job past its time ended by the manager; a model server that gives out with the work kept. Where the kernel has no Landlock 6 the job checks are left out, and the run says so |
+| `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job, a clone or a push he thinks of himself refused, a push read back word for word with the model not asked and made only on a yes (not on a no, on anything else, or on a yes that comes too late), a job watched to its end and the line the person is then shown (with nothing in it that could pass for a note of the program's), a workshop that is not answering or still at it, and none of the names or words in the journal; and the tracker through his eyes: issues and checks read before he says a word and handed over as something read, a job on an issue started with its number and the person's words, one that would be made of somebody else's words read back and started only on a yes (not on a no, on anything else, or late), a job on an issue or on a pull request never begun on his own idea, and a change asked for just after a job asked about once more, whether it is more of that job's work |
+| `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; a push (not offered without a token or with pushing off; what would go said and nothing sent; another commit than the one read back refused; the branch on the stand-in GitHub afterwards and its main as it was; the pull request's branch, base, title and description; one that is open already, one that is refused after the branch went, and a push that is not taken; nothing but a job's branch ever pushed); and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). a tree moved aside for a link; a job nobody started, a report of the wrong kinds of thing and a question with a picture's address in it, none of them taken up; a job past its time ended by the manager; a model server that gives out with the work kept. Where the kernel has no Landlock 6 the job checks are left out, and the run says so; the tracker: the open issues, one by its number or by words of its title, a pull request that is not one; a job on the owner's own issue, given the issue as a reader of the page sees it, with other people's comments and what is hidden in the markup left out; somebody else's issue starting nothing until a yes, and a yes not holding once the issue has changed; the pull request named for the issue, closing it only where it goes into the default branch; a job that goes on from an earlier one's branch with what the owner wrote on the pull request, other people's comments only on a yes, a failed check with its annotations and the end of its log (fetched without the token); a second push adding to the open pull request and opening no other; a branch the owner added to on GitHub, one that has gone two ways, one moved under a running job, a pull request already merged; the branch a repository's work goes to when that is not its default; and a job's own changes checked by the runner and read over once, with the long conversation cut down |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
 

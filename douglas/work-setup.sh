@@ -83,11 +83,19 @@ WORK_OWNER=
 # back what would go, and answers yes: one push, of that job's branch as it
 # stood when it was read back. Never another branch, never on his own idea.
 #WORK_PUSH=1
+# Where a repository's work goes, when that is not its default branch:
+# "owner/name=branch", one or more, with spaces between. The code is read
+# from that branch, a job starts from it, and its pull request is opened
+# against it. (A repository whose rule is "branch, pull request, qa, main"
+# wants its name and =qa here.)
+#WORK_BASE=
 # The largest repository cloned, in MB.
 WORK_MAX_MB=500
 # How long one job may go on: steps of the model, and seconds of work.
-WORK_STEPS=60
-WORK_SECONDS=1800
+WORK_STEPS=100
+WORK_SECONDS=3600
+# 0: a job's changes are not read over a second time before it ends.
+#WORK_REVIEW=1
 # The model server a job thinks with. A job has no network of its own:
 # douglas-work asks on its behalf.
 #LLM_URL=http://127.0.0.1:8081

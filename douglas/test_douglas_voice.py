@@ -3560,8 +3560,9 @@ def shop_llm(msgs, tools=None):
     return SHOP["script"](msgs)
 
 
-def shop_route(said, before=""):
+def shop_route(said, before="", last=""):
     SHOP["routes"].append((said, before))
+    SHOP["last"] = last
     return SHOP["route"]
 
 
@@ -3601,10 +3602,12 @@ spec = [t for t in voice.TOOL_SPECS if t["function"]["name"] == "repo"][0]["func
 check("with a workshop he is offered the one tool, and do says what it is to do",
       (spec["parameters"]["required"], spec["parameters"]["properties"]["do"]["enum"]),
       (["do"], ["list", "clone", "update", "about", "files", "read", "find", "search", "history", "work",
-                "status", "changes", "stop", "push"]))
+                "status", "changes", "stop", "push", "issues", "issue", "fix", "revise", "checks"]))
 check("and his instructions say what it is for, and that nothing about code comes from memory",
       [w in voice.system_prompt() for w in ("clone one onto this machine", "it is pushed only if they say yes",
-                                             "never describe code, a file or a change from memory")], [True] * 3)
+                                             "never describe code, a file or a change from memory",
+                                             "read the issues in its tracker", "on an issue from the tracker",
+                                             "what was written on its pull request")], [True] * 6)
 SHOP["script"] = lambda msgs: ({"content": "It's cloned: 77 files on main."} if msgs[-1]["role"] == "tool"
                                else {"content": "No, I can't clone a repo."})
 SHOP["route"] = {"do": "clone", "repo": "jobcontextmcp"}
@@ -3650,8 +3653,10 @@ check("the words that make a message one to ask about",
           "What is in my repository?", "Show me the diff.", "The commit broke it.", "How was your day?",
           "I need a patch for my jeans.", "Is the gate closed?", "Push it.", "push it", "Open a PR for that.",
           "Has it been pushed?", "Push the meeting to Friday.", "A pushover, that one.", "What a prize.",
-          "Do twenty pushups.")],
-      [True, True, True, True, True, False, True, False, True, True, True, True, True, False, False, False])
+          "Do twenty pushups.", "What issues are open?", "Fix issue 12.", "I have an issue with my knee.",
+          "Address the review comments.", "What is on the tracker?", "Is it done?", "Review my day.")],
+      [True, True, True, True, True, False, True, False, True, True, True, True, True, False, False, False,
+       True, True, True, True, True, False, False])
 SHOP["routes"].clear(); SHOP["calls"].clear()
 SHOP["route"] = {"do": "push"}
 SHOP["answers"]["offer"] = {"ok": False, "text": "There is no finished job with changes to push."}
@@ -3779,6 +3784,164 @@ got = repo_says("Open a pull request for that.")
 check("where no push can be made there is nothing to say yes to: he is handed why, and says it",
       (got, SHOP["asked"], voice.CONVO["pending"]),
       ("I can't push: there is no GitHub token on this machine.", 1, None))
+
+# -- issues: read from the tracker, a job started from one, and more work from what is said on its pull request
+SHOP["calls"].clear(); SHOP["routes"].clear()
+SHOP["route"] = {"do": "issues"}
+SHOP["answers"]["issues"] = {"ok": True, "repo": "acme/jobContextMCP", "private": False, "text": (
+    "acme/jobContextMCP has 2 open issues, the most recently changed first:\n#3 The greeting ignores the name "
+    "(the owner's)\n#4 Tone profile crashes (by mallory)")}
+SHOP["script"] = lambda msgs: {"content": "Two are open: number 3, about the greeting, and number 4."}
+got = repo_says("What issues are open on jobcontextmcp?")
+check("asked what is in the tracker, the program reads it before he says a word, and he is handed it as something "
+      "read from GitHub: information, and no more looking",
+      (got, SHOP["calls"], voice.REPO_READ in shop_told(), voice.REPO_DONE in shop_told(),
+       SHOP["shown"][-1]["content"].startswith(voice.LOOKED_UP + "acme/jobContextMCP has 2 open issues")),
+      ("Two are open: number 3, about the greeting, and number 4.",
+       [("issues", {"repo": "", "said": "What issues are open on jobcontextmcp?"})], True, False, True))
+SHOP["calls"].clear()
+SHOP["route"] = {"do": "issue", "number": 3}
+SHOP["answers"]["issue"] = {"ok": True, "repo": "acme/jobContextMCP", "private": False, "issue": 3, "text": (
+    "Issue #3 on acme/jobContextMCP, open, opened by acme: The greeting ignores the name\n\ngreet('Ann') says Hello.")}
+SHOP["script"] = lambda msgs: {"content": "Issue 3 says the greeting ignores the name it is given."}
+got = repo_says("What does issue 3 say?", goes_on=True)
+check("one issue is read the same way, by its number",
+      (got, SHOP["calls"], voice.REPO_READ in shop_told()),
+      ("Issue 3 says the greeting ignores the name it is given.",
+       [("issue", {"repo": "acme/jobContextMCP", "number": 3, "words": "", "said": "What does issue 3 say?"})], True))
+SHOP["calls"].clear()
+SHOP["wait"] = [{"ok": True, "state": "done", "repo": "acme/jobContextMCP", "job": "ab12cd34", "commits": 1,
+                 "stat": "1 file changed", "files": ["hello.py"], "branch": "douglas/issue-3-the-greeting-ab12cd",
+                 "error": "", "summary": "Fixed.", "issue": 3, "kind": "issue", "checked": [True],
+                 "can_push": True, "text": "Job done."}]
+SHOP["route"] = {"do": "fix", "number": 3}
+SHOP["answers"]["work"] = {"ok": True, "repo": "acme/jobContextMCP", "job": "ab12cd34", "issue": 3,
+                           "text": "Started: job ab12cd34 on issue 3 of acme/jobContextMCP."}
+SHOP["script"] = lambda msgs: {"content": "I have started on issue 3."}
+n = len(repo_lines())
+got = repo_says("Fix issue 3.", goes_on=True)
+until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
+check("asked to fix an issue, the program starts a job on it: its number, and the person's own words",
+      (got, [c for c in SHOP["calls"] if c[0] == "work"], voice.REPO_DONE in shop_told()),
+      ("I have started on issue 3.",
+       [("work", {"repo": "acme/jobContextMCP", "task": "Fix issue 3.",
+                  "before": ["What issues are open on jobcontextmcp?", "What does issue 3 say?"],
+                  "issue": 3, "words": ""})], True))
+check("what that job was asked is kept, for a change asked for next that may be more of it",
+      voice.WORKING["what"], "Fix issue 3.")
+SHOP["route"] = None
+SHOP["script"] = lambda msgs: {"content": "Sure."}
+repo_says("Also add a test for that.", goes_on=True)
+check("and is handed to the question about the next message, while that job is not long over",
+      (SHOP["routes"][-1], SHOP["last"]), (("Also add a test for that.", "Fix issue 3."), "Fix issue 3."))
+check("and when the job ends he says which issue it was on",
+      [r["text"] for r in repo_lines() if r["text"].startswith("The job on issue 3")][-1],
+      "The job on issue 3 of jobContextMCP is done. 1 file changed (hello.py). It is on the branch "
+      "douglas/issue-3-the-greeting-ab12cd in my clone, and nothing has been pushed to GitHub. Say \"push it\" if "
+      "you want it there as a pull request. My own account of it, which nobody has checked: Fixed.")
+STAMP = "issue:4:2026-11-24T10:00:00Z"
+ASKS = ("Issue 4 on acme/jobContextMCP was opened by mallory, not by acme: \"Tone profile crashes\". Its text would "
+        "be the job's instructions, and nobody has checked it. Say yes to start a job on it, or no to leave it.")
+ASKED = {"ok": False, "ask": True, "stamp": STAMP, "issue": 4, "text": ASKS}
+SENT = {"repo": "", "task": "Fix the tone profile issue.", "before": [], "issue": 0, "words": "tone profile"}
+SHOP["calls"].clear()
+SHOP["route"] = {"do": "fix", "words": "tone profile"}
+SHOP["answers"]["work"] = dict(ASKED)
+SHOP["script"] = lambda msgs: {"content": "I started it."}
+SHOP["asked"] = 0
+got = repo_says("Fix the tone profile issue.")
+check("an issue somebody else wrote starts no job: whose words it is is read back, word for word, and he is not "
+      "asked a thing",
+      (got, SHOP["calls"], SHOP["asked"], voice.CONVO["pending"]["kind"], voice.CONVO["pending"]["args"]),
+      (ASKS, [("work", SENT)], 0, "job", dict(SENT, agreed=STAMP, issue=4, words="")))
+SHOP["calls"].clear()
+SHOP["answers"]["work"] = {"ok": True, "repo": "acme/jobContextMCP", "job": "cd34ef56", "text": "Started: job cd34ef56."}
+SHOP["wait"] = [{"ok": True, "state": "done", "repo": "acme/jobContextMCP", "commits": 0, "error": "",
+                 "summary": "", "issue": 4, "kind": "issue"}]
+n = len(repo_lines())
+got = repo_says("Yes.", goes_on=True)
+until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
+check("on a yes the program starts it, with what was read back (that issue by its number, and the mark of its "
+      "text), says so in its own words, and watches it to its end",
+      (got, SHOP["calls"][0], SHOP["asked"], voice.CONVO["pending"], repo_lines()[-1]["text"]),
+      ("Started. It works on a copy, and nothing on GitHub is touched. I will tell you here when it is done.",
+       ("work", dict(SENT, agreed=STAMP, issue=4, words="")), 0, None,
+       "The job on issue 4 of jobContextMCP is done. No file was changed."))
+SHOP["answers"]["work"] = dict(ASKED)
+repo_says("Fix the tone profile issue.")
+SHOP["calls"].clear()
+got = repo_says("No.", goes_on=True)
+check("on a no nothing is started", (got, SHOP["calls"], voice.CONVO["pending"]),
+      ("Left alone. No job was started.", [], None))
+repo_says("Fix the tone profile issue.")
+SHOP["calls"].clear()
+SHOP["route"] = None
+SHOP["script"] = lambda msgs: {"content": "It is four o'clock."}
+got = repo_says("What time is it?", goes_on=True)
+check("and anything but a yes is not a yes: no job, and both are told so",
+      (got, [c for c in SHOP["calls"] if c[0] == "work"], voice.HELD["job"]["other_note"] in shop_told()),
+      ("No job was started. It is four o'clock.", [], True))
+SHOP["route"] = {"do": "fix", "words": "tone profile"}
+repo_says("Fix the tone profile issue.")
+voice.CONVO["pending"]["ts"] -= 1000
+SHOP["route"] = None
+SHOP["calls"].clear()
+SHOP["script"] = lambda msgs: {"content": "Ask me again."}
+got = repo_says("Yes.", goes_on=True)
+check("a yes that comes too late starts nothing", (got, [c for c in SHOP["calls"] if c[0] == "work"]),
+      ("That job waited too long for a yes and was not started. Ask me again.", []))
+SHOP["answers"]["work"] = {"ok": False, "text": "No job of mine has a pull request 9."}
+SHOP["route"] = {"do": "fix"}
+SHOP["calls"].clear()
+SHOP["script"] = lambda msgs: {"content": "Which issue do you mean?"}
+repo_says("Fix the issue.")
+check("an issue that is not named is left to the workshop to find, or to ask about",
+      SHOP["calls"], [("work", {"repo": "", "task": "Fix the issue.", "before": [], "issue": 0, "words": "the issue"})])
+SHOP["calls"].clear()
+SHOP["route"] = {"do": "revise"}
+SHOP["answers"]["work"] = {"ok": True, "repo": "acme/jobContextMCP", "job": "ef56ab78",
+                           "text": "Started: job ef56ab78 on acme/jobContextMCP. It goes on from the branch."}
+SHOP["wait"] = [{"ok": True, "state": "done", "repo": "acme/jobContextMCP", "commits": 1, "stat": "2 files changed",
+                 "files": ["hello.py", "tests/test_hello.py"], "branch": "douglas/issue-3-the-greeting-ab12cd",
+                 "error": "", "summary": "", "issue": 3, "kind": "revise",
+                 "pr": "https://github.com/acme/jobContextMCP/pull/7", "can_push": True, "checked": [True, False]}]
+SHOP["script"] = lambda msgs: {"content": "On it."}
+n = len(repo_lines())
+got = repo_says("Address the review comments on the pull request.")
+until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
+check("asked to deal with the review, the program starts a job that goes on from the earlier one's branch",
+      (got, [c for c in SHOP["calls"] if c[0] == "work"]),
+      ("On it.", [("work", {"repo": "", "task": "Address the review comments on the pull request.", "before": [],
+                            "revise": 1})]))
+check("its end is told as more for the pull request, and a failed check of the program's own is said plainly",
+      repo_lines()[-1]["text"],
+      "The job on issue 3 of jobContextMCP is done. 2 files changed (hello.py, tests/test_hello.py). It is on the "
+      "branch douglas/issue-3-the-greeting-ab12cd in my clone, and its pull request on GitHub does not have these "
+      "commits yet. One of this program's own checks on the result failed, so look before it goes anywhere. Say "
+      "\"push it\" if you want them on the pull request.")
+PR_ASKS = ("The only new comments on pull request 7 of acme/jobContextMCP are not from acme: 2 from Copilot. Their "
+           "text would be the job's instructions, and nobody has checked it. Say yes to start a job from them, or "
+           "no to leave it.")
+SHOP["answers"]["work"] = {"ok": False, "ask": True, "stamp": "pr:7:2:1795000000", "text": PR_ASKS}
+SHOP["calls"].clear()
+got = repo_says("Address the review comments on the pull request.")
+check("comments that are somebody else's are read back the same way, and wait for the same yes",
+      (got, voice.CONVO["pending"]["kind"], voice.CONVO["pending"]["args"]),
+      (PR_ASKS, "job", {"repo": "", "task": "Address the review comments on the pull request.", "before": [],
+                        "revise": 1, "agreed": "pr:7:2:1795000000"}))
+rp.forget()
+SHOP["calls"].clear()
+SHOP["route"] = {"do": "checks"}
+SHOP["answers"]["checks"] = {"ok": True, "repo": "acme/jobContextMCP", "checks": "failed", "text": (
+    "On pull request 7 of acme/jobContextMCP (commit abc1234): 4 checks. 3 passed, 1 failed, 0 still running or "
+    "waiting. Failed: tests (failure).")}
+SHOP["script"] = lambda msgs: {"content": "Three passed, and the tests check failed."}
+got = repo_says("Did the checks pass on the PR?")
+check("asked how GitHub's checks went, the program reads them and he says what they say",
+      (got, SHOP["calls"], voice.REPO_READ in shop_told()),
+      ("Three passed, and the tests check failed.", [("checks", {"repo": ""})], True))
+voice.WORKING.update(job="", ended=0.0)
+voice.WORKING["ended"] = time.time()
 SHOP["routes"].clear(); SHOP["calls"].clear()
 SHOP["route"] = {"do": "status"}
 SHOP["script"] = lambda msgs: {"content": "It finished a minute ago."}
@@ -3852,7 +4015,7 @@ check("what each thing he may ask is sent as: the repository of the conversation
 check("a thing that is not on the list is not sent anywhere",
       (voice.tool_repo(do="delete", repo="kettle"), len(SHOP["calls"])),
       ("Nothing was done: do has to be one of list, clone, update, about, files, read, find, search, history, "
-       "work, status, changes, stop, push.", 16))
+       "work, status, changes, stop, push, issues, issue, fix, revise, checks.", 16))
 voice.TURN.ctx = {"said": ["What does that page say?"], "lookups": 0,
                   "after": lambda job: SHOP.setdefault("started", []).append(job)}
 check("a job or a clone that he thinks of himself is not begun: what he has just read may be telling him to, "
@@ -3872,6 +4035,21 @@ check("and outside a turn nothing is started", (voice.tool_repo(do="work", task=
                                                 len(SHOP["calls"])), ("Not done.", 18))
 check("a push he thinks of himself is not offered either",
       (voice.tool_repo(do="push")[:9], len(SHOP["calls"])), ("Not done.", 18))
+voice.TURN.ctx = {"said": ["What does that issue say?"], "lookups": 0,
+                  "after": lambda job: SHOP.setdefault("started", []).append(job)}
+check("nor is a job on an issue, or one that goes on from another, begun because he thought of it: an issue's "
+      "text may be telling him to",
+      (voice.tool_repo(do="fix", number=4), voice.tool_repo(do="revise")[:26], len(SHOP["calls"])),
+      ("Not done. A job is started only when the person asks for it themselves, in plain words, in their own "
+       "message. If that is what they want, tell them to say so, for example \"Fix issue 12.\"",
+       "Not done. A job is started", 18))
+voice.tool_repo(do="issues")
+voice.tool_repo(do="issue", number=4)
+voice.tool_repo(do="checks")
+check("reading the tracker and the checks he may ask for himself", SHOP["calls"][18:],
+      [("issues", {"repo": k, "said": "What does that issue say?"}),
+       ("issue", {"repo": k, "number": 4, "words": "", "said": "What does that issue say?"}), ("checks", {"repo": k})])
+voice.TURN.ctx = None
 check("where the work can be pushed, the line at a job's end says how to ask",
       voice.work_line({"state": "done", "repo": "acme/kettle", "commits": 1, "stat": "1 file changed",
                        "files": ["boil.py"], "branch": "douglas/x-1", "can_push": True}),
@@ -3898,14 +4076,19 @@ def route_ask(msgs, tools=None, max_tokens=0, temperature=None):
 answers = []
 for ROUTER["reply"] in ("CLONE jobcontextmcp", "clone: jobContextMCP.", "CLONE", "LIST.", "WORK", "STATUS", "**CHANGES**",
                         "STOP", "ABOUT", "FILE server.py.", "FILE", "FIND tone profile", "FIND", "NO", "No.",
-                        "Maybe.", "", "</think>\n\nSTATUS", "DELETE everything", "PUSH."):
+                        "Maybe.", "", "</think>\n\nSTATUS", "DELETE everything", "PUSH.", "ISSUES.", "ISSUE 12",
+                        "ISSUE #12.", "ISSUE login crash", "ISSUE", "FIX 12.", "FIX issue number 12",
+                        "FIX the v4 resume tool", "FIX", "REVISE.", "CHECKS"):
     answers.append(voice.repo_wanted("Do the   thing with the code.", route_ask))
 check("what the answer to the question turns into: the call to make, or nothing",
       answers,
       [{"do": "clone", "repo": "jobcontextmcp"}, {"do": "clone", "repo": "jobContextMCP"}, {"do": "list"}, {"do": "list"},
        {"do": "work", "task": "Do the thing with the code."}, {"do": "status"}, {"do": "changes"}, {"do": "stop"},
        {"do": "about"}, {"do": "read", "path": "server.py"}, {"do": "about"}, {"do": "find", "words": "tone profile"},
-       {"do": "about"}, None, None, None, None, {"do": "status"}, None, {"do": "push"}])
+       {"do": "about"}, None, None, None, None, {"do": "status"}, None, {"do": "push"}, {"do": "issues"},
+       {"do": "issue", "number": 12}, {"do": "issue", "number": 12}, {"do": "issue", "words": "login crash"},
+       {"do": "issue"}, {"do": "fix", "number": 12}, {"do": "fix", "number": 12},
+       {"do": "fix", "words": "the v4 resume tool"}, {"do": "fix"}, {"do": "revise"}, {"do": "checks"}])
 check("the question is put as instructions, the message as the message: no tools, a line wanted, nothing left to chance",
       (len(PUT[0][0]), PUT[0][0][0] == {"role": "system", "content": voice.REPO_ASKED},
        PUT[0][0][1], PUT[0][1:]),
@@ -3948,6 +4131,31 @@ ROUTER["reply"] = "PUSH"
 check("and a message that points at nothing is asked about once, as before",
       (voice.repo_wanted("Push your work to GitHub.", route_ask, before="What's the weather tomorrow?"), len(PUT)),
       ({"do": "push"}, 1))
+PUT.clear()
+
+
+def more_ask(msgs, tools=None, max_tokens=0, temperature=None):
+    PUT.append((msgs, tools, max_tokens, temperature))
+    return {"content": ROUTER["more"] if msgs[0]["content"] == voice.REPO_MORE else "WORK"}
+
+
+ROUTER["more"] = "MORE."
+check("a change asked for just after a job is asked about once more: more of that job's work goes on from its "
+      "branch",
+      (voice.repo_wanted("Also add a test for that.", more_ask, last="Fix the greeting so that it keeps the comma."),
+       len(PUT), PUT[1][0][1]["content"], PUT[1][1:]),
+      ({"do": "revise"}, 2, "First message: Fix the greeting so that it keeps the comma.\n\nSecond message: "
+                            "Also add a test for that.", (None, 10, 0.0)))
+ROUTER["more"] = "NEW"
+PUT.clear()
+check("a change of its own is a job of its own, and with no job just over nothing more is asked",
+      (voice.repo_wanted("Rename the boil function.", more_ask, last="Fix the greeting."), len(PUT),
+       voice.repo_wanted("Rename the boil function.", more_ask), len(PUT)),
+      ({"do": "work", "task": "Rename the boil function."}, 2, {"do": "work", "task": "Rename the boil function."}, 3))
+check("and no answer to that is a job of its own, as before",
+      voice.repo_wanted("Also add a test.", lambda m, *a: {"content": "WORK"} if m[0]["content"] == voice.REPO_ASKED
+                        else (_ for _ in ()).throw(OSError("down")), last="Fix the greeting."),
+      {"do": "work", "task": "Also add a test."})
 n = len(PUT)
 check("with no words there is nothing to ask, and no answer is a no",
       (voice.repo_wanted("  ", route_ask), len(PUT) - n, voice.repo_wanted("Clone it all.", no_answer)), (None, 0, None))
