@@ -2124,24 +2124,50 @@ CAMERA_RULES = (
 # look at all): the question to the model is what decides.
 CAMERA_WORDS = re.compile(
     r"\b(cameras?|cam|outside|out front|out back|front|look out|see out|out the window|porch|drive(?:way)?|"
-    r"garage|back ?yard|garden|gate|parcels?|packages?|deliver(?:y|ed|ies)|at the door|doorbell|street|"
-    r"rain(?:ing)?|snow(?:ing)?)\b", re.I)
-CAMERA_ASKED = ("Does this message ask what can be seen right now through a security camera at the "
-                "person's home, or what is happening outside the home right now (at the door, on the "
-                "porch, drive, yard or street, or what the weather looks like there)? Answer yes or "
-                "no.\n\nMessage: ")
+    r"garage|back ?yard|garden|gate|parcels?|packages?|deliver(?:y|ed|ies)|at the door|doorbell|door|street|"
+    r"shed|rain(?:ing)?|snow(?:ing)?|room|inside|in the house|anyone|anybody|someone|somebody|right now)\b", re.I)
+CAMERA_ASKED = ("Does the last message ask what can be seen right now through a security camera at the "
+                "person's home, or what is happening at the home right now, inside or outside (who or "
+                "what is in a room, at the door, on the porch, drive, yard or street, or what the "
+                "weather looks like there)? A message that insists the assistant can look, after it "
+                "was asked such a thing, counts. Answer yes or no.\n\n")
 
 
-def camera_wanted(said: str, ask=None) -> bool:
-    """Is a message asking for a look through a camera? `ask` is the call to
-    the model server, replaceable in tests. No answer is a no."""
+def camera_wanted(said: str, ask=None, before: str = "") -> bool:
+    """Is a message asking for a look through a camera? `before` is the
+    person's message before it ("is anyone in the living room?" then "you
+    do have camera access"). `ask` is the call to the model server,
+    replaceable in tests. No answer is a no."""
+    said = " ".join(str(said).split())[:600]
+    before = " ".join(str(before).split())[:300]
+    text = (f"Earlier message: {before}\nLast message: {said}" if before else f"Last message: {said}")
     try:
-        m = (ask or complete)([{"role": "user", "content": CAMERA_ASKED + " ".join(str(said).split())[:600]}],
-                              None, 8, 0.0)
+        m = (ask or complete)([{"role": "user", "content": CAMERA_ASKED + text}], None, 8, 0.0)
     except Exception as e:      # noqa: BLE001 - his own choice of tool stands
         log(f"could not ask whether a camera look was wanted: {type(e).__name__}")
         return False
     return bool(re.match(r"\W*yes\b", unthought(str(m.get("content") or "")), re.I))
+
+
+def camera_question(asked: str, before: str = "") -> str:
+    """What a look is to answer: the person's message, and the one before it
+    where this one only insists ("you do have cameras") and that one asked."""
+    if before and CAMERA_WORDS.search(before) and not re.search(r"\?\s*$", asked.strip()):
+        return f"{before} {asked}".strip()
+    return asked
+
+
+# A reply that says he will check or look, in a turn where no tool was used:
+# nothing follows such a reply, and the person waits for an answer that
+# never comes ("let me check. Give me a moment.", 2026-11-25).
+CHECK_PROMISE = re.compile(
+    r"\b(let me (?:check|look|see|have a look|take a look|list|find|pull)|give me (?:a|one) "
+    r"(?:moment|second|sec|minute)|one moment|just a (?:moment|second|sec)|hang on|hold on|bear with me|"
+    r"i'?ll (?:check|look|take a look|have a look|find out|pull))\b", re.I)
+NOT_CHECKED = ("[You said you would check or look, but you used no tool, so nothing is being done and "
+               "nothing will follow your reply. Use the tool now, or answer plainly without promising "
+               "to check.]")
+NO_CHECK = "I said I'd check, but I didn't actually do it. Ask me again."
 
 
 def camera_call(method: str, path: str, body=None, timeout: float = 15):
@@ -6259,15 +6285,18 @@ class Pipeline:
                 looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
                           {"role": "tool", "tool_call_id": "look", "name": "look",
                            "content": found}]
+            before_cam = next((str(m.get("content") or "").split("\n\n[", 1)[0]
+                               for m in reversed(self.history) if m.get("role") == "user"), "")
             if (TOOLS_ON and not ctx["sent"] and not looked and "camera" in TOOLS
                     and via not in NO_TOOLS and "camera" not in switched_off()
-                    and CAMERA_WORDS.search(asked) and camera_wanted(asked)):
+                    and CAMERA_WORDS.search(asked) and camera_wanted(asked, before=before_cam)):
                 # A look outside: taken here, with the person's words for the
                 # question, and handed to him as a call he made.
                 began = time.time()
+                question = camera_question(asked, before_cam)
                 call = {"id": "camera", "type": "function", "function": {
-                    "name": "camera", "arguments": json.dumps({"do": "look", "question": asked})}}
-                found = run_tool("camera", {"do": "look", "question": asked}, quiet=True, theirs=True)
+                    "name": "camera", "arguments": json.dumps({"do": "look", "question": question})}}
+                found = run_tool("camera", {"do": "look", "question": question}, quiet=True, theirs=True)
                 log(f"asked about outside: a camera look taken in {time.time() - began:.1f} s, before he answers")
                 remember(call, found)
                 looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
@@ -6489,6 +6518,29 @@ class Pipeline:
                         log("and promised again without starting one: the reply says so")
                         again = NO_PICTURE
                     answer = again or answer
+            if (TOOLS_ON and not ctx["held"] and not ctx["lookups"] and via not in NO_TOOLS
+                    and CHECK_PROMISE.search(clean(answer))):
+                # He said he would check and did nothing: the turn would end on
+                # the promise. Where the talk is about what a camera would see,
+                # the program looks; otherwise he is asked once more.
+                cam_q = camera_question(asked, before_cam)
+                if ("camera" in TOOLS and "camera" not in switched_off()
+                        and (CAMERA_WORDS.search(asked) or CAMERA_WORDS.search(before_cam))):
+                    log("a look was promised and none taken: the program looks")
+                    call = {"id": "camera", "type": "function", "function": {
+                        "name": "camera", "arguments": json.dumps({"do": "look", "question": cam_q})}}
+                    found = run_tool("camera", {"do": "look", "question": cam_q}, quiet=True, theirs=True)
+                    remember(call, found)
+                    looked = looked + [{"role": "assistant", "content": "", "tool_calls": [call]},
+                                       {"role": "tool", "tool_call_id": "camera", "name": "camera",
+                                        "content": found}]
+                    answer = self.llm(msgs + looked) or answer
+                else:
+                    log("a check was promised and nothing done: asked again")
+                    answer = self.llm(msgs[:-1] + [put(NOT_CHECKED)] + looked) or answer
+                if not ctx["lookups"] and CHECK_PROMISE.search(clean(answer)):
+                    log("and promised again with nothing done: the reply says so")
+                    answer = NO_CHECK
             reply = clean(answer)
         finally:
             TURN.ctx = None
