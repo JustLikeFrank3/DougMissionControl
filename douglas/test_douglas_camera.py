@@ -225,7 +225,7 @@ print("-- a whole turn: the program looks, he answers, the program says when (C3
 DECK["obs"] = None
 EYES.clear()
 voice.CONVO.update(camera=False)
-voice.camera_wanted = lambda said, ask=None: "front" in said.lower()
+voice.camera_wanted = lambda said, ask=None, before="": "front" in said.lower()
 SHOWN = []
 
 
@@ -273,6 +273,46 @@ check("a question about something else is not routed to a camera", voice.CAMERA_
 for q in ("What can you see out of the front right now?", "is there a parcel on the porch", "is it raining",
           "anyone at the door?", "look out the window", "what's in the driveway"):
     check(f"heard as a possible camera question: {q}", bool(voice.CAMERA_WORDS.search(q)), True)
+
+print("-- a promise to check with nothing done is not where the turn ends --")
+DECK["cameras"] = [{"id": "cam-front-1", "name": "Driveway", "online": True},
+                   {"id": "cam-lr-9", "name": "Living Room", "online": True}]
+EYES.clear()
+voice.camera_wanted = lambda said, ask=None, before="": False        # the routing misses, as it did
+
+
+def promising_llm(messages):
+    if any(m.get("role") == "tool" and m.get("name") == "camera" for m in messages):
+        return "Nobody is in the living room; the sofa is empty."
+    return "I can look through the Ring cameras, so let me check. Give me a moment."
+
+
+p_lines = os.path.join(tmp, "promise.jsonl")
+ppipe = voice.Pipeline(voice.StateFile(os.path.join(tmp, "st2.json")), voice.Transcript(p_lines),
+                       send=lambda *a: True, stt=lambda a, f: "", llm=promising_llm,
+                       tts=lambda text: (b"\x00\x10" * 2205, (22050, 2, 1)))
+with redirect_stderr(io.StringIO()):
+    ppipe.say("Is there someone in the living room right now?", "deck")
+    end = time.time() + 10
+    while time.time() < end and len(lines_of(p_lines)) < 2:
+        time.sleep(0.05)
+got = lines_of(p_lines)
+check("the program looked when he only promised to", len(EYES), 1)
+check("through the camera the question named", DECK["asked"][-1][2], {"camera": "cam-lr-9"})
+check("and he answered from it", got[-1]["text"].startswith("Nobody is in the living room"), True)
+check("with which camera and when", " camera, picture taken at " in got[-1]["text"], True)
+
+voice.CONVO.update(camera=False)
+qpipe = voice.Pipeline(voice.StateFile(os.path.join(tmp, "st3.json")), voice.Transcript(os.path.join(tmp, "q.jsonl")),
+                       send=lambda *a: True, stt=lambda a, f: "", llm=lambda m: "Hang on, let me check that for you.",
+                       tts=lambda text: (b"\x00\x10" * 2205, (22050, 2, 1)))
+with redirect_stderr(io.StringIO()):
+    qpipe.say("What's the capital of France?", "deck")
+    end = time.time() + 10
+    while time.time() < end and len(lines_of(os.path.join(tmp, "q.jsonl"))) < 2:
+        time.sleep(0.05)
+check("a promise twice, with nothing to look at: said plainly", lines_of(os.path.join(tmp, "q.jsonl"))[-1]["text"],
+      voice.NO_CHECK)
 
 print("-- memory keeps no camera --")
 check("consolidation is told to keep nothing a camera showed", "what a camera showed" in voice.CONSOLIDATE, True)
