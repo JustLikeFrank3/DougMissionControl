@@ -63,6 +63,35 @@ with what was there before. A memory that a newer one replaces is kept and
 marked superseded; one the owner corrects is corrected in place; one that is
 deleted is kept, out of reach of recall, until it is purged.
 
+How a memory is found again (recall): two ways, put together.
+    by its words  the full-text index: a name, a number, an identifier is
+                  found as it was written
+    by its sense  a vector for each memory, made by a small embedding model
+                  that runs on the CPU in its own service (douglas-embed),
+                  reached at a Unix socket: "what does she drink in the
+                  morning" finds "She takes her coffee black" with no word
+                  in common. The vectors are kept here, in this database,
+                  one per active memory and none for anything else: a
+                  memory that is replaced, corrected, forgotten or purged
+                  loses its vector in the same change, and a new one is
+                  made for its new words later, by a thread of this
+                  service, never in the way of a recall. A vector made by
+                  another model (or the same model asked another way) is
+                  not used, and is made again.
+The two lists are put together by reciprocal rank fusion, then weighed as
+before by who vouches, how sure and how old. When the embedding service
+does not answer, recall is what it was before it existed: the words only.
+Nothing found only by its sense is handed out unless it is close enough;
+two that say nearly the same thing are handed out once, the firmer word.
+
+Kinds fall into five categories: semantic (durable facts and preferences),
+episodic (what conversations came to), procedural (lessons), spatial (the
+fleet; places in the house) and observational (what a camera saw). An
+observation is kept only where MEMORY_OBSERVATIONS=1, is never the owner's
+word, never replaces anything that is not an observation, runs out
+(expires), and is handed out with the time it was seen, never as how
+things are now.
+
 What comes out of `recall` is data. The pipeline hands it to the model
 marked as notes, never as instructions, and this service takes out of
 every text, coming in and going out, what could pass for anything else:
@@ -74,11 +103,24 @@ Settings (environment; /etc/douglas/memory.env):
     MEMORY_RUN         where the doors are    /run/douglas-memory
     MEMORY_MAX         memories kept active, the least useful let go   5000
     MEMORY_EVENTS      log rows kept                                  5000
+    MEMORY_OBSERVATIONS   1: keep what a camera saw (kind observation)  0
+    MEMORY_OBS_HOURS   how long an observation is kept                 72
+    EMBED_SOCKET       the embedding service's socket; empty: words only
+                       (/run/douglas-embed/embed.sock where it is set up)
+    EMBED_DIM          the length vectors are cut to (Matryoshka)      768
+    EMBED_QUERY        how a question is put to the model   (EmbeddingGemma's)
+    EMBED_DOC          how a memory is put to the model     (EmbeddingGemma's)
+    EMBED_MIN          how close a memory found only by sense must be  0.30
+    EMBED_SAME         closer than this, two memories say the same     0.97
+    EMBED_TIMEOUT      seconds a recall waits for a question's vector  0.5
 """
 
 from __future__ import annotations
 
+import array
 import contextlib
+import hashlib
+import http.client
 import json
 import math
 import os
@@ -100,8 +142,32 @@ DB = E("MEMORY_DB", "/var/lib/douglas-memory/memory.db")
 RUN = E("MEMORY_RUN", "/run/douglas-memory")
 MAX_ACTIVE = int(E("MEMORY_MAX", "5000"))
 MAX_EVENTS = int(E("MEMORY_EVENTS", "5000"))
+OBSERVATIONS = E("MEMORY_OBSERVATIONS", "0") == "1"
+OBS_HOURS = float(E("MEMORY_OBS_HOURS", "72"))
+EMBED_SOCKET = E("EMBED_SOCKET")
+EMBED_DIM = int(E("EMBED_DIM", "768"))
+# EmbeddingGemma's own prompts. Another model has its own (Nomic Embed:
+# "search_query: {text}" and "search_document: {subject}: {text}").
+EMBED_QUERY = E("EMBED_QUERY", "task: search result | query: {text}")
+EMBED_DOC = E("EMBED_DOC", "title: {subject} | text: {text}")
+# Measured on Douglas with embed-eval.py (2026-11-25), EmbeddingGemma 300M Q8_0
+# at 768: a paraphrase is 0.22 to 0.7 from its memory, the best match of an
+# unrelated question at most 0.21. Two that say the same are 0.83 to 0.99
+# apart, and two that do not can be 0.92 ("renew the home insurance" and
+# "renew the car insurance"): only a near word-for-word repeat is made one.
+EMBED_MIN = float(E("EMBED_MIN", "0.30"))
+EMBED_SAME = float(E("EMBED_SAME", "0.97"))
+EMBED_TIMEOUT = float(E("EMBED_TIMEOUT", "0.5"))
+RRF_K = 60
 
-KINDS = ("preference", "fact", "project", "decision", "task", "lesson", "fleet", "summary")
+KINDS = ("preference", "fact", "project", "decision", "task", "lesson", "fleet", "summary", "place",
+         "observation")
+# What each kind is, of the five sorts of memory. A kind is one category,
+# always: the category is not kept, it is read off the kind.
+CATEGORY = {"preference": "semantic", "fact": "semantic", "project": "semantic", "decision": "semantic",
+            "task": "semantic", "summary": "episodic", "lesson": "procedural", "fleet": "spatial",
+            "place": "spatial", "observation": "observational"}
+CATEGORIES = ("semantic", "episodic", "procedural", "spatial", "observational")
 # A notice is one of three things, and where each goes is the owner's to say:
 # whether Douglas mentions it at the next turn (tell), and whether it is said
 # aloud in the room (aloud; never in the quiet hours). On the screens they
@@ -119,7 +185,7 @@ SURE = {"owner": 1.0, "said": 0.9, "observed": 0.9, "inferred": 0.5}
 # long it counts half in what is recalled. A preference holds; what a
 # machine was doing last week does not.
 HALF_LIFE = {"preference": 730, "fact": 730, "decision": 365, "lesson": 365, "project": 90,
-             "task": 45, "summary": 45, "fleet": 14}
+             "task": 45, "summary": 45, "fleet": 14, "place": 730, "observation": 1}
 TEXT_MAX, SUBJECT_MAX = 400, 80
 HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁠-⁩﻿"
                     "\U000e0000-\U000e007f]")
@@ -215,8 +281,126 @@ class Problem(Exception):
     """Something that could not be done, in words for the caller."""
 
 
+class _Unix(http.client.HTTPConnection):
+    """HTTP to a server at a Unix socket: this service has no network."""
+
+    def __init__(self, path: str, timeout: float) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self.unix = path
+
+    def connect(self) -> None:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(self.timeout)
+        s.connect(self.unix)
+        self.sock = s
+
+
+class Embedder:
+    """The embedding service: a llama-server running a small embedding model
+    on the CPU, at a Unix socket, with no network either. It is told
+    sentences and gives back vectors; it never sees the database. What it
+    is, as far as a vector goes (`tag`), is the model it says it has loaded,
+    the length vectors are cut to and the way questions and memories are
+    put to it: change any of those and every vector is made again. When it
+    does not answer it is left alone for a while, so that a recall does not
+    wait for it every time."""
+
+    def __init__(self, path: str, dim: int = EMBED_DIM, query: str = EMBED_QUERY, doc: str = EMBED_DOC) -> None:
+        self.path, self.dim, self.q, self.d = path, dim, query, doc
+        self.known: str | None = None
+        self.down_until = 0.0
+        self.cache: dict[tuple, list[float]] = {}
+        self.lock = threading.Lock()
+
+    def _post(self, path: str, body, timeout: float):
+        c = _Unix(self.path, timeout)
+        try:
+            c.request("POST" if body is not None else "GET", path, json.dumps(body) if body is not None else None,
+                      {"Content-Type": "application/json"})
+            r = c.getresponse()
+            data = r.read(64_000_000)
+            if r.status != 200:
+                raise OSError(f"the embedding service said {r.status}")
+            return json.loads(data)
+        finally:
+            c.close()
+
+    def _failed(self, why: Exception) -> None:
+        if time.time() >= self.down_until:
+            log(f"memory: the embedding service is not answering ({type(why).__name__}): words only for a while")
+        self.down_until = time.time() + 30
+        self.known = None
+
+    def tag(self, timeout: float = 2.0) -> str | None:
+        """What a vector made now is made by, or None while nothing answers."""
+        if self.known or time.time() < self.down_until:
+            return self.known
+        try:
+            data = self._post("/v1/models", None, timeout)
+            name = str((data.get("data") or [{}])[0].get("id") or "")
+            if not name:
+                raise ValueError("no model")
+        except (OSError, ValueError, http.client.HTTPException, AttributeError, IndexError) as e:
+            self._failed(e)
+            return None
+        how = hashlib.sha256(f"{self.q}\n{self.d}".encode()).hexdigest()[:8]
+        self.known = f"{os.path.basename(name)}|{self.dim}|{how}"
+        return self.known
+
+    def vectors(self, texts: list[str], timeout: float) -> list[list[float]] | None:
+        if not texts or time.time() < self.down_until:
+            return None
+        try:
+            data = self._post("/v1/embeddings", {"input": texts, "encoding_format": "float"}, timeout)
+            got = sorted(data["data"], key=lambda x: x.get("index", 0))
+            out = [self.cut(x["embedding"]) for x in got]
+            if len(out) != len(texts):
+                raise ValueError("not one vector a sentence")
+        except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as e:
+            self._failed(e)
+            return None
+        return out
+
+    def cut(self, v) -> list[float]:
+        """A vector cut to length and made of length one, so that how close
+        two are is the sum of their products."""
+        v = [float(x) for x in v[: self.dim]]
+        n = math.sqrt(math.sumprod(v, v)) or 1.0
+        return [x / n for x in v]
+
+    def question(self, text: str, timeout: float = EMBED_TIMEOUT) -> list[float] | None:
+        """A question's vector, or None (and words only) when it is not
+        there in time. The last few are kept, each with the model that made
+        it: a message is often asked about twice in one turn."""
+        tag = self.tag(timeout)
+        if not tag:
+            return None
+        with self.lock:
+            if (tag, text) in self.cache:
+                return self.cache[(tag, text)]
+        got = self.vectors([self.q.format(text=text)], timeout)
+        if got is None or self.known != tag:
+            return None
+        with self.lock:
+            if len(self.cache) >= 64:
+                self.cache.pop(next(iter(self.cache)))
+            self.cache[(tag, text)] = got[0]
+        return got[0]
+
+    def document(self, subject: str, text: str) -> str:
+        return self.d.format(subject=subject, text=text)
+
+
+def packed(v: list[float]) -> bytes:
+    return array.array("f", v).tobytes()
+
+
+def unpacked(b: bytes) -> list[float]:
+    return array.array("f", b).tolist()
+
+
 class Store:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, embedder: Embedder | None = None) -> None:
         self.lock = threading.RLock()
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
@@ -238,6 +422,11 @@ class Store:
         self.used: dict[int, list] = {}
         self.used_lock = threading.Lock()
         self.uncut = False               # a purge whose text may still be in the log
+        # Finding by sense: the embedding service, if there is one, and the
+        # vectors as they were last read (see vectors).
+        self.embedder = embedder if embedder is not None else (Embedder(EMBED_SOCKET) if EMBED_SOCKET else None)
+        self.vcache: tuple = (None, None, [])
+        self.wake = threading.Event()
 
     def migrate(self) -> None:
         """The schema, brought up to date one step at a time: each step runs
@@ -275,6 +464,12 @@ class Store:
                 raised REAL NOT NULL, updated REAL NOT NULL, cleared REAL, acked REAL, told REAL,
                 spoken REAL, times INTEGER NOT NULL DEFAULT 1);
             CREATE INDEX notices_by_key ON notices (key, cleared);
+        """, """
+            CREATE TABLE embeddings (
+                memory INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+                model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, at REAL NOT NULL);
+            CREATE INDEX embeddings_by_model ON embeddings (model);
+            ALTER TABLE memories ADD COLUMN expires REAL;
         """]
         with self.lock:
             have = self.db.execute("PRAGMA user_version").fetchone()[0]
@@ -323,6 +518,13 @@ class Store:
                         (memory, time.time(), who, action, before, after))
 
     def index(self, row_id: int, subject: str | None, text: str | None) -> None:
+        """What a memory can be found by: its words, put in the full-text
+        index anew, or taken out of it (subject None). Its vector goes
+        either way, in the same change: a vector is of one wording of an
+        active memory, and a new one is made for the new words later (see
+        embed). So nothing replaced, corrected, deleted or purged can be
+        found by what it used to say."""
+        self.db.execute("DELETE FROM embeddings WHERE memory = ?", (row_id,))
         self.db.execute("DELETE FROM memories_fts WHERE rowid = ?", (row_id,))
         if subject is not None:
             self.db.execute("INSERT INTO memories_fts (rowid, subject, text) VALUES (?,?,?)",
@@ -340,6 +542,19 @@ class Store:
             raise Problem(f"A memory is one of: {', '.join(KINDS)}.")
         if source not in SOURCES:
             raise Problem(f"A memory comes from one of: {', '.join(SOURCES)}.")
+        expires = None
+        if kind == "observation":
+            # What a camera saw, described by a model: kept only where that
+            # has been switched on, only as seen (never anybody's word), at
+            # most as sure as a guess, and only for a while. Being its own
+            # kind, it can replace an earlier observation of the same thing
+            # and nothing else: never a fact.
+            if not OBSERVATIONS:
+                raise Problem("What the cameras see is not kept in memory on this machine.")
+            if source != "observed":
+                raise Problem("An observation is what was seen, and nothing else.")
+            confidence = min(0.6, float(confidence)) if isinstance(confidence, (int, float)) else 0.6
+            expires = time.time() + OBS_HOURS * 3600
         subject, text = clean(subject, SUBJECT_MAX), clean(text, TEXT_MAX)
         if len(text) < 3 or not words(text):
             raise Problem("There is nothing in that to remember.")
@@ -378,9 +593,9 @@ class Store:
                 return firmer[0]["id"], "refused"
             cur = self.db.execute(
                 "INSERT INTO memories (kind, subject, subject_key, text, source, confidence, via, "
-                "conversation, model, created, updated, due) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "conversation, model, created, updated, due, expires) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (kind, subject, key, text, source, sure, clean(via, 20), clean(conversation, 40),
-                 clean(model, 80), now, now, due))
+                 clean(model, 80), now, now, due, expires))
             new = cur.lastrowid
             self.index(new, subject, text)
             self.note(new, who, "kept", after=text)
@@ -389,6 +604,7 @@ class Store:
                                 "WHERE id = ?", (new, now, old["id"]))
                 self.index(old["id"], None, None)
                 self.note(old["id"], who, "replaced", before=old["text"], after=f"by {new}")
+            self.wake.set()
             return new, "replaced" if same else "kept"
 
     def like(self, text: str, kind: str = "", db=None) -> list:
@@ -417,46 +633,86 @@ class Store:
 
     # -- reading, for the assistant ---------------------------------------------
 
-    def recall(self, text: str, limit: int = 6, budget: int = 900, kinds=None, mark: bool = True) -> list[dict]:
-        """What is remembered that bears on a message: the active memories
-        that share its words, weighed by how sure each is, who vouches for
-        it and how old it is, as many as fit in `budget` characters. One
-        that does not fit is passed over for a shorter one, not the end of
-        the list. Each that is handed out is marked as used, unless it is
-        a reader asking (`mark`): what somebody else looked up is not his
-        having used it."""
+    def recall(self, text: str, limit: int = 6, budget: int = 900, kinds=None, mark: bool = True,
+               categories=None) -> list[dict]:
+        """What is remembered that bears on a message, as many as fit in
+        `budget` characters (one that does not fit is passed over for a
+        shorter one, not the end of the list). Found two ways: by the
+        message's words (the full-text index) and, where the embedding
+        service answers, by its sense (vectors). The two lists are put
+        together by reciprocal rank fusion: what both find comes first, and
+        a name or a number found only by its letters still comes up. Each
+        is then weighed by how sure it is, who vouches for it and how old it
+        is. Something found only by its sense has to be close enough
+        (EMBED_MIN); of two that say nearly the same thing (EMBED_SAME) the
+        firmer word is handed out and the other not. Without the embedding
+        service, this is what it always was: the words only, weighed by how
+        well they match.
+
+        Only active memories come out, whichever way they were found: a
+        vector is a way of finding a memory, never a memory. A task that is
+        done does not, nor an observation that has run out. Each that is
+        handed out is marked as used, unless it is a reader asking
+        (`mark`): what somebody else looked up is not his having used it."""
         now = time.time()
         limit, budget = min(max(1, int(limit)), 12), min(max(100, int(budget)), 3000)
         q = self.query(text)
-        if not q:
+        allowed = set(k for k in (kinds or []) if k in KINDS)
+        allowed |= {k for k, c in CATEGORY.items() if c in (categories or [])}
+        allowed = sorted(allowed)
+        # The question's vector is asked for before anything is held: the
+        # embedding service may take its time, and nobody waits behind that.
+        qv = self.embedder.question(text[:2000]) if self.embedder and len(words(text)) else None
+        tag = self.embedder.known if qv is not None else None     # what made qv: only its like is used
+        if not q and qv is None:
             return []
-        kinds = [k for k in (kinds or []) if k in KINDS]
+        only = (f"AND m.kind IN ({','.join('?' * len(allowed))}) " if allowed else "")
+        live = "AND m.status = 'active' AND (m.expires IS NULL OR m.expires > ?) "
         with self.rlock:
-            try:
-                rows = self.rd.execute(
-                    "SELECT m.*, bm25(memories_fts, 3.0, 1.0) AS rank FROM memories_fts JOIN memories m "
-                    "ON m.id = memories_fts.rowid WHERE memories_fts MATCH ? AND m.status = 'active' "
-                    + (f"AND m.kind IN ({','.join('?' * len(kinds))}) " if kinds else "")
-                    + "ORDER BY rank LIMIT 40", (q, *kinds)).fetchall()
-            except sqlite3.OperationalError:
-                return []
-        scored = []
-        for r in rows:
-            if r["kind"] == "task" and r["done"]:
-                continue
-            age = max(0.0, now - r["updated"]) / 86400
-            weight = (-r["rank"]) * (0.4 + 0.6 * r["confidence"]) * (1.0 + 0.15 * SOURCES[r["source"]]) \
-                * math.pow(0.5, age / HALF_LIFE[r["kind"]])
-            scored.append((weight, r))
-        scored.sort(key=lambda x: -x[0])
+            rows = []
+            if q:
+                try:
+                    rows = self.rd.execute(
+                        "SELECT m.*, bm25(memories_fts, 3.0, 1.0) AS rank FROM memories_fts JOIN memories m "
+                        "ON m.id = memories_fts.rowid WHERE memories_fts MATCH ? " + live + only
+                        + "ORDER BY rank LIMIT 40", (q, now, *allowed)).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+            near: dict[int, float] = {}
+            sense, vecs = [], {}
+            if qv is not None and tag:
+                vecs = dict(self.vectors(tag))
+                near = {i: math.sumprod(qv, v) for i, v in vecs.items()}
+                best = sorted(((sim, i) for i, sim in near.items() if sim >= EMBED_MIN), reverse=True)[:40]
+                if best:
+                    got = {r["id"]: r for r in self.rd.execute(
+                        f"SELECT m.* FROM memories m WHERE m.id IN ({','.join('?' * len(best))}) " + live + only,
+                        (*[i for _s, i in best], now, *allowed)).fetchall()}
+                    sense = [got[i] for _s, i in best if i in got]
+        rows = [r for r in rows if not (r["kind"] == "task" and r["done"])]
+        sense = [r for r in sense if not (r["kind"] == "task" and r["done"])]
+        prior = lambda r: (0.4 + 0.6 * r["confidence"]) * (1.0 + 0.15 * SOURCES[r["source"]]) \
+            * math.pow(0.5, max(0.0, now - r["updated"]) / 86400 / HALF_LIFE[r["kind"]])   # noqa: E731
+        byid = {r["id"]: r for r in [*sense, *rows]}
+        if sense or near:
+            fused: dict[int, float] = {}
+            for ranked in (rows, sense):
+                for n, r in enumerate(ranked):
+                    fused[r["id"]] = fused.get(r["id"], 0.0) + 1.0 / (RRF_K + n + 1)
+            scored = sorted(((w * prior(byid[i]), byid[i]) for i, w in fused.items()), key=lambda x: -x[0])
+        else:                               # words only: as it always was
+            scored = sorted((((-r["rank"]) * prior(r), r) for r in rows), key=lambda x: -x[0])
+        # Of two that say nearly the same thing, the firmer word, in the
+        # place of whichever of them came first.
+        ranked = self.settled([r for _w, r in scored], vecs)
         out, used = [], 0
-        for _w, r in scored:
+        for r in ranked:
             if len(out) >= limit:
                 break
             size = len(r["text"]) + len(r["subject"]) + 40
             if used + size > budget:
                 continue                    # skip, not stop: a shorter one further down may fit
-            out.append(self.shown(r))
+            out.append(self.shown(r, now))
             used += size
         with self.used_lock:                # noted here, written down later (settle)
             for m in out if mark else []:
@@ -465,8 +721,113 @@ class Store:
         return out
 
     @staticmethod
-    def shown(r) -> dict:
-        return {"id": r["id"], "kind": r["kind"], "subject": r["subject"], "text": r["text"],
+    def strength(r) -> tuple:
+        """Whose word wins between two memories that say the same: never an
+        observation over anything else, then the stronger source, then the
+        newer."""
+        return (r["kind"] != "observation", SOURCES[r["source"]], r["updated"])
+
+    def settled(self, rows: list, vecs: dict) -> list:
+        """Memories in the order they are to be handed out, with any two that
+        say nearly the same thing made one: the firmer, in the place of
+        whichever of them came first. Nothing is changed in the memory: the
+        other is only not handed out this time."""
+        keep: list = []
+        for r in rows:
+            v = vecs.get(r["id"])
+            twin = None if v is None else next(
+                (n for n, k in enumerate(keep) if vecs.get(k["id"]) is not None
+                 and math.sumprod(v, vecs[k["id"]]) >= EMBED_SAME), None)
+            if twin is None:
+                keep.append(r)
+            elif self.strength(r) > self.strength(keep[twin]):
+                keep[twin] = r
+        return keep
+
+    def vectors(self, tag: str) -> list[tuple[int, list[float]]]:
+        """The vectors of the active memories, made by `tag`'s model: read
+        from the database when it has changed since they were last read, and
+        otherwise kept as they were. Held in the reader's lock."""
+        ver = self.rd.execute("PRAGMA data_version").fetchone()[0]
+        if self.vcache[0] == ver and self.vcache[1] == tag:
+            return self.vcache[2]
+        got = [(r[0], unpacked(r[1])) for r in self.rd.execute(
+            "SELECT e.memory, e.vec FROM embeddings e JOIN memories m ON m.id = e.memory "
+            "WHERE e.model = ? AND m.status = 'active'", (tag,))]
+        self.vcache = (ver, tag, got)
+        return got
+
+    # -- finding by sense: the vectors, made in the background ------------------
+
+    def embed(self, most: int = 32) -> int:
+        """Make vectors for active memories that have none from the model
+        now loaded: new ones, reworded ones, and every one after the model
+        is changed. The model is asked with nothing held, so that neither a
+        recall nor a change waits for it; what it made is kept only if the
+        memory still says what it said when it was asked (it may have been
+        corrected, replaced or deleted meanwhile). How many were made."""
+        if not self.embedder:
+            return 0
+        tag = self.embedder.tag()
+        if not tag:
+            return 0
+        with self.rlock:
+            rows = self.rd.execute(
+                "SELECT m.id, m.subject, m.text FROM memories m LEFT JOIN embeddings e ON e.memory = m.id "
+                "AND e.model = ? WHERE m.status = 'active' AND e.memory IS NULL ORDER BY m.updated DESC LIMIT ?",
+                (tag, most)).fetchall()
+        if not rows:
+            return 0
+        vecs = self.embedder.vectors([self.embedder.document(r["subject"], r["text"]) for r in rows], 60)
+        if vecs is None:
+            return 0
+        made = 0
+        with self.tx():
+            for r, v in zip(rows, vecs):
+                now = self.db.execute("SELECT subject, text, status FROM memories WHERE id = ?", (r["id"],)).fetchone()
+                if now and now["status"] == "active" and (now["subject"], now["text"]) == (r["subject"], r["text"]):
+                    self.db.execute("INSERT OR REPLACE INTO embeddings (memory, model, dim, vec, at) "
+                                    "VALUES (?,?,?,?,?)", (r["id"], tag, len(v), packed(v), time.time()))
+                    made += 1
+        return made
+
+    def embedding(self) -> None:
+        """The thread that makes vectors: woken by a change, and by the
+        clock in case one was missed or the embedding service was down."""
+        while True:
+            self.wake.wait(60)
+            self.wake.clear()
+            try:
+                while self.embed() > 0:
+                    pass
+            except sqlite3.Error as e:
+                log(f"memory: vectors could not be written down: {type(e).__name__}")
+            except Exception as e:                  # noqa: BLE001 - the thread outlives one bad batch
+                log(f"memory: making vectors tripped: {type(e).__name__}")
+
+    def expire(self) -> int:
+        """Observations that have run out are let go (kept, marked deleted,
+        out of reach of recall, as anything forgotten is)."""
+        with self.tx():
+            rows = self.db.execute("SELECT id, text FROM memories WHERE status = 'active' AND expires IS NOT NULL "
+                                   "AND expires <= ?", (time.time(),)).fetchall()
+            for r in rows:
+                self.db.execute("UPDATE memories SET status = 'deleted', updated = ? WHERE id = ?", (time.time(), r["id"]))
+                self.index(r["id"], None, None)
+                self.note(r["id"], "memory", "expired", before=r["text"])
+            return len(rows)
+
+    @staticmethod
+    def shown(r, now: float | None = None) -> dict:
+        """A memory as it is handed out. An observation says when it was
+        seen and that it is not known to hold now: it is never handed out
+        as how things are."""
+        extra = {}
+        if r["kind"] == "observation":
+            extra = {"observed": r["created"], "current": False,
+                     "stale_hours": round((((now or time.time()) - r["created"]) / 3600), 1)}
+        return {**extra, "id": r["id"], "kind": r["kind"], "category": CATEGORY.get(r["kind"], ""),
+                "subject": r["subject"], "text": r["text"], "expires": r["expires"],
                 "source": r["source"], "confidence": round(r["confidence"], 2), "via": r["via"],
                 "created": r["created"], "updated": r["updated"], "last_used": r["last_used"],
                 "uses": r["uses"], "status": r["status"], "superseded_by": r["superseded_by"],
@@ -480,7 +841,7 @@ class Store:
         with self.rlock:
             rows = self.rd.execute(
                 "SELECT * FROM memories WHERE status = 'active' AND kind IN ('preference', 'fact', 'project', "
-                "'decision', 'task') AND (kind != 'task' OR done IS NULL) ORDER BY confidence * (CASE source "
+                "'decision', 'task', 'place') AND (kind != 'task' OR done IS NULL) ORDER BY confidence * (CASE source "
                 "WHEN 'owner' THEN 1.3 WHEN 'inferred' THEN 0.7 ELSE 1.0 END) DESC, updated DESC LIMIT 60").fetchall()
         out, used = [], 0
         for r in rows:
@@ -790,6 +1151,12 @@ class Store:
             new_text = clean(text, TEXT_MAX) if text is not None else r["text"]
             new_subject = clean(subject, SUBJECT_MAX) if subject is not None else r["subject"]
             new_kind = kind if kind in KINDS else r["kind"]
+            if new_kind == "observation" and r["kind"] != "observation":
+                raise Problem("Only a camera makes an observation: the owner's word is a fact.")
+            # The owner putting an observation in words of their own makes it
+            # theirs: a fact, that does not run out.
+            if new_kind == "observation" and (text is not None or subject is not None or confidence is not None):
+                new_kind = "fact"
             if len(new_text) < 3:
                 raise Problem("A memory has to say something. To be rid of it, delete it.")
             if SECRET.search(new_text) or SECRET.search(new_subject):
@@ -804,10 +1171,13 @@ class Store:
                  r["confidence"] if not reworded else
                  1.0 if confidence is None else min(1.0, max(0.05, float(confidence))), time.time(),
                  (time.time() if done else None) if done is not None else r["done"], r["id"]))
+            if new_kind != "observation":
+                self.db.execute("UPDATE memories SET expires = NULL WHERE id = ?", (r["id"],))
             if r["status"] == "active":
                 self.index(r["id"], new_subject, new_text)
             self.note(r["id"], who, "corrected" if reworded else "marked done" if done else "marked not done",
                       before=r["text"], after=new_text)
+            self.wake.set()
             return self.get(r["id"])
 
     def set_status(self, memory, who: str, status: str) -> dict:
@@ -831,6 +1201,7 @@ class Store:
             self.db.execute("UPDATE memories SET status = ?, superseded_by = NULL, updated = ? WHERE id = ?",
                             (status, time.time(), r["id"]))
             self.note(r["id"], who, "restored" if status == "active" else "deleted", before=r["text"])
+            self.wake.set()
             return self.get(r["id"])
 
     def purge(self, memory, who: str) -> bool:
@@ -893,7 +1264,27 @@ class Store:
                     "conversations": last[1], "last_consolidated": last[0],
                     "open_tasks": self.db.execute("SELECT COUNT(*) FROM memories WHERE status = 'active' AND "
                                                   "kind = 'task' AND done IS NULL").fetchone()[0],
-                    "version": self.db.execute("PRAGMA user_version").fetchone()[0]}
+                    "version": self.db.execute("PRAGMA user_version").fetchone()[0],
+                    "by_sense": self.sense()}
+
+    def sense(self) -> dict:
+        """Whether memories can be found by their sense, and how many can."""
+        if not self.embedder:
+            return {"on": False}
+        tag = self.embedder.known
+        n = self.db.execute("SELECT COUNT(*) FROM embeddings e JOIN memories m ON m.id = e.memory WHERE "
+                            "m.status = 'active' AND e.model = ?", (tag or "",)).fetchone()[0]
+        return {"on": True, "answering": bool(tag), "model": tag, "embedded": n}
+
+    def reindex(self) -> int:
+        """Every vector made again, by the model loaded now: for the owner,
+        after something about the model has changed that its name does not
+        show."""
+        with self.tx():
+            n = self.db.execute("DELETE FROM embeddings").rowcount
+        self.embedder and setattr(self.embedder, "known", None)
+        self.wake.set()
+        return n
 
 
 # ── the doors ───────────────────────────────────────────────────────────────
@@ -919,7 +1310,9 @@ class Desk:
             return {"memories": s.recall(str(r.get("text") or "")[:2000], whole(r.get("limit") or 6, 12, 1),
                                          whole(r.get("budget") or 900, 3000, 100),
                                          r.get("kinds") if isinstance(r.get("kinds"), list) else None,
-                                         mark=r.get("mark") is not False)}
+                                         mark=r.get("mark") is not False,
+                                         categories=r.get("categories") if isinstance(r.get("categories"), list)
+                                         else None)}
         if op == "remember":
             source = r.get("source") if r.get("source") in ("said", "observed", "inferred") else "inferred"
             i, what = s.add(r.get("kind"), r.get("subject"), r.get("text"), source, "douglas",
@@ -970,7 +1363,9 @@ class Desk:
         if op == "recall":
             return {"memories": s.recall(str(r.get("text") or "")[:2000], whole(r.get("limit") or 6, 12, 1),
                                          whole(r.get("budget") or 1500, 3000, 100),
-                                         r.get("kinds") if isinstance(r.get("kinds"), list) else None, mark=False)}
+                                         r.get("kinds") if isinstance(r.get("kinds"), list) else None, mark=False,
+                                         categories=r.get("categories") if isinstance(r.get("categories"), list)
+                                         else None)}
         if op == "known":
             return {"memories": s.known()}
         if op == "tasks":
@@ -1016,6 +1411,8 @@ class Desk:
             return {"id": i, "what": what}
         if op == "notice_clear":
             return {"cleared": s.clear_notice(r.get("key"))}
+        if op == "reindex":
+            return {"dropped": s.reindex()}
         if op == "export":
             with s.lock:
                 return {"memories": [s.shown(x) for x in s.db.execute(
@@ -1101,10 +1498,17 @@ def serve() -> None:
             time.sleep(30)
             try:
                 desk.store.flush()
+                if desk.store.db.execute("SELECT 1 FROM memories WHERE status = 'active' AND expires <= ? "
+                                         "LIMIT 1", (time.time(),)).fetchone():
+                    log(f"memory: {desk.store.expire()} observations ran out")
             except sqlite3.Error as e:
                 log(f"memory: what was used could not be written down: {type(e).__name__}")
 
     threading.Thread(target=by_the_clock, daemon=True).start()
+    if desk.store.embedder:
+        log(f"douglas-memory: memories are found by their sense too, through {EMBED_SOCKET}")
+        threading.Thread(target=desk.store.embedding, daemon=True).start()
+        desk.store.wake.set()                    # whatever has no vector yet, and the model may be new
     servers[0].serve_forever()
 
 
@@ -1137,15 +1541,23 @@ def sound() -> tuple[bool, str]:
         said = [r[0] for r in db.execute("PRAGMA integrity_check")]
         states = dict(db.execute("SELECT status, COUNT(*) FROM memories GROUP BY status"))
         indexed = db.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
+        try:
+            vec = db.execute("SELECT COUNT(*), COUNT(DISTINCT e.model), SUM(m.status != 'active') FROM embeddings e "
+                             "LEFT JOIN memories m ON m.id = e.memory").fetchone()
+        except sqlite3.OperationalError:
+            vec = (0, 0, 0)
         rest = (db.execute("SELECT COUNT(*) FROM history").fetchone()[0],
                 db.execute("SELECT COUNT(*) FROM events").fetchone()[0],
                 db.execute("PRAGMA user_version").fetchone()[0])
     finally:
         db.close()
-    ok = said == ["ok"] and indexed == states.get("active", 0)
+    # A vector of anything that is not active would let it be found: never.
+    ok = said == ["ok"] and indexed == states.get("active", 0) and not vec[2]
     return ok, (f"{'sound' if said == ['ok'] else 'NOT SOUND: ' + '; '.join(said)[:300]}. "
                 f"{states.get('active', 0)} memories kept ({indexed} of them findable), "
                 f"{states.get('superseded', 0)} replaced, {states.get('deleted', 0)} deleted; "
+                f"{vec[0]} vectors (by {vec[1]} model{'s' if vec[1] != 1 else ''}"
+                f"{', ' + str(vec[2]) + ' of them of memories not active: NOT SOUND' if vec[2] else ''}); "
                 f"{rest[0]} changes on record, {rest[1]} lines of what he did; version {rest[2]}.")
 
 

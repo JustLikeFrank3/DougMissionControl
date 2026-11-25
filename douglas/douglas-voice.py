@@ -3395,8 +3395,15 @@ def noted(memories: list) -> str:
     for m in memories:
         if isinstance(m, dict) and m.get("text"):
             when = time.strftime("%Y-%m-%d", time.localtime(float(m.get("updated") or 0)))
+            how = HOW_KNOWN.get(m.get("source"), "noted")
+            if m.get("kind") == "observation":
+                # What a camera saw is never how things are now: when, and
+                # that nobody has looked since.
+                seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(m.get("observed") or 0)))
+                how = (f"a camera saw this at {seen}, {m.get('stale_hours', '?')} hours ago; not checked "
+                       "since, so it may no longer be so")
             lines.append("- " + str(m["text"]).replace("[", "(").replace("]", ")").replace("\n", " ")
-                         + f" ({m.get('kind') or 'note'}; {HOW_KNOWN.get(m.get('source'), 'noted')}; {when})")
+                         + f" ({m.get('kind') or 'note'}; {how}; {when})")
     return "\n".join(lines)
 
 
