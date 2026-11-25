@@ -507,19 +507,16 @@ class DougRing:
                 return 200
             if rid:
                 self.store.data["seen"] = (self.store.data["seen"] + [rid])[-500:]
+            # Events are phase 4 (docs/DOUGRING.md), after the owner's yes: until
+            # then nothing of an event is kept but its id, to drop repeats.
             kind = str(data.get("type") or meta.get("event_type") or "?")[:40]
-            entry = {"kind": kind, "sub": str(attrs.get("sub_type") or "")[:30],
-                     "device": str(attrs.get("source") or data.get("id") or "")[:80],
-                     "at": attrs.get("timestamp") or int(self.now() * 1000),
-                     "account": short_id(meta.get("account_id"))}
-            self.store.data["events"] = (self.store.data["events"] + [entry])[-200:]
             if kind == "app_integration_removed" and meta.get("account_id") in self.store.data["accounts"]:
                 acct = self.store.data["accounts"].pop(meta["account_id"])
                 self.store.data["enabled"] = [d for d in self.store.data["enabled"]
                                               if self.store.data.get("owners", {}).get(d) != meta["account_id"]]
                 log(f"webhook: {acct['email_masked']} removed DougRing; tokens dropped, its cameras off")
             self.store.save()
-        log(f"webhook: {entry['kind']} {entry['sub']}".rstrip())
+        log(f"webhook: {kind} acknowledged")
         return 200
 
     # ── tokens kept fresh ────────────────────────────────────────────────

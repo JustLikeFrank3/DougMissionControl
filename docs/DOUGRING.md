@@ -137,5 +137,5 @@ in Ring's console (ends it at Ring).
 - Douglas's description is his model's reading of a watermarked picture; it
   can be wrong, and he is told to say what is seen apart from what he
   supposes. No faces are identified.
-- Phase 4 (events) is designed above and not built. `/ring/webhook` is on only because Ring's console will not save without it: it checks the signature and acknowledges; nothing else happens on an event.
+- Phase 4 (events) is designed above and not built. `/ring/webhook` is on only because Ring's console will not save without it: it checks the signature and acknowledges, keeps only the delivery id (to drop repeats) and acts only on "app removed". While the door is shut, Ring's deliveries time out: Ring retries six times over about 1 h 13 m, then holds them 72 h, and may disable an endpoint that keeps failing. Decide that before events are built.
 - node1's own state, found by the review: Mission Control trusts any local process as the panel, and `/etc/rancher/k3s/k3s.yaml` is world-readable (cluster admin). DougRing's user is fenced off from both (firewall rule, InaccessiblePaths); `boot.env` is now 640 root:fvm3.

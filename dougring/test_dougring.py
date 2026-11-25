@@ -396,7 +396,8 @@ class DougRingTest(unittest.TestCase):
         self.assertEqual(self.http("POST", "/ring/webhook", ev, {"X-Signature": "sha256=00"})[0], 401)
         self.assertEqual(self.http("POST", "/ring/webhook", ev, {"X-Signature": sig})[0], 200)
         self.assertEqual(self.http("POST", "/ring/webhook", ev, {"X-Signature": sig})[0], 200)
-        self.assertEqual(len(self.store.data["events"]), 1)
+        self.assertEqual(self.store.data["events"], [])          # nothing of an event is kept
+        self.assertEqual(self.store.data["seen"], ["r1"])
         rm = json.dumps({"meta": {"request_id": "r2", "account_id": ACCOUNT_ID},
                          "data": {"type": "app_integration_removed", "attributes": {}}}).encode()
         sig = "sha256=" + hmac.new(HMAC_KEY.encode(), rm, hashlib.sha256).hexdigest()
