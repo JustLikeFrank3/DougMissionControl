@@ -425,7 +425,15 @@ VOICE_STATE_FILE=/run/douglas/voice.json
 TRANSCRIPT_FILE=/var/lib/douglas/transcript.jsonl
 CONF
 fi
-chown root:douglas "$env" && chmod 640 "$env"
+# Every key he holds is in there, and systemd reads it for the unit as root:
+# it is nobody else's to read, the other services' shared user included.
+chown root:root "$env" && chmod 600 "$env"
+# The pipeline's own user, before anything is installed that names it (the
+# workshop's door, the unit). What is made its own is voice-user.sh's, below.
+getent passwd douglas-voice >/dev/null \
+    || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin douglas-voice
+install -d -o douglas-voice -g douglas-voice -m 755 /var/lib/douglas
+install -d -o douglas -g douglas -m 700 /var/lib/douglas/.cache
 
 # ── the workshop ─────────────────────────────────────────────────────────
 # Before the units below are restarted: it adds WORK_SOCKET to voice.env,
@@ -474,6 +482,9 @@ for u in $units; do
 done
 model="$(envval /etc/douglas/llama.env LLAMA_MODEL)"
 [ -f "$model" ] || warn "no model at $model yet - llama-server will retry until there is (see /etc/douglas/llama.env)"
+# The pipeline's record, settings, instructions and workshop door made its
+# own, and seen to be shut to the other services.
+"$here/voice-user.sh" || warn "the voice pipeline was not given a user of its own (./voice-user.sh says why)"
 
 if [ "$OPEN_WEBUI_HTTPS" = 1 ]; then
     # Browsers only allow the microphone on HTTPS, so phones talk to Open WebUI

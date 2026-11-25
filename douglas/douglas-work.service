@@ -10,6 +10,10 @@ Group=douglas-work
 # The directory it passes files through with the runner, and nothing else of the runner's.
 SupplementaryGroups=douglas-spool
 Environment=WORK_DIR=/var/lib/douglas-work WORK_JOBS=/var/lib/douglas-spool WORK_SOCKET=/run/douglas-work.sock
+# Who it answers, besides root and itself: the voice pipeline's own user. The
+# door's group lets that user in; this is the same question asked again of
+# whoever comes through it.
+Environment=WORK_CLIENTS=douglas-voice
 EnvironmentFile=/etc/douglas/work.env
 ExecStart=/usr/bin/python3 -I /opt/douglas/douglas-work.py manager
 StateDirectory=douglas-work

@@ -1370,13 +1370,22 @@ read token opens but its own. It did find, and showed each by running it:
 Each has a test, and each test was checked by breaking the fix again in a
 copy: forty of forty noticed, a hundred with the sixty from before.
 
-Two things it raised are as they were. The other services that run as the
-pipeline's user cannot open his memory's door, but they could write into the
-record of what was said, which is where memories are made from; closing that
-means changing units that have nothing to do with this, and has not been
-done. And what was said against one of the owner's memories is kept in that
-memory's history, on purpose, where the owner sees it and nothing recalls it;
-it goes when that memory is purged.
+One thing it raised took a change of its own. The pipeline ran as the user
+that the model server, the chat page and the speech and picture services run
+as, so any of those six could write into the record of what was said, which
+is what memories are made from, read his settings with every key in them,
+open his workshop's door and read his environment out of `/proc`. The
+pipeline has a user of its own now (`sudo ./douglas/voice-user.sh`, and
+`back` to undo it): the six were not touched or restarted, and to them his
+record, folder, settings, instruction files, environment and workshop door
+are all shut, which the script checks from their side each time it runs. The
+workshop also asks who is calling, and answers that user alone. Douglas was
+then rebooted: back in half a minute, every service and door up by itself,
+and a memory noted before it given back after.
+
+One thing is as it was, on purpose: what was said against one of the owner's
+memories is kept in that memory's history, where the owner sees it and
+nothing recalls it; it goes when that memory is purged.
 
 *What it does not do.* It does not embed anything: recall is by words, and a
 memory that shares none with the message is not found (he can be asked what he
@@ -2106,6 +2115,12 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   returned, exactly as it was) and makes no search in words of his own, until
   the conversation ends. That is what stops something he has read from having
   him send his memory away in a web address.
+- The voice pipeline holds every key Douglas has and writes the record his
+  memories are made from, and it runs as a user of its own, `douglas-voice`.
+  The model server, the chat page and the speech and picture services share
+  another, and cannot write that record, read `/etc/douglas/voice.env`
+  (root's alone; systemd reads it for the unit) or the owner's instruction
+  files, open the workshop's door, or read the pipeline's environment.
 - What Douglas remembers is in one SQLite file that only `douglas-memory`'s
   user can read, in a unit with no network, no devices and an empty
   capability set. Its two doors are sockets systemd makes, each with a group

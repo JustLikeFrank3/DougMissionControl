@@ -131,6 +131,13 @@ rm -rf /var/lib/douglas-job
 for u in $units; do
     install -m 644 "$here/$u" "/etc/systemd/system/$u"
 done
+# The door is for the voice pipeline's own group. Where the pipeline has not
+# been given a user of its own yet (douglas/voice-user.sh), it is still the
+# shared one's, as it used to be.
+if ! getent group douglas-voice >/dev/null; then
+    sed -i 's/^SocketGroup=douglas-voice$/SocketGroup=douglas/' /etc/systemd/system/douglas-work.socket
+    sed -i 's/^Environment=WORK_CLIENTS=douglas-voice$/Environment=WORK_CLIENTS=douglas/' /etc/systemd/system/douglas-work.service
+fi
 systemctl daemon-reload
 systemctl enable douglas-work.socket douglas-work.service douglas-job.service
 systemctl start douglas-work.socket
@@ -146,7 +153,8 @@ for u in douglas-work douglas-job; do
     systemctl is-active --quiet "$u" || { echo "$u is not running - journalctl -u $u"; exit 1; }
 done
 # Asked the way the voice pipeline asks: as its user, through the socket.
-if answer="$(runuser -u douglas -- python3 -c '
+voice_user="$(systemctl show douglas-voice -p User --value 2>/dev/null)"
+if answer="$(runuser -u "${voice_user:-douglas}" -- python3 -c '
 import json, socket
 s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect("/run/douglas-work.sock")
 s.sendall(b"{\"op\": \"repos\"}\n"); print(json.loads(s.makefile().readline())["text"])')"; then

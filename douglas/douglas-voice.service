@@ -4,14 +4,19 @@ After=network-online.target wyoming-whisper.service wyoming-piper.service llama-
 Wants=network-online.target
 
 [Service]
-User=douglas
-Group=douglas
+# A user of its own (douglas/voice-user.sh makes it): not the one the model
+# server, the chat page and the speech and picture services share. It holds
+# every key he has and writes the record his memories are made from, and
+# none of those six has any business with either.
+User=douglas-voice
+Group=douglas-voice
 # /run/douglas/voice.json and /var/lib/douglas/transcript.jsonl, both
-# world-readable so douglas-agent (a DynamicUser) can read them.
+# world-readable so that douglas-agent can read them for the panel. The
+# folder is made by voice-user.sh, not by systemd: the shared user's shader
+# cache lives in it too, and StateDirectory= would hand that over as well.
 RuntimeDirectory=douglas
 RuntimeDirectoryMode=0755
-StateDirectory=douglas
-StateDirectoryMode=0755
+ReadWritePaths=/var/lib/douglas
 EnvironmentFile=/etc/douglas/voice.env
 ExecStart=/usr/bin/python3 /opt/douglas/douglas-voice.py
 Restart=always

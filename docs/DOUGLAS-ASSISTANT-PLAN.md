@@ -164,8 +164,8 @@ restarted; a correction made in Mission Control is what he says next; a
 deleted memory is not recalled and a purged one is gone from the file; text
 from a lookup is not remembered; the assistant's door refuses every owner
 operation; the suite passes with a different model name in the settings.
-*All of it was seen on Douglas, with the model he runs on.* Not done: a
-reboot of the machine (each service was restarted; the units are enabled).
+*All of it was seen on Douglas, with the model he runs on,* and again after
+a reboot of the machine.
 
 ### Phase 2: read-only fleet and runtime awareness (built)
 
@@ -313,26 +313,29 @@ own criteria when they are asked for. No device control is part of phases
 
 ## 4. What needs the owner
 
-- Phases 3 to 6: a go-ahead each.
-- A reboot of Douglas to prove the units come back by themselves (they are
-  enabled; the restart of each service was tested, a reboot was not).
-- Whether to consolidate the conversations from before memory existed. They
-  are in the transcript; so are a great many operator test turns, which is
-  why it was not done.
-- Whether what the owner wrote down in Mission Control should give way to
-  something said later from the owner's own phone. As built it does not:
-  the correction stands and he says where to change it. That is the safe
-  reading of "the owner's word", and it is a one-line change if it proves a
-  nuisance.
-- Whether to fence in Douglas's other services. The model server, Open
-  WebUI and the speech and picture services run as the same user as the
-  pipeline. They cannot open his memory's door, but they can write to the
-  record of what was said, which is what memories are made from, and they
-  can read the pipeline's settings, the push-to-talk token among them.
-  Closing that means changing those units (the record read-only to them,
-  the settings out of their sight) and restarting each, the model server
-  included. An independent review raised it; it was left because those
-  units are no part of this work and a mistake there stops him talking.
+Decided by the owner on 2026-11-24, and done or kept accordingly:
+
+- The order: the pipeline apart from his other services, a reboot to prove
+  it all comes back, then phase 3, phase 5, phase 4. The house last, and not
+  without being asked for by name. Reliable memory and useful notices come
+  before giving him more to do.
+- What is written down in Mission Control stays the last word: nothing said
+  to him changes it or has it forgotten.
+- The conversations from before he had a memory are not gone through
+  wholesale. They are in the record, among a great many operator test turns.
+- The pipeline has a user of its own (`douglas/voice-user.sh`). The six
+  services that shared its user were not changed; what was the pipeline's
+  is shut to them. An independent review had raised it.
+- Douglas was rebooted: every service and door came back by itself, and
+  what he remembered was there.
+
+Still the owner's to say:
+
+- Phase 6, by name, when its turn comes.
+- Whether ChatGPT's connector should become Douglas (phase 5). It is
+  reachable from the internet and answers to another company's service: as
+  Douglas it would hand what he remembers to both. It stays the bare model
+  until asked for.
 
 ## 5. Rolling back
 

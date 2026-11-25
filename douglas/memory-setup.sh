@@ -124,9 +124,10 @@ except PermissionError:
     print("refused"); raise SystemExit
 s.sendall(b"{\"op\": \"stats\"}\n"); r = json.loads(s.makefile().readline())
 print("%d memories kept" % r["active"] if r.get("ok") else "said no")'
-mine="$(runuser -u douglas -g douglas -G douglas-memory-assistant -- python3 -I -c "$ask" /run/douglas-memory/assistant.sock 2>&1 || true)"
-plain="$(runuser -u douglas -- python3 -I -c "$ask" /run/douglas-memory/assistant.sock 2>&1 || true)"
-theirs="$(runuser -u douglas -g douglas -G douglas-memory-assistant -- python3 -I -c "$ask" /run/douglas-memory/owner.sock 2>&1 || true)"
+vu="$(systemctl show douglas-voice -p User --value 2>/dev/null)"; vu="${vu:-douglas}"; vg="$(id -gn "$vu")"
+mine="$(runuser -u "$vu" -g "$vg" -G douglas-memory-assistant -- python3 -I -c "$ask" /run/douglas-memory/assistant.sock 2>&1 || true)"
+plain="$(runuser -u "$vu" -- python3 -I -c "$ask" /run/douglas-memory/assistant.sock 2>&1 || true)"
+theirs="$(runuser -u "$vu" -g "$vg" -G douglas-memory-assistant -- python3 -I -c "$ask" /run/douglas-memory/owner.sock 2>&1 || true)"
 case "$mine" in *"memories kept") ;; *) echo "douglas-memory did not answer the voice pipeline ($mine) - journalctl -u douglas-memory"; exit 1 ;; esac
 [ "$plain" = refused ] || { echo "Douglas's door opens to the pipeline's user without its group ($plain): not right"; exit 1; }
 [ "$theirs" = refused ] || { echo "the owner's door opens to the voice pipeline ($theirs): not right"; exit 1; }

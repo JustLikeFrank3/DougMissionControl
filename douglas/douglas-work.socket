@@ -1,10 +1,12 @@
 [Unit]
-Description=douglas-work - the door to Douglas's workshop, which only the voice pipeline's user may open
+Description=douglas-work - the door to Douglas's workshop, which only the voice pipeline may open
 
 [Socket]
 ListenStream=/run/douglas-work.sock
 SocketUser=douglas-work
-SocketGroup=douglas
+# The pipeline's own group. Not the group of the user that six other services
+# share: the door to his workshop is not theirs to open.
+SocketGroup=douglas-voice
 SocketMode=0660
 # One manager takes every connection.
 Accept=no
