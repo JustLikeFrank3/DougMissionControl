@@ -1,0 +1,57 @@
+[Unit]
+Description=DougRing - Ring account link and camera access for Douglas (official Ring developer platform)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dougring
+# The private door (/run/dougring/api.sock, 0660) belongs to this group; its
+# members (Mission Control) may open it. State files stay 0600.
+Group=dougring-api
+ExecStart=/usr/bin/python3 -I /opt/dougring/dougring.py
+# The Ring app's Client ID, Client Secret and HMAC key: root's file, handed to
+# this service in a private tmpfs. This user cannot read /etc/dougring itself.
+LoadCredential=ring-app:/etc/dougring/ring-app.env
+StateDirectory=dougring
+StateDirectoryMode=0700
+RuntimeDirectory=dougring
+RuntimeDirectoryMode=0750
+Environment=DOUGRING_PUBLIC_HOST=127.0.0.1 DOUGRING_PUBLIC_PORT=9130 DOUGRING_SOCKET=/run/dougring/api.sock
+UMask=0077
+TasksMax=64
+MemoryMax=192M
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The rest of this Pi is none of its business: Mission Control's tokens and
+# the cluster's admin file are out of sight, and this user may not open a
+# connection to anything on loopback (Mission Control trusts loopback as the
+# panel). Replies on its own listener are unaffected (ESTABLISHED, not NEW).
+InaccessiblePaths=-/etc/flightsim -/etc/rancher -/etc/douglas
+ExecStartPre=+/bin/sh -c 'iptables -C OUTPUT -o lo -p tcp -m owner --uid-owner dougring -m conntrack --ctstate NEW -j REJECT 2>/dev/null || iptables -I OUTPUT 1 -o lo -p tcp -m owner --uid-owner dougring -m conntrack --ctstate NEW -j REJECT'
+
+[Install]
+WantedBy=multi-user.target

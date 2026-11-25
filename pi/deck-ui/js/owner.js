@@ -24,6 +24,7 @@ var WHAT = { push: 'A PUSH', job: 'A JOB', forget: 'FORGETTING', records: 'A CHA
 export var TOOLS = [
   ['memory', 'his memory', 'notes and recalls'],
   ['fleet', 'the machines at home', 'reads'],
+  ['camera', 'the Ring cameras', 'looks through the ones switched on under CAMERAS'],
   ['self', 'his own machine', 'reads'],
   ['weather', 'the weather', 'reads'],
   ['news', 'the news', 'reads'],

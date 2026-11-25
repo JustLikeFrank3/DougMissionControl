@@ -17,6 +17,7 @@ import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
 import { noticesView } from '../js/notices.js';
 import { approvalView, switchesView, jobView } from '../js/owner.js';
+import { camerasView } from '../js/cameras.js';
 import { convoLog, whoLabel } from '../js/convo.js';
 
 var $ = function (id) { return document.getElementById(id); };
@@ -1116,6 +1117,39 @@ function tickNotices() { notices.refresh(); }
 var approval = approvalView($('dgl-apv'), { post: post, via: 'phone' });
 var switches = switchesView($('sw'), { post: post });
 var job = jobView($('dgl-job'));
+
+// ── the cameras ──────────────────────────────────────────────────────────
+// Read when the card is opened and every fifteen seconds while it is; the
+// picture is fetched as bytes and lives in this page until it is closed.
+function cameraPicture(body) {
+  var ctl = window.AbortController ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function () { ctl.abort(); }, 180000) : 0;
+  return fetch(api('/api/cameras/image'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    signal: ctl ? ctl.signal : undefined,
+  }).then(function (r) {
+    clearTimeout(timer);
+    if (!r.ok || !/^image\//.test(r.headers.get('Content-Type') || '')) {
+      return r.json().then(function (j) { return { error: j.error || j.code || 'HTTP ' + r.status }; },
+        function () { return { error: 'HTTP ' + r.status }; });
+    }
+    var obs = null;
+    try { obs = JSON.parse(r.headers.get('X-Observation') || 'null'); } catch (e) { obs = null; }
+    return r.blob().then(function (b) { return { blob: b, obs: obs }; });
+  }, function () { clearTimeout(timer); return { error: 'node1 did not answer' }; });
+}
+var cameras = camerasView($('cam'), {
+  get: getJSON, post: post, picture: cameraPicture, count: $('cam-count'),
+  type: function (title, text, save) { var v = window.prompt(title, text); if (v != null) save(v); },
+});
+var camOpen = false;
+$('cam-head').addEventListener('click', function () {
+  camOpen = $('cam-body').hidden;
+  $('cam-body').hidden = !camOpen;
+  $('cam-head').setAttribute('aria-expanded', camOpen ? 'true' : 'false');
+  if (camOpen) cameras.refresh(); else cameras.close();
+});
+function tickCam() { if (camOpen) cameras.refresh(); }
 $('sw-head').addEventListener('click', function () {
   var open = $('sw-body').hidden;
   $('sw-body').hidden = !open;
@@ -1158,6 +1192,7 @@ function pollAll(on) {
   every('mem', 30000, tickMem);
   every('fleet', 15000, tickFleet);
   every('ntc', 15000, tickNotices);
+  every('cam', 15000, tickCam);
 }
 
 // ── boot controls ────────────────────────────────────────────────────────

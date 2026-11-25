@@ -33,7 +33,7 @@ FILE = os.environ.get("SWITCHES_FILE", "/var/lib/douglas-switch/capabilities")
 # What can be switched: the names the pipeline knows its tools by. A name
 # that is not here is not written down, whatever is asked.
 TOOLS = ("weather", "news", "wikipedia", "read_page", "search", "reddit", "look", "draw", "edit",
-         "jobcontext", "repo", "memory", "fleet", "self")
+         "jobcontext", "repo", "memory", "fleet", "self", "camera")
 
 
 def log(msg: str) -> None:

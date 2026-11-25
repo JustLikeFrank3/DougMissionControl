@@ -161,6 +161,19 @@
       </div>
     </section>
 
+    <!-- The Ring cameras (DougRing): the switch for all of them, one for
+         each, a picture of now, and who looked. A touch switches off, a
+         hold switches on; DougRing on node1 keeps the rules. -->
+    <section class="card memc" id="cam-card">
+      <button type="button" class="head tap" id="cam-head" aria-expanded="false">
+        <h2>CAMERAS</h2>
+        <span class="pill" id="cam-count">—</span>
+      </button>
+      <div class="mem-body" id="cam-body" hidden>
+        <div id="cam"></div>
+      </div>
+    </section>
+
     <!-- Now playing, from whichever OS is up. -->
     <section class="card np" id="np">
       <img class="art" id="np-art" alt="" hidden>

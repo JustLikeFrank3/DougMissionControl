@@ -22,13 +22,14 @@ import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
 import { noticesView, navNotices } from './notices.js';
 import { approvalView, switchesView, jobView } from './owner.js';
+import { camerasView } from './cameras.js';
 import { convoLog, whoLabel } from './convo.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, convo = null;
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
 var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
-var approval = null, switches = null, job = null;
+var approval = null, switches = null, job = null, cameras = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -78,6 +79,7 @@ function tickMemory() {
   if (tab === 'mem') memory.refresh();
   else memory.glance();
   if (tab === 'did') did.refresh();
+  if (tab === 'cam' && cameras) cameras.refresh();
   if (notices) notices.refresh();           // its count shows whichever tab is up
 }
 
@@ -96,6 +98,8 @@ function showTab(name) {
   $('dgl-mem').hidden = name !== 'mem';
   $('dgl-ntc').hidden = name !== 'ntc';
   $('dgl-sw').hidden = name !== 'sw';
+  $('dgl-cam').hidden = name !== 'cam';
+  if (cameras) { if (name === 'cam') cameras.refresh(); else cameras.close(); }
   $('dgl-did').hidden = name !== 'did';
   if (name === 'convo' && convo) convo.toBottom();
   tickMemory();
@@ -295,6 +299,23 @@ export function wireDouglas() {
   did = didView($('dgl-did'), { get: getJSON, rows: 40 });
   approval = approvalView($('dgl-apv'), { post: post, via: 'deck' });
   switches = switchesView($('dgl-sw'), { post: post });
+  // The panel is loopback: the picture route needs no token here.
+  cameras = camerasView($('dgl-cam'), {
+    get: getJSON, post: post, count: $('dgl-cam-count'),
+    type: function (title, text, save) { openKeyboard(title, save, text); },
+    picture: function (body) {
+      return fetch('/api/cameras/image', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify(body) }).then(function (r) {
+        if (!r.ok || !/^image\//.test(r.headers.get('Content-Type') || '')) {
+          return r.json().then(function (j) { return { error: j.error || j.code || 'HTTP ' + r.status }; },
+            function () { return { error: 'HTTP ' + r.status }; });
+        }
+        var obs = null;
+        try { obs = JSON.parse(r.headers.get('X-Observation') || 'null'); } catch (e) { obs = null; }
+        return r.blob().then(function (b) { return { blob: b, obs: obs }; });
+      }, function () { return { error: 'node1 did not answer' }; });
+    },
+  });
   job = jobView($('dgl-job'));
   notices = noticesView($('dgl-ntc'), { get: getJSON, post: post, count: $('dgl-ntc-count'),
                                         countClass: 'ntc-n', over: 8 });
