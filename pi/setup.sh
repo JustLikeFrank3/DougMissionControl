@@ -31,7 +31,7 @@ LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
 DEVICE_NAME="${DEVICE_NAME:-flight sim}"
 DEVICE_PORT=49915
 
-scp -q "${HERE}/flightsim-boot.sh" "${PI}:/tmp/flightsim-boot.sh"
+scp -q "${HERE}/flightsim-boot.sh" "${HERE}/flightsim-state.sh" "${PI}:/tmp/"
 
 ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='${DEVICE_PORT}' \
     WS_LAN='${WS_LAN}' WS_MAC='${WS_MAC}' WS_BROADCAST='${WS_BROADCAST}' \
@@ -39,9 +39,9 @@ ssh "${PI}" "PI_LAN_IP='${PI_LAN_IP}' DEVICE_NAME='${DEVICE_NAME}' DEVICE_PORT='
 set -euo pipefail
 
 # A Windows checkout may ship CRLF — a CR after the shebang breaks exec.
-sed -i 's/\r$//' /tmp/flightsim-boot.sh
-sudo install -m 755 /tmp/flightsim-boot.sh /usr/local/bin/flightsim-boot.sh
-rm /tmp/flightsim-boot.sh
+sed -i 's/\r$//' /tmp/flightsim-boot.sh /tmp/flightsim-state.sh
+sudo install -m 755 /tmp/flightsim-boot.sh /tmp/flightsim-state.sh /usr/local/bin/
+rm /tmp/flightsim-boot.sh /tmp/flightsim-state.sh
 
 # The orchestrator reads this at every trigger, so it is the one place to
 # correct an address without redeploying. Written once from the values
@@ -54,6 +54,12 @@ WS_LAN=${WS_LAN}
 WS_MAC=${WS_MAC}
 WS_BROADCAST=${WS_BROADCAST}
 LINUX_SSH=${LINUX_SSH}
+# The workstation's port cabled straight to this Pi: its MAC (wake through
+# that cable) and the Windows boot's address on it (windows/setup.ps1
+# -DirectIP). The LAN port has no cable, so without these Windows can be
+# neither woken nor seen:
+#WS_DIRECT_MAC=
+#WIN_DIRECT_IP=192.168.100.3
 # Required for the "boot into Linux" device — the token printed by
 # windows/setup.ps1 (C:\ProgramData\dualboot\boot-agent.token):
 #WIN_AGENT_TOKEN=
@@ -119,28 +125,28 @@ cat > /opt/fauxmo/config.json <<CONF
           "port": ${DEVICE_PORT},
           "on_cmd": "FLIGHT_INTENT=sim /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "/usr/local/bin/flightsim-state.sh windows || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "pc",
           "port": 49917,
           "on_cmd": "FLIGHT_INTENT=plain /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "/usr/local/bin/flightsim-state.sh windows || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "squadrons",
           "port": 49918,
           "on_cmd": "FLIGHT_INTENT=squadrons /usr/local/bin/flightsim-boot.sh windows bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9106/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "/usr/local/bin/flightsim-state.sh windows || ! flock -n /tmp/flightsim-boot.lock true"
         },
         {
           "name": "workstation",
           "port": 49916,
           "on_cmd": "/usr/local/bin/flightsim-boot.sh linux bg",
           "off_cmd": "true",
-          "state_cmd": "curl -sf --max-time 2 http://${WS_LAN}:9105/ >/dev/null || ! flock -n /tmp/flightsim-boot.lock true"
+          "state_cmd": "/usr/local/bin/flightsim-state.sh linux || ! flock -n /tmp/flightsim-boot.lock true"
         }
       ]
     }
@@ -180,7 +186,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; iface=$(ip -o route get "$WS_LAN" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" dev "$iface" nud permanent'
+ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; iface=$$(ip -o route get "$$WS_LAN" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$$iface" ] && ip neigh replace "$$WS_LAN" lladdr "$$WS_MAC" dev "$$iface" nud permanent'
+ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; [ -n "$${WS_DIRECT_MAC:-}" ] || exit 0; ip=$${LINUX_SSH#*@}; iface=$$(ip -o route get "$$ip" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$$iface" ] && ip neigh replace "$$ip" lladdr "$$WS_DIRECT_MAC" dev "$$iface" nud permanent'
 
 [Install]
 WantedBy=multi-user.target

@@ -39,6 +39,10 @@ CONF=/etc/flightsim/boot.env
 WS_LAN="${WS_LAN:-192.168.1.50}"          # wired NIC, DHCP-by-MAC — same IP either OS
 WS_MAC="${WS_MAC:-AA:BB:CC:DD:EE:FF}"      # that NIC's MAC (WOL target)
 WS_BROADCAST="${WS_BROADCAST:-192.168.1.255}"
+# The workstation port cabled straight to this Pi (the LINUX_SSH link).
+# Waking through it needs no router port: from full off the NIC keeps
+# link on that cable. Empty = LAN wake only.
+WS_DIRECT_MAC="${WS_DIRECT_MAC:-}"
 WIN_PORT="${WIN_PORT:-9106}"
 LINUX_PORT="${LINUX_PORT:-9105}"
 # The point-to-point link only exists under the workstation's Linux boot,
@@ -46,6 +50,10 @@ LINUX_PORT="${LINUX_PORT:-9105}"
 # needed. Derived from LINUX_SSH unless set explicitly.
 LINUX_SSH="${LINUX_SSH:-user@192.168.100.1}"
 LINUX_PROBE_IP="${LINUX_PROBE_IP:-${LINUX_SSH#*@}}"
+# The Windows boot's own address on that same cable (windows/setup.ps1
+# -DirectIP). The LAN port has no cable, so this is how Windows is reached.
+# Empty = Windows by WS_LAN only.
+WIN_DIRECT_IP="${WIN_DIRECT_IP:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/flightsim_ed25519}"
 WIN_AGENT_PORT="${WIN_AGENT_PORT:-9107}"
 WIN_AGENT_TOKEN="${WIN_AGENT_TOKEN:-}"     # set in boot.env; see boot-agent.ps1
@@ -93,16 +101,27 @@ trap 'rm -f "$STATE_FILE"' EXIT
 # alone proved too flaky to gate a voice command on (both died mid-session
 # on 2026-07-31, blinding every trigger).
 tcp_open() { timeout 2 bash -c "echo > /dev/tcp/$1/$2" 2>/dev/null; }
+# Sets WIN_AT to the address Windows answered on (LAN first, then the
+# cable), which is where its boot agent is then dialled.
+WIN_AT="$WS_LAN"
 win_up() {
-    curl -sf --max-time 3 "http://${WS_LAN}:${WIN_AGENT_PORT}/status" >/dev/null && return 0
-    curl -sf --max-time 3 "http://${WS_LAN}:${WIN_PORT}/" >/dev/null
+    for h in "$WS_LAN" ${WIN_DIRECT_IP:+"$WIN_DIRECT_IP"}; do
+        if curl -sf --max-time 3 "http://${h}:${WIN_AGENT_PORT}/status" >/dev/null \
+            || curl -sf --max-time 3 "http://${h}:${WIN_PORT}/" >/dev/null; then
+            WIN_AT="$h"; return 0
+        fi
+    done
+    return 1
 }
 linux_up() {
     ping -c1 -W1 "$LINUX_PROBE_IP" >/dev/null 2>&1 && return 0
     tcp_open "$LINUX_PROBE_IP" 22 && return 0
     curl -sf --max-time 3 "http://${WS_LAN}:${LINUX_PORT}/" >/dev/null
 }
-pingable() { ping -c1 -W1 "$WS_LAN" >/dev/null 2>&1; }
+pingable() {
+    ping -c1 -W1 "$WS_LAN" >/dev/null 2>&1 && return 0
+    [ -n "$WIN_DIRECT_IP" ] && ping -c1 -W1 "$WIN_DIRECT_IP" >/dev/null 2>&1
+}
 
 send_wol() {
     # Three destinations, because one silently failed for the life of this
@@ -123,13 +142,29 @@ send_wol() {
         [ -n "$wol_iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" \
             dev "$wol_iface" nud permanent 2>/dev/null || true
     fi
-    python3 - "$WS_MAC" "$WS_BROADCAST" "$WS_LAN" <<'PY'
+    #   4. the direct cable - with WS_DIRECT_MAC set, a packet for that port
+    #      goes to the link's own broadcast and to LINUX_PROBE_IP (whose
+    #      neighbour entry flightsim-neigh.service pins at Pi boot).
+    direct_brd=""
+    if [ -n "$WS_DIRECT_MAC" ]; then
+        direct_iface=$(ip -o route get "$LINUX_PROBE_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+        [ -n "$direct_iface" ] && direct_brd=$(ip -o -4 addr show dev "$direct_iface" 2>/dev/null \
+            | sed -n 's/.* brd \([^ ]*\).*/\1/p' | head -1)
+        if [ "$(id -u)" = 0 ] && [ -n "$direct_iface" ]; then
+            ip neigh replace "$LINUX_PROBE_IP" lladdr "$WS_DIRECT_MAC" \
+                dev "$direct_iface" nud permanent 2>/dev/null || true
+        fi
+    fi
+    python3 - "$WS_MAC" "$WS_BROADCAST" "$WS_LAN" "$WS_DIRECT_MAC" "$direct_brd" "$LINUX_PROBE_IP" <<'PY'
 import socket, sys
-mac = bytes.fromhex(sys.argv[1].replace(":", "").replace("-", ""))
-pkt = b"\xff" * 6 + mac * 16
+def magic(m):
+    return b"\xff" * 6 + bytes.fromhex(m.replace(":", "").replace("-", "")) * 16
+sends = [(magic(sys.argv[1]), d) for d in (sys.argv[2], "255.255.255.255", sys.argv[3])]
+if sys.argv[4]:
+    sends += [(magic(sys.argv[4]), d) for d in (sys.argv[5], sys.argv[6]) if d]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-for dst in (sys.argv[2], "255.255.255.255", sys.argv[3]):
+for pkt, dst in sends:
     for port in (9, 7):
         try:
             s.sendto(pkt, (dst, port))
@@ -160,7 +195,7 @@ boot_to_linux() {
     # needs no further steering — which is just as well, because Windows
     # cannot write ext4 and so cannot pick a GRUB entry.
     [ -n "$WIN_AGENT_TOKEN" ] || { log "WARN: WIN_AGENT_TOKEN unset in $CONF"; return 1; }
-    curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/reboot?token=${WIN_AGENT_TOKEN}" >/dev/null
+    curl -sf --max-time 5 "http://${WIN_AT}:${WIN_AGENT_PORT}/reboot?token=${WIN_AGENT_TOKEN}" >/dev/null
 }
 
 if [ "$TARGET" = windows ]; then
@@ -183,7 +218,7 @@ if target_up; then
         # Already in Windows but a launch profile was asked for — fire the
         # greeting + launch remotely instead of doing nothing.
         log "windows already up — launching '$FLIGHT_INTENT' via boot-agent"
-        curl -sf --max-time 5 "http://${WS_LAN}:${WIN_AGENT_PORT}/launch?token=${WIN_AGENT_TOKEN}" >/dev/null \
+        curl -sf --max-time 5 "http://${WIN_AT}:${WIN_AGENT_PORT}/launch?token=${WIN_AGENT_TOKEN}" >/dev/null \
             || log "WARN: launch request failed"
     else
         log "$TARGET already up — nothing to do"

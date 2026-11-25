@@ -2,7 +2,17 @@
 # Run from an elevated PowerShell in the repo root:
 #
 #   powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
-#       -PiHost user@192.168.1.51 -AdapterName Ethernet
+#       -PiHost user@192.168.1.51 -AdapterName Ethernet,'Ethernet 2'
+#
+# -AdapterName takes several names: every port listed is armed for wake
+# (the LAN port and the one cabled straight to the Pi).
+#
+# The port cabled straight to the Pi also gets a fixed address, -DirectIP
+# (192.168.100.3/24 unless given), so the Pi can see and reach this boot:
+# the LAN port has no cable. It is the listed port that has link, or
+# -DirectAdapter to name it. Linux holds 192.168.100.1 on the same cable;
+# the two must differ, because that address answering is how the Pi knows
+# Linux is up. -DirectIP '' leaves the port's addressing alone.
 #
 # Does:
 #   * arms Wake-on-Magic-Packet on the wired NIC (driver + OS wake grant)
@@ -16,11 +26,13 @@
 # repoints it; omitting it keeps whatever the installed copy already has.
 param(
     [string]$PiHost = '',
-    [string]$AdapterName = 'Ethernet'
+    [string[]]$AdapterName = @('Ethernet'),
+    [string]$DirectAdapter = '',
+    [string]$DirectIP = '192.168.100.3',
+    [int]$DirectPrefix = 24
 )
 
 $ErrorActionPreference = 'Stop'
-$adapterName = $AdapterName
 $dest = 'C:\ProgramData\dualboot'
 # Pre-extraction home; the token is migrated from here so the Pi's copy
 # stays valid across the move.
@@ -32,33 +44,35 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 # --- Wake-on-LAN -----------------------------------------------------------
-foreach ($prop in 'Wake on Magic Packet', 'Wake from S0ix on Magic Packet') {
-    try {
-        Set-NetAdapterAdvancedProperty -Name $adapterName -DisplayName $prop `
-            -DisplayValue 'Enabled' -NoRestart
-        Write-Host "NIC: '$prop' enabled"
-    } catch { Write-Host "NIC: '$prop' not offered by this driver - skipped" }
-}
-# OS-level wake grant (Device Manager > Power Management checkbox), but only
-# when Windows actually lists this NIC as wake-programmable. On a box that
-# only offers Modern Standby (S0 low power idle, no firmware S3) the wired
-# NIC can be absent from that list entirely, and powercfg then answers
-#   "You do not have permission to enable or disable device wake."
-# even from an elevated shell. That message is a capability refusal wearing
-# a privilege refusal's clothes: no amount of elevation, driver setting, or
-# Device Manager checkbox will make the grant stick. Say so plainly here
-# rather than let a re-run print an error that sends the next debugging
-# session after the wrong problem.
-$pnpId = (Get-NetAdapter -Name $adapterName).PnPDeviceID
-$nicName = (Get-PnpDevice -InstanceId $pnpId).FriendlyName
-if ((powercfg -devicequery wake_programmable) -contains $nicName) {
-    powercfg /deviceenablewake $nicName
-    Write-Host "NIC: OS wake grant enabled for '$nicName'"
-} else {
-    Write-Host "NIC: '$nicName' is NOT wake-programmable on this system -"
-    Write-Host '     skipping the OS wake grant (powercfg would only fail).'
-    Write-Host '     Wake-on-LAN from FULL POWER OFF (S5) is unaffected and'
-    Write-Host '     still works; it is wake from SLEEP that cannot be armed.'
+foreach ($adapter in $AdapterName) {
+    foreach ($prop in 'Wake on Magic Packet', 'Wake from S0ix on Magic Packet') {
+        try {
+            Set-NetAdapterAdvancedProperty -Name $adapter -DisplayName $prop `
+                -DisplayValue 'Enabled' -NoRestart
+            Write-Host "NIC ${adapter}: '$prop' enabled"
+        } catch { Write-Host "NIC: '$prop' not offered by this driver - skipped" }
+    }
+    # OS-level wake grant (Device Manager > Power Management checkbox), but only
+    # when Windows actually lists this NIC as wake-programmable. On a box that
+    # only offers Modern Standby (S0 low power idle, no firmware S3) the wired
+    # NIC can be absent from that list entirely, and powercfg then answers
+    #   "You do not have permission to enable or disable device wake."
+    # even from an elevated shell. That message is a capability refusal wearing
+    # a privilege refusal's clothes: no amount of elevation, driver setting, or
+    # Device Manager checkbox will make the grant stick. Say so plainly here
+    # rather than let a re-run print an error that sends the next debugging
+    # session after the wrong problem.
+    $pnpId = (Get-NetAdapter -Name $adapter).PnPDeviceID
+    $nicName = (Get-PnpDevice -InstanceId $pnpId).FriendlyName
+    if ((powercfg -devicequery wake_programmable) -contains $nicName) {
+        powercfg /deviceenablewake $nicName
+        Write-Host "NIC: OS wake grant enabled for '$nicName'"
+    } else {
+        Write-Host "NIC: '$nicName' is NOT wake-programmable on this system -"
+        Write-Host '     skipping the OS wake grant (powercfg would only fail).'
+        Write-Host '     Wake-on-LAN from FULL POWER OFF (S5) is unaffected and'
+        Write-Host '     still works; it is wake from SLEEP that cannot be armed.'
+    }
 }
 
 # Modern Standby is the usual reason for the above, and it also decides
@@ -79,6 +93,49 @@ if ($sleepStates -match 'Standby \(S0 Low Power Idle\)') {
         Write-Host '       S3 is NOT available, so wake-from-sleep is unreliable by'
         Write-Host '       design. To keep a scheduled WOL working, stop the machine'
         Write-Host '       sleeping:  powercfg /change standby-timeout-ac 0'
+    }
+}
+
+# --- The direct cable to the Pi ------------------------------------------
+# A fixed address and no gateway: the Pi reaches this boot over it, and
+# nothing else routes over it (internet stays on whatever has the gateway).
+if ($DirectIP) {
+    if (-not $DirectAdapter) {
+        $linked = @(Get-NetAdapter -Name $AdapterName -ErrorAction SilentlyContinue |
+            Where-Object Status -eq 'Up')
+        if ($linked.Count -eq 1) {
+            $DirectAdapter = $linked[0].Name
+        } else {
+            Write-Host "DIRECT: $($linked.Count) of the listed ports have link - cannot tell"
+            Write-Host '        which one is cabled to the Pi. Re-run with -DirectAdapter <name>.'
+            Get-NetAdapter -Name $AdapterName -ErrorAction SilentlyContinue |
+                Format-Table Name, Status, MacAddress -AutoSize | Out-Host
+        }
+    }
+    if ($DirectAdapter) {
+        $have = Get-NetIPAddress -InterfaceAlias $DirectAdapter -AddressFamily IPv4 `
+            -ErrorAction SilentlyContinue
+        if ($have.IPAddress -contains $DirectIP -and
+                @($have | Where-Object PrefixOrigin -ne 'WellKnown').Count -eq 1) {
+            Write-Host "DIRECT: '$DirectAdapter' already holds $DirectIP"
+        } else {
+            Set-NetIPInterface -InterfaceAlias $DirectAdapter -AddressFamily IPv4 -Dhcp Disabled
+            $have | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+            New-NetIPAddress -InterfaceAlias $DirectAdapter -IPAddress $DirectIP `
+                -PrefixLength $DirectPrefix | Out-Null
+            Write-Host "DIRECT: '$DirectAdapter' set to $DirectIP/$DirectPrefix (no gateway)"
+        }
+        # Ping on this cable only, so the Pi can tell "booting" from "off"
+        # before the agents start. Windows calls the link Public; Any covers it.
+        if (-not (Get-NetFirewallRule -DisplayName 'FlightSim direct link ping' -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName 'FlightSim direct link ping' -Direction Inbound `
+                -Protocol ICMPv4 -IcmpType 8 -InterfaceAlias $DirectAdapter `
+                -Action Allow -Profile Any | Out-Null
+        }
+        $directMac = (Get-NetAdapter -Name $DirectAdapter).MacAddress -replace '-', ':'
+        Write-Host "DIRECT: on the Pi, /etc/flightsim/boot.env wants"
+        Write-Host "        WIN_DIRECT_IP=$DirectIP"
+        Write-Host "        WS_DIRECT_MAC=$directMac"
     }
 }
 

@@ -9,7 +9,7 @@ import deck_api as d
 
 LAN, LINK = "192.0.2.50", "198.51.100.1"      # addresses kept for documentation
 d.WS_LAN, d.LINUX_PROBE_IP = LAN, LINK
-d._linux_at[0] = LAN
+d._linux_at[0] = d._win_at[0] = LAN
 d.LINUX_MEDIA_TOKEN = d.LINUX_AGENT_TOKEN = d.SIM_TOKEN = d.AGENT_TOKEN = "a-token"
 
 fails = []
@@ -93,7 +93,7 @@ check("linux is not seen by a link nobody named", d.linux_seen(), False)
 check("the address stays the LAN one", d.linux_host(), LAN)
 d.LINUX_PROBE_IP = LINK
 
-print("\n-- Windows is dialled where it always was --")
+print("\n-- Windows is not dialled on the Linux link --")
 UP.clear(); UP.add(LINK)
 d.linux_seen()                                   # the link is where Linux last answered
 check("(the link is remembered)", d.linux_host(), LINK)

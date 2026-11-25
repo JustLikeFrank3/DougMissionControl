@@ -142,8 +142,12 @@ to the workstation's Linux boot. Substitute your own throughout.
 1. **Windows boot** (elevated PowerShell):
    ```
    powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
-       -PiHost user@192.168.1.51 -AdapterName Ethernet
+       -PiHost user@192.168.1.51 -AdapterName Ethernet,'Ethernet 2'
    ```
+   — the port with link (the one cabled to the Pi) also gets the fixed
+   address `192.168.100.3` (`-DirectIP` / `-DirectAdapter` to change);
+   the script prints the `WIN_DIRECT_IP=` and `WS_DIRECT_MAC=` lines for
+   the Pi's `boot.env`.
    — arms NIC WOL, disables Fast Startup, installs the JarvisGreeting
    logon task and the boot agent, prints the agent token and a BIOS +
    auto-logon checklist. `-PiHost` is baked into the installed greeting so
@@ -432,6 +436,8 @@ Most values live in `/etc/flightsim/boot.env` on the Pi (created by
 | `WS_MAC` | that NIC's MAC, the WOL target |
 | `WS_BROADCAST` | subnet broadcast address for the magic packet |
 | `LINUX_SSH` | user@host for the Linux boot (a direct-link IP is fine) |
+| `WS_DIRECT_MAC` | MAC of the workstation port cabled straight to the Pi; wake packets go down that cable too. Unset = LAN wake only |
+| `WIN_DIRECT_IP` | the Windows boot's own address on that cable (`windows\setup.ps1 -DirectIP`, default `192.168.100.3`). With no LAN cable in the workstation, this is how Windows is seen and its agents dialled. Must differ from the Linux one |
 | `WIN_AGENT_TOKEN` | must match `C:\ProgramData\dualboot\boot-agent.token` |
 | `LINUX_AGENT_TOKEN` | must match `/etc/flightsim/boot-agent.token` on the Linux boot. Unset means every reboot-to-Windows request goes over the ssh key instead |
 | `LINUX_AGENT_PORT` | the Linux boot agent's port (default 9108) |
@@ -2211,6 +2217,7 @@ python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
 python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
 python3 pi/deck-api/test_linux_route.py # where the Linux boot is dialled: its LAN address, or the direct link when only that answers
+python3 pi/deck-api/test_windows_route.py # the same for Windows, at its own address on that cable (WIN_DIRECT_IP)
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
 python3 douglas/test_douglas_memory.py  # what he remembers, and the notices: all three doors, on a database in a temp folder
 python3 douglas/test_douglas_mcp.py     # the MCP server: the real memory behind it, a stand-in fleet and vitals

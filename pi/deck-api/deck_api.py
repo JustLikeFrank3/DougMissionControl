@@ -145,7 +145,9 @@ LINUX_PORT = int(cfg("LINUX_PORT", "9105"))
 # Metrics endpoints — a different thing, and often a different address. The
 # Linux exporter answers over the point-to-point link rather than the LAN, and
 # exporters serve exposition format at /metrics, not at /.
-WIN_METRICS_URL = cfg("WIN_METRICS_URL", f"http://{WS_LAN}:9106/metrics")
+# Empty = the Windows exporter on whichever route Windows answered on
+# (win_metrics_url); set it only to point somewhere else entirely.
+WIN_METRICS_URL = cfg("WIN_METRICS_URL", "")
 LINUX_METRICS_URL = cfg("LINUX_METRICS_URL", f"http://{WS_LAN}:9105/metrics")
 AGENT_PORT = int(cfg("WIN_AGENT_PORT", "9107"))
 AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
@@ -161,6 +163,12 @@ AGENT_TOKEN = cfg("WIN_AGENT_TOKEN", "")
 # Linux box "off" while this link sat there answering. Derived from LINUX_SSH
 # exactly as flightsim-boot.sh derives it, so boot.env stays the one place.
 LINUX_PROBE_IP = cfg("LINUX_PROBE_IP", "") or cfg("LINUX_SSH", "").rpartition("@")[2]
+# The Windows boot's own address on that same cable (windows/setup.ps1
+# -DirectIP). The workstation's LAN port has no cable and never will, so
+# without this Windows is reachable only through a router port it is not
+# plugged into. Its own address, not LINUX_PROBE_IP: that one answering is
+# how this Pi knows Linux is up. Empty = Windows by WS_LAN only.
+WIN_DIRECT_IP = cfg("WIN_DIRECT_IP", "")
 LINUX_AGENT_PORT = int(cfg("LINUX_AGENT_PORT", "9108"))
 LINUX_AGENT_TOKEN = cfg("LINUX_AGENT_TOKEN", "")
 SIM_PORT = int(cfg("SIM_AGENT_PORT", "9109"))
@@ -881,8 +889,8 @@ def fetch_telemetry(os_now: str) -> tuple[dict, str | None]:
         if SIM_TOKEN:
             own = _scrape(_sim_url("/metrics"))
             if own:
-                return own, f"windows {WS_LAN}:{SIM_PORT}/metrics"
-        url, src = WIN_METRICS_URL, "windows"
+                return own, f"windows {win_host()}:{SIM_PORT}/metrics"
+        url, src = win_metrics_url(), "windows"
     elif os_now == "linux":
         url, src = LINUX_METRICS_URL, "linux"
     else:
@@ -922,15 +930,19 @@ def _scrape(url: str) -> dict:
     # legitimately returns nothing on a box without nvidia-smi, and warning
     # about that would fire forever on a perfectly healthy machine.
     if not values and url not in _bad_metrics and "/metrics" in url \
-            and url in (WIN_METRICS_URL, LINUX_METRICS_URL):
+            and url in (win_metrics_url(), LINUX_METRICS_URL):
         _bad_metrics.add(url)
         DECK.event("deck-api", f"{url} exposes no GPU metrics this panel recognises",
                    "warn")
     return values
 
 
+def win_metrics_url() -> str:
+    return WIN_METRICS_URL or f"http://{win_host()}:9106/metrics"
+
+
 def _sim_url(path: str) -> str:
-    return f"http://{WS_LAN}:{SIM_PORT}{path}?token={quote(SIM_TOKEN)}"
+    return f"http://{win_host()}:{SIM_PORT}{path}?token={quote(SIM_TOKEN)}"
 
 
 def audio_spectrum() -> dict:
@@ -1478,12 +1490,43 @@ def linux_seen() -> bool:
     return False
 
 
+# Where the Windows boot's agents are dialled, on the same terms as
+# linux_host(): the LAN address while that answers, the direct cable
+# (WIN_DIRECT_IP) when only that does. The LAN port has no cable, so on this
+# deployment that is the direct cable every cycle.
+_win_at = [WS_LAN]
+
+
+def win_host() -> str:
+    """The address to dial the Windows boot's agents on."""
+    return _win_at[0]
+
+
+def windows_seen() -> tuple[bool, bool]:
+    """(Windows is up, its boot agent answered), by any route this Pi has.
+
+    The route that answered is the one win_host() returns until the next
+    probe. The LAN address is asked first every time.
+
+    The cable gets short timeouts: a live host on it answers in milliseconds,
+    and under Linux nothing holds that address, so full ones would add five
+    seconds of waiting to every probe cycle."""
+    for host, t_tcp, t_http in ((WS_LAN, 2.0, 3.0), (WIN_DIRECT_IP, 0.5, 1.0)):
+        if not host:
+            continue
+        agent = tcp_ok(host, AGENT_PORT, timeout=t_tcp)
+        if agent or http_ok(f"http://{host}:{WIN_PORT}/", timeout=t_http):
+            _win_at[0] = host
+            return True, agent
+    return False, False
+
+
 def poll_once(prev_os):
     """One probe cycle. Returns the OS it saw, for the next cycle to diff."""
-    agent = tcp_ok(WS_LAN, AGENT_PORT)
-    win = agent or http_ok(f"http://{WS_LAN}:{WIN_PORT}/")
+    win, agent = windows_seen()
     lin = linux_seen() if not win else False
-    alive = win or lin or pingable(WS_LAN)
+    alive = (win or lin or pingable(WS_LAN)
+             or (bool(WIN_DIRECT_IP) and pingable(WIN_DIRECT_IP)))
 
     if win:
         os_now = "windows"
@@ -1512,6 +1555,8 @@ def poll_once(prev_os):
             w["last_alive"] = time.time()
         w["os"] = os_now
         w["agent"] = agent
+        # The address actually in use, so the panel shows the route it dials.
+        w["ip"] = win_host() if win else linux_host() if lin else WS_LAN
         s["sim"] = sim_link
         s["mini"] = mini
         s["mobile"] = mobile
@@ -1669,7 +1714,7 @@ def fire_shutdown() -> tuple[bool, str]:
     if os_now == "windows":
         if not AGENT_TOKEN:
             return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
-        url = f"http://{WS_LAN}:{AGENT_PORT}/shutdown?token={AGENT_TOKEN}"
+        url = f"http://{win_host()}:{AGENT_PORT}/shutdown?token={AGENT_TOKEN}"
     elif os_now == "linux":
         if not LINUX_AGENT_TOKEN:
             return False, "LINUX_AGENT_TOKEN unset in /etc/flightsim/boot.env"
@@ -1685,7 +1730,7 @@ def fire_shutdown() -> tuple[bool, str]:
 def fire_launch() -> tuple[bool, str]:
     if not AGENT_TOKEN:
         return False, "WIN_AGENT_TOKEN unset in /etc/flightsim/boot.env"
-    url = f"http://{WS_LAN}:{AGENT_PORT}/launch?token={AGENT_TOKEN}"
+    url = f"http://{win_host()}:{AGENT_PORT}/launch?token={AGENT_TOKEN}"
     if http_ok(url, timeout=5):
         DECK.event("deck", "launch requested via boot-agent")
         return True, "launching"
