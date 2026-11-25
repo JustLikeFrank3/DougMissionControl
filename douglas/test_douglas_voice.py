@@ -169,7 +169,8 @@ check("stt got both seconds", SEEN["stt"], (64000, (16000, 2, 1)))
 check("system prompt names Douglas", "Douglas" in SEEN["messages"][0]["content"], True)
 SYS = SEEN["messages"][0]["content"]
 check("prompt forbids inventing facts about the house", "Never invent facts" in SYS, True)
-check("prompt admits he has no sensors", "no cameras or sensors" in SYS, True)
+check("prompt admits he has no sensors", "You have no sensors in it" in SYS, True)
+check("and knows nothing outside without a look", "without a look in this turn you do not know" in SYS, True)
 check("prompt separates banter from real questions", ("Banter:" in SYS, "Real questions:" in SYS), (True, True))
 NOTE = SEEN["messages"][-1]["content"]
 check("the message says where it came from", "Doug Mission Control touchscreen" in NOTE, True)
