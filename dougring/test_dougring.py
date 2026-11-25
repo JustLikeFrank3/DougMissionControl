@@ -168,7 +168,7 @@ class DougRingTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.fake = FakeRing()
-        ring = dougring.Ring(CREDS, oauth_url=self.fake.base + "/oauth/token", api_url=self.fake.base, timeout=5)
+        ring = dougring.Ring(CREDS, oauth_url=self.fake.base + "/oauth/token", api_url=self.fake.base, timeout=5, allow_http=True)
         self.store = dougring.Store(os.path.join(self.tmp.name, "state.json"))
         self.app = dougring.DougRing(CREDS, self.store, ring, webhooks=True)
         self.log = io.StringIO()
@@ -176,7 +176,7 @@ class DougRingTest(unittest.TestCase):
         self._stderr.__enter__()
         self.old_wait = dougring.LINK_WAIT_S
         dougring.LINK_WAIT_S = 1
-        self.pub = ThreadingHTTPServer(("127.0.0.1", 0), dougring.public_handler(self.app))
+        self.pub = dougring.BoundedHTTPServer(("127.0.0.1", 0), dougring.public_handler(self.app))
         threading.Thread(target=self.pub.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.pub.server_address[1]}"
         self.sock = os.path.join(self.tmp.name, "api.sock")
@@ -342,6 +342,97 @@ class DougRingTest(unittest.TestCase):
         self.assertNotEqual(st, 200)
         self.assertEqual(self.app.status()["accounts"][0]["state"], "relink")
         self.assertNotEqual(self.private("GET", "/devices")[0], 200)
+
+    # what the review found (F1, F2, H1-H10)
+    def test_client_id_required(self):
+        st, _ = self.http("POST", "/ring/token", b"code=good-code",
+                          {"Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(st, 400)
+        self.assertFalse([c for c in self.fake.calls if c[1] == "/oauth/token"])
+
+    def test_exchanges_are_rate_capped(self):
+        codes = [self.send_code(code=f"bad{i}")[0] for i in range(dougring.EXCHANGES_PER_MIN + 3)]
+        self.assertEqual(codes.count(429), 3)
+        self.assertEqual(len([c for c in self.fake.calls if c[1] == "/oauth/token"]), dougring.EXCHANGES_PER_MIN)
+        self.assertEqual(self.send_code(code="x" * 600)[0], 400)
+
+    def test_forged_nonce_answers_at_once_without_exchange(self):
+        t = int(time.time() * 1000)
+        t0 = time.time()
+        self.assertEqual(self.http("GET", f"/ring/link?nonce={ring_nonce(t, 'x')}&time={t}")[0], 400)
+        self.assertLess(time.time() - t0, 0.5)
+
+    def test_odd_time_values(self):
+        for v in ("\u0661\u0662\u0663", "9" * 40, "-5", "1e9"):
+            q = urllib.parse.urlencode({"nonce": "AAAA", "time": v})
+            self.assertEqual(self.http("GET", f"/ring/link?{q}")[0], 400, v)
+
+    def test_reload_shows_success_again(self):
+        self.send_code()
+        t = int(time.time() * 1000)
+        self.fake.link_time = t
+        url = f"/ring/link?nonce={ring_nonce(t, ACCOUNT_ID)}&time={t}"
+        self.assertEqual(self.http("GET", url)[0], 200)
+        st, page = self.http("GET", url)
+        self.assertEqual(st, 200)
+        self.assertIn("linked", page)
+        self.assertEqual(len([c for c in self.fake.calls if c[0] == "PATCH"]), 1)
+
+    def test_in_flight_cap_closes_extra_connections(self):
+        srv = dougring.BoundedHTTPServer(("127.0.0.1", 0), dougring.public_handler(self.app), limit=2)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        held = []
+        for _ in range(2):   # two slow callers that never finish their headers
+            s = socket.create_connection(("127.0.0.1", port))
+            s.sendall(b"GET /ring/home HTTP/1.1\r\n")
+            held.append(s)
+        time.sleep(0.3)
+        third = socket.create_connection(("127.0.0.1", port))
+        third.sendall(b"GET /ring/home HTTP/1.0\r\n\r\n")
+        third.settimeout(3)
+        self.assertEqual(third.recv(100), b"")   # closed without an answer
+        for s in held + [third]:
+            s.close()
+        time.sleep(0.3)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/ring/home", timeout=5) as r:
+            self.assertEqual(r.status, 200)       # slots come back
+        srv.shutdown()
+        srv.server_close()
+
+    def test_negative_length_refused(self):
+        s = socket.create_connection(self.pub.server_address)
+        s.sendall(b"POST /ring/token HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: -1\r\n\r\n")
+        s.settimeout(3)
+        self.assertIn(b" 413 ", s.recv(200))
+        s.close()
+
+    def test_presigned_must_be_https_image(self):
+        strict = dougring.Ring(CREDS, oauth_url=self.fake.base + "/oauth/token", api_url=self.fake.base, timeout=5)
+        with self.assertRaises(dougring.RingError):
+            strict.fetch_presigned(self.fake.base + "/presigned")
+        with self.assertRaises(dougring.RingError):
+            strict.fetch_presigned("file:///etc/passwd")
+        loose = dougring.Ring(CREDS, oauth_url=self.fake.base + "/oauth/token", api_url=self.fake.base, timeout=5, allow_http=True)
+        with self.assertRaises(dougring.RingError):
+            loose.fetch_presigned(self.fake.base + "/v1/users/me")   # JSON, not a picture
+
+    def test_removal_switches_its_cameras_off(self):
+        self.linked()
+        self.private("POST", "/cameras/dev-front-001/enable")
+        rm = json.dumps({"meta": {"request_id": "r9", "account_id": ACCOUNT_ID},
+                         "data": {"type": "app_integration_removed", "attributes": {}}}).encode()
+        sig = "sha256=" + hmac.new(HMAC_KEY.encode(), rm, hashlib.sha256).hexdigest()
+        self.http("POST", "/ring/webhook", rm, {"X-Signature": sig})
+        self.assertEqual(self.store.data["enabled"], [])
+
+    def test_public_answers_say_nothing(self):
+        req = urllib.request.Request(self.url + "/ring/home")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = r.read().decode()
+            self.assertNotIn("DougRing", r.headers.get("Server", ""))
+        for word in ("Douglas", "Ring camera", "household"):
+            self.assertNotIn(word, body)
 
     def test_nonce_matches_python_reference(self):
         # Ring's documented Python: base64.urlsafe_b64encode(mac).rstrip(b'=')

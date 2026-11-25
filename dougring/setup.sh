@@ -17,8 +17,8 @@
 #   needs    /etc/dougring/ring-app.env (0600 root), put there by
 #            dougring/install-credentials.py from the workstation
 #
-# The public door is Tailscale Funnel on this machine's port 8443, which proxies
-# to 127.0.0.1:9130 and nothing else. node1's :443 (the deck's phone page) stays
+# The public door is Tailscale Funnel on this machine's port 8443, paths under
+# /ring/ only, proxied to 127.0.0.1:9130 and nothing else. node1's :443 (the deck's phone page) stays
 # tailnet-only: Funnel publishes a whole port, so the two never share one.
 set -euo pipefail
 
@@ -30,7 +30,9 @@ PUBLIC=http://127.0.0.1:9130
 case "${1:-install}" in
 funnel)
     systemctl is-active --quiet dougring || { echo "dougring is not running: install it first"; exit 1; }
-    tailscale funnel --bg --https="$FUNNEL_PORT" "$PUBLIC"
+    # --set-path: tailscaled itself refuses every path outside /ring/ before
+    # DougRing sees it. It strips the prefix, so the target carries it back.
+    tailscale funnel --bg --https="$FUNNEL_PORT" --set-path /ring "$PUBLIC/ring"
     tailscale funnel status
     exit 0 ;;
 funnel-off)

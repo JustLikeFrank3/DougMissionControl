@@ -61,6 +61,11 @@ LINK_WAIT_S = 15              # the browser may beat the token exchange by a mom
 REFRESH_MARGIN_S = 1800       # refresh when the access token has this little left
 REFRESH_EVERY_S = 6 * 3600    # and at least this often, so the 30-day token rotates
 MAX_BODY = 64 * 1024
+MAX_IN_FLIGHT = 16            # public requests served at once; over it, closed at once
+EXCHANGES_PER_MIN = 6         # a real link needs one
+MAX_CODE_LEN = 512
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+DONE_TTL_S = 600              # a finished link's page can be shown again this long
 MAX_ACCOUNTS = 5              # Ring's limit for a private app
 SNAPSHOT_WINDOW_MS = 24 * 3600 * 1000
 
@@ -127,11 +132,6 @@ class RingError(Exception):
         self.detail = detail
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):
-        return None
-
-
 def _error_code(body):
     """The `code` or `title` of a JSON:API error, never the whole body."""
     try:
@@ -147,12 +147,18 @@ def _error_code(body):
 class Ring:
     """Talks to Ring. Base URLs are parameters so the tests can stand in for Ring."""
 
-    def __init__(self, creds, oauth_url=OAUTH_URL, api_url=API_URL, timeout=20):
+    def __init__(self, creds, oauth_url=OAUTH_URL, api_url=API_URL, timeout=20, allow_http=False):
+        self.allow_http = allow_http   # tests only: the stand-in for Ring is plain http
         self.creds = creds
         self.oauth_url = oauth_url
         self.api_url = api_url
         self.timeout = timeout
-        self._noredirect = urllib.request.build_opener(_NoRedirect)
+        # No redirects anywhere: a redirect would carry the Bearer token to another
+        # host. Only http(s) handlers, so no file:// or ftp:// can be opened.
+        self._open = urllib.request.OpenerDirector()
+        for h in (urllib.request.HTTPHandler, urllib.request.HTTPSHandler,
+                  urllib.request.HTTPErrorProcessor, urllib.request.HTTPDefaultErrorHandler):
+            self._open.add_handler(h())
 
     def _token_call(self, fields):
         data = urllib.parse.urlencode({**fields,
@@ -162,8 +168,8 @@ class Ring:
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json", "User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                tok = json.loads(r.read())
+            with self._open.open(req, timeout=self.timeout) as r:
+                tok = json.loads(r.read(MAX_BODY))
         except urllib.error.HTTPError as e:
             raise RingError(e.code, _error_code(e.read())) from None
         if not tok.get("access_token") or not tok.get("refresh_token"):
@@ -189,15 +195,16 @@ class Ring:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.api_url + path, data=data, method=method, headers=headers)
-        opener = urllib.request.urlopen if redirect else self._noredirect.open
         try:
-            with opener(req, timeout=self.timeout) as r:
-                raw = r.read()
+            with self._open.open(req, timeout=self.timeout) as r:
+                raw = r.read(4 * 1024 * 1024)
                 return r.status, dict(r.headers), raw
         except urllib.error.HTTPError as e:
-            if not redirect and e.code in (301, 302, 303, 307, 308):
-                return e.code, dict(e.headers), b""
-            raise RingError(e.code, _error_code(e.read())) from None
+            if e.code in (301, 302, 303, 307, 308):
+                if not redirect:          # the image download's 303 is expected
+                    return e.code, dict(e.headers), b""
+                raise RingError(e.code, "unexpected redirect") from None
+            raise RingError(e.code, _error_code(e.read(MAX_BODY))) from None
 
     def api_json(self, method, path, access_token, account_id, body=None):
         _, _, raw = self.api(method, path, access_token, account_id, body)
@@ -209,20 +216,30 @@ class Ring:
             "Authorization": f"Bearer {access_token}", "User-Agent": USER_AGENT,
             "Hardware_Id": hardware_id("pending"), "Accept": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                data = json.loads(r.read())["data"]
+            with self._open.open(req, timeout=self.timeout) as r:
+                data = json.loads(r.read(MAX_BODY))["data"]
         except urllib.error.HTTPError as e:
-            raise RingError(e.code, _error_code(e.read())) from None
+            raise RingError(e.code, _error_code(e.read(MAX_BODY))) from None
         return {"id": str(data["id"]), "email": data.get("attributes", {}).get("email", "")}
 
     def fetch_presigned(self, url):
         """The picture itself: a pre-signed URL, no Bearer token sent to it."""
+        scheme = urllib.parse.urlsplit(url).scheme
+        if scheme != "https" and not (self.allow_http and scheme == "http"):
+            raise RingError(502, "picture offered on a non-https address")
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return r.read(), dict(r.headers)
+            with self._open.open(req, timeout=self.timeout) as r:
+                img = r.read(MAX_IMAGE_BYTES + 1)
+                headers = dict(r.headers)
         except urllib.error.HTTPError as e:
-            raise RingError(e.code, _error_code(e.read())) from None
+            raise RingError(e.code, _error_code(e.read(MAX_BODY))) from None
+        if len(img) > MAX_IMAGE_BYTES:
+            raise RingError(502, "picture too large")
+        ctype = {k.lower(): v for k, v in headers.items()}.get("content-type", "")
+        if not ctype.startswith("image/"):
+            raise RingError(502, "not a picture")
+        return img, headers
 
 
 class Store:
@@ -255,24 +272,42 @@ class DougRing:
         self.ring = ring
         self.now = now
         self.refresh_lock = threading.Lock()   # refresh tokens rotate: one at a time
+        self.ex_lock = threading.Lock()
+        self.ex_times = []                     # when recent exchanges started (rate cap)
+        self.ex_inflight = 0
+        self.ex_last_end = 0.0
+        self.done = {}                         # nonce -> (expires, page) for a reload
 
     # ── token exchange (Ring's servers → us) ─────────────────────────────
     def token_exchange(self, form):
         code = form.get("code", "")
-        if not code:
+        if not code or len(code) > MAX_CODE_LEN:
             return 400, "missing code"
-        if form.get("client_id") and not hmac.compare_digest(form["client_id"], self.creds["RING_CLIENT_ID"]):
-            log("token exchange: refused, client_id is not this app's")
+        # Ring sends `code` and `client_id` (dev_portal/configure.md); both required.
+        if not hmac.compare_digest(form.get("client_id", "").encode(), self.creds["RING_CLIENT_ID"].encode()):
+            log("token exchange: refused, client_id missing or not this app's")
             return 400, "wrong client"
+        with self.ex_lock:
+            t = self.now()
+            self.ex_times = [x for x in self.ex_times if t - x < 60]
+            if len(self.ex_times) >= EXCHANGES_PER_MIN:
+                log("token exchange: refused, too many this minute")
+                return 429, "slow down"
+            self.ex_times.append(t)
+            self.ex_inflight += 1
         try:
             tok = self.ring.exchange_code(code)
             me = self.ring.user_me(tok["access_token"])
         except RingError as e:
             log(f"token exchange: failed, {e}")
             return 502, "exchange failed"
-        except Exception as e:  # network
+        except Exception as e:  # network, or an answer that is not what Ring documents
             log(f"token exchange: failed, {type(e).__name__}")
             return 502, "exchange failed"
+        finally:
+            with self.ex_lock:
+                self.ex_inflight -= 1
+                self.ex_last_end = self.now()
         with self.store.lock:
             t = self.now()
             pool = [u for u in self.store.data["unclaimed"]
@@ -288,7 +323,10 @@ class DougRing:
     # ── account link (the browser → us) ──────────────────────────────────
     def _match(self, nonce, time_param):
         with self.store.lock:
+            t = self.now()
             for u in self.store.data["unclaimed"]:
+                if t - u["received_at"] >= UNCLAIMED_TTL_S:
+                    continue
                 if hmac.compare_digest(compute_nonce(time_param, u["account_id"], self.creds["RING_HMAC_KEY"]), nonce):
                     return u
         return None
@@ -296,17 +334,27 @@ class DougRing:
     def account_link(self, nonce, time_param, wait=None):
         """Returns (http status, title, sentence, masked e-mail or None)."""
         if not nonce or not time_param:
-            return 200, "DougRing", "This is DougRing's account link page. Start linking from the Ring Developer Console's Connect step.", None
-        if not time_param.isdigit() or len(nonce) > 128:
+            return 200, "OK", "Start linking from the Ring Developer Console.", None
+        if not (time_param.isascii() and time_param.isdigit() and len(time_param) <= 15) \
+                or len(nonce) > 128 or not nonce.isascii():
             return 400, "Link refused", "The link Ring sent was malformed.", None
         age = (self.now() * 1000 - int(time_param)) / 1000
         if age > NONCE_WINDOW_S:
             return 400, "Link expired", "That link is more than ten minutes old. Start again from the Ring Developer Console.", None
         if age < -CLOCK_SKEW_S:
             return 400, "Link refused", "That link's time is in the future.", None
+        with self.ex_lock:
+            prev = self.done.get(nonce)
+            self.done = {k: v for k, v in self.done.items() if v[0] > self.now()}
+        if prev and prev[0] > self.now():
+            return prev[1]                    # a reload of a link that already worked
         deadline = self.now() + (LINK_WAIT_S if wait is None else wait)
         rec = self._match(nonce, time_param)
-        while rec is None and self.now() < deadline:
+
+        def exchange_near():                  # wait only if Ring's code may be arriving
+            with self.ex_lock:
+                return self.ex_inflight > 0 or self.now() - self.ex_last_end < 5
+        while rec is None and self.now() < deadline and exchange_near():
             time.sleep(0.5)
             rec = self._match(nonce, time_param)
         if rec is None:
@@ -343,7 +391,10 @@ class DougRing:
             self.store.data["unclaimed"] = [u for u in self.store.data["unclaimed"] if u is not rec]
             self.store.save()
         log(f"account link: completed for {ident} ({short_id(me['id'])})")
-        return 200, "DougRing is linked", f"Ring account {ident} is linked to DougRing. You can close this page.", ident
+        result = (200, "DougRing is linked", f"Ring account {ident} is linked to DougRing. You can close this page.", ident)
+        with self.ex_lock:
+            self.done[nonce] = (self.now() + DONE_TTL_S, result)
+        return result
 
     # ── webhooks (Ring's servers → us) ───────────────────────────────────
     def webhook(self, raw, signature):
@@ -371,7 +422,9 @@ class DougRing:
             self.store.data["events"] = (self.store.data["events"] + [entry])[-200:]
             if kind == "app_integration_removed" and meta.get("account_id") in self.store.data["accounts"]:
                 acct = self.store.data["accounts"].pop(meta["account_id"])
-                log(f"webhook: {acct['email_masked']} removed DougRing; tokens dropped")
+                self.store.data["enabled"] = [d for d in self.store.data["enabled"]
+                                              if self.store.data.get("owners", {}).get(d) != meta["account_id"]]
+                log(f"webhook: {acct['email_masked']} removed DougRing; tokens dropped, its cameras off")
             self.store.save()
         log(f"webhook: {entry['kind']} {entry['sub']}".rstrip())
         return 200
@@ -407,8 +460,8 @@ class DougRing:
         for aid in list(self.store.data["accounts"]):
             try:
                 self._refresh(aid)
-            except OSError as e:
-                log(f"refresh: network, {type(e).__name__}")
+            except Exception as e:  # never let the refresher die: the token lapses in 30 days
+                log(f"refresh: failed, {type(e).__name__}")
 
     def _call(self, account_id, method, path, body=None, redirect=True):
         acct = self._refresh(account_id)
@@ -441,7 +494,9 @@ class DougRing:
             _, _, raw = self._call(aid, "GET", "/v1/devices?include=status,capabilities")
             doc = json.loads(raw)
             included = {(i.get("type"), i.get("id")): i.get("attributes", {}) for i in doc.get("included", [])}
+            owners = self.store.data.setdefault("owners", {})
             for d in doc.get("data", []):
+                owners[d.get("id")] = aid
                 a = d.get("attributes", {})
                 rel = d.get("relationships", {})
                 st = {}
@@ -457,12 +512,10 @@ class DougRing:
         return out
 
     def _owner(self, device_id):
-        for dev in self.devices():
-            if dev["id"] == device_id:
-                for aid in self.store.data["accounts"]:
-                    if short_id(aid) == dev["account"]:
-                        return aid
-        return None
+        """The linked account that shares this camera, asked of Ring each time."""
+        self.devices()
+        aid = self.store.data.get("owners", {}).get(device_id)
+        return aid if aid in self.store.data["accounts"] else None
 
     def set_enabled(self, device_id, on):
         if on and self._owner(device_id) is None:
@@ -512,7 +565,7 @@ PUBLIC_PATHS = ("/ring/token", "/ring/link", "/ring/webhook", "/ring/home")
 
 def public_handler(app):
     class H(BaseHTTPRequestHandler):
-        server_version = "DougRing"
+        server_version = "-"
         sys_version = ""
         timeout = 15
 
@@ -539,8 +592,8 @@ def public_handler(app):
 
         def _body(self):
             n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_BODY:
-                raise ValueError("too big")
+            if n < 0 or n > MAX_BODY:
+                raise ValueError("bad length")
             return self.rfile.read(n) if n else b""
 
         def do_GET(self):
@@ -552,8 +605,8 @@ def public_handler(app):
                 status, title, text, _ = app.account_link(q.get("nonce", [""])[0], q.get("time", [""])[0])
                 return self._page(status, title, text)
             if u.path == "/ring/home":
-                return self._page(200, "DougRing", "DougRing is Douglas's private link to this household's Ring cameras.")
-            return self._send(200, "DougRing: this address takes a POST from Ring.")
+                return self._page(200, "OK", "OK")
+            return self._send(200, "OK")
 
         do_HEAD = do_GET
 
@@ -564,7 +617,7 @@ def public_handler(app):
             try:
                 raw = self._body()
             except ValueError:
-                return self._send(413, "too big")
+                return self._send(413, "bad length")
             if u.path == "/ring/token":
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                 if ctype != "application/x-www-form-urlencoded":
@@ -626,6 +679,8 @@ def private_handler(app):
                     return self._json(200 if ok else 404, {"ok": ok})
                 if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "snapshot":
                     n = int(self.headers.get("Content-Length") or 0)
+                    if n < 0 or n > MAX_BODY:
+                        return self._json(413, {"error": "bad length"})
                     req = json.loads(self.rfile.read(n)) if n else {}
                     img, meta = app.snapshot(urllib.parse.unquote(parts[1]), req.get("at_ms"))
                     self.send_response(200)
@@ -641,6 +696,35 @@ def private_handler(app):
     return H
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    """At most MAX_IN_FLIGHT requests at once; the rest are closed at once.
+    Errors (a caller who hung up) are one line, never a traceback."""
+    daemon_threads = True
+
+    def __init__(self, *a, limit=MAX_IN_FLIGHT, **k):
+        self.slots = threading.BoundedSemaphore(limit)
+        super().__init__(*a, **k)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+    def handle_error(self, request, client_address):
+        log(f"public: {sys.exc_info()[0].__name__}")
+
+
 class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
@@ -650,8 +734,7 @@ class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer)
 
 
 def serve(app, public_addr, socket_path):
-    pub = ThreadingHTTPServer(public_addr, public_handler(app))
-    pub.daemon_threads = True
+    pub = BoundedHTTPServer(public_addr, public_handler(app))
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     old = os.umask(0o117)                      # 0660: this user and the group
@@ -661,7 +744,10 @@ def serve(app, public_addr, socket_path):
 
     def refresher():
         while True:
-            app.refresh_all()
+            try:
+                app.refresh_all()
+            except Exception as e:
+                log(f"refresher: {type(e).__name__}")
             time.sleep(300)
     threading.Thread(target=refresher, daemon=True).start()
     log(f"dougring {VERSION}: public on {public_addr[0]}:{public_addr[1]}, private on {socket_path}")

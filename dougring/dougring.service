@@ -19,6 +19,8 @@ RuntimeDirectory=dougring
 RuntimeDirectoryMode=0750
 Environment=DOUGRING_PUBLIC_HOST=127.0.0.1 DOUGRING_PUBLIC_PORT=9130 DOUGRING_SOCKET=/run/dougring/api.sock
 UMask=0077
+TasksMax=64
+MemoryMax=192M
 Restart=on-failure
 RestartSec=5
 
