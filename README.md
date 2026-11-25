@@ -322,6 +322,8 @@ picture arrives a minute or two later as a line of its own. A picture he
 draws or edits shows under his line, here and on the panel; a tap fills the
 screen with it. Same SSE frame, same endpoints, same rules as the panel.
 
+![DOUGLAS on a phone](docs/img/douglas-phone.png)
+
 A phone's link to node1 is not a wire: on the tailnet it can drop to a relay,
 or go quiet for a minute or two at a time. So every request from the page has
 a time limit, and SEND is never greyed out: a question that cannot go yet
@@ -1266,6 +1268,10 @@ model wrote it down. Swap the model, restart anything, reboot the machine: the
 memory is as it was. (How it got to this shape, and what comes after it, is in
 [`docs/DOUGLAS-ASSISTANT-PLAN.md`](docs/DOUGLAS-ASSISTANT-PLAN.md).)
 
+![MEMORY](docs/img/douglas-memory.png)
+
+![MEMORY on a phone](docs/img/douglas-phone-memory.png)
+
 It has two doors, and which one a caller can open is decided by the file
 system, not by anything the caller says of itself. Douglas's
 (`assistant.sock`, a group only `douglas-voice`'s unit is given, so the
@@ -1522,6 +1528,10 @@ rules. What a rule finds is a notice. No model is asked anything to raise
 one, so a quiet house costs no inference, and nothing is acted on: a notice is
 a sentence on a screen with a reading in it.
 
+![NOTICES](docs/img/douglas-notices.png)
+
+![NOTICES on a phone](docs/img/douglas-phone-notices.png)
+
 | a notice when | how bad | has to hold | has to be gone |
 |---|---|---|---|
 | DougVoice, which is always on, does not answer (`WATCH_ALWAYS_ON`) | warning | 90 s | 60 s |
@@ -1702,6 +1712,10 @@ since been dropped or replaced does nothing; after three minutes
 screens as a line of his and is in the record of what he did, with which
 screen it came from. It travels the owner's path and no other: the deck's
 token to the Pi, the agent's to Douglas, the pipeline's own to the pipeline.
+
+![TOOLS](docs/img/douglas-tools.png)
+
+![WHAT HE MAY USE](docs/img/douglas-phone-tools.png)
 
 That is also where a yes for the chat page comes from. Asked there for
 something that needs one, he reads it back as anywhere, and says that a yes
