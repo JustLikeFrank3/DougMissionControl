@@ -5,6 +5,8 @@
 # Run ON NODE1, from a copy of the repo:   sudo ./dougring/setup.sh
 #                                         sudo ./dougring/setup.sh funnel      (public door: needs the owner's yes)
 #                                         sudo ./dougring/setup.sh funnel-off
+#                                         sudo ./dougring/setup.sh webhooks-on (Ring's console requires a Webhook URL)
+#                                         sudo ./dougring/setup.sh webhooks-off
 #                                         sudo ./dougring/setup.sh off         (service and door gone; tokens kept)
 #
 # What it leaves behind:
@@ -48,8 +50,24 @@ off)
     systemctl daemon-reload
     echo "DougRing is stopped and its public door is shut. Tokens remain in /var/lib/dougring until removed by hand."
     exit 0 ;;
+webhooks-on|webhooks-off)
+    # Signed events from Ring are checked and acknowledged; only "the app was
+    # removed" is acted on (the tokens are dropped). Nothing else happens on
+    # an event until events are built (docs/DOUGRING.md, phase 4).
+    d=/etc/systemd/system/dougring.service.d
+    if [ "$1" = webhooks-on ]; then
+        install -d -m 755 "$d"
+        printf '[Service]\nEnvironment=DOUGRING_WEBHOOKS=1\n' > "$d/webhooks.conf"
+    else
+        rm -f "$d/webhooks.conf"
+    fi
+    systemctl daemon-reload
+    systemctl restart dougring
+    sleep 2
+    echo "GET /ring/webhook -> $(curl -s -o /dev/null -w '%{http_code}' "$PUBLIC/ring/webhook")"
+    exit 0 ;;
 install) ;;
-*) echo "usage: $0 [install|funnel|funnel-off|off]"; exit 2 ;;
+*) echo "usage: $0 [install|funnel|funnel-off|webhooks-on|webhooks-off|off]"; exit 2 ;;
 esac
 
 getent group dougring-api >/dev/null || groupadd --system dougring-api
@@ -65,7 +83,7 @@ install -d -m 755 /opt/dougring
 install -m 644 "$here/dougring.py" /opt/dougring/dougring.py
 install -m 644 "$here/dougring.service" /etc/systemd/system/dougring.service
 install -d -m 700 -o root -g root /etc/dougring
-rm -rf /etc/systemd/system/dougring.service.d
+rm -f /etc/systemd/system/dougring.service.d/group.conf
 systemctl daemon-reload
 if [ ! -s /etc/dougring/ring-app.env ]; then
     echo "No credentials yet at /etc/dougring/ring-app.env: run dougring/install-credentials.py from the workstation, then this again."

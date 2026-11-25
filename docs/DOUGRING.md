@@ -104,6 +104,7 @@ line or prints one.
 | Douglas's camera token | node1 → Douglas | `sudo ./pi/camera-token.sh`, then `ssh fvm3@node1 'sudo ~/dougmissioncontrol/pi/camera-token.sh lines' \| ssh fvm3@douglas 'sudo sh -c "cat >> /etc/douglas/voice.env"'`, restart douglas-voice when idle |
 | Open the public door | node1 | `sudo ./dougring/setup.sh funnel` (Funnel on :8443, `/ring/` only) — **only with the owner's yes** |
 | Shut it | node1 | `sudo ./dougring/setup.sh funnel-off` |
+| Webhook URL (Ring's console requires one) | node1 | `sudo ./dougring/setup.sh webhooks-on`: signed deliveries are checked and acknowledged; only "app removed" is acted on (tokens dropped) |
 | Stop everything | node1 | `sudo ./dougring/setup.sh off` (tokens stay in `/var/lib/dougring` until removed) |
 
 Secrets and where they live:
@@ -136,4 +137,5 @@ in Ring's console (ends it at Ring).
 - Douglas's description is his model's reading of a watermarked picture; it
   can be wrong, and he is told to say what is seen apart from what he
   supposes. No faces are identified.
-- Phase 4 (events) is designed above and not built; `/ring/webhook` is 404.
+- Phase 4 (events) is designed above and not built. `/ring/webhook` is on only because Ring's console will not save without it: it checks the signature and acknowledges; nothing else happens on an event.
+- node1's own state, found by the review: Mission Control trusts any local process as the panel, and `/etc/rancher/k3s/k3s.yaml` is world-readable (cluster admin). DougRing's user is fenced off from both (firewall rule, InaccessiblePaths); `boot.env` is now 640 root:fvm3.
