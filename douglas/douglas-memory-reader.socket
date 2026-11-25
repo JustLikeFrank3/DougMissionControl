@@ -1,0 +1,19 @@
+[Unit]
+Description=douglas-memory - the door for a program that only reads (douglas-mcp): recall, tasks, notices, and no more
+
+[Socket]
+ListenStream=/run/douglas-memory/reader.sock
+SocketUser=douglas-memory
+# A group of its own, which only douglas-mcp's unit is given. What is asked
+# at this door writes nothing, not even that a memory was used.
+SocketGroup=douglas-memory-reader
+SocketMode=0660
+DirectoryMode=0755
+FileDescriptorName=reader
+Service=douglas-memory.service
+Accept=no
+# Switched off, the door is taken away, not left as a file nobody answers at.
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

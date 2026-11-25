@@ -76,6 +76,12 @@ if len(got) == 2:
     print("the watch has the view of the fleet now (FLEET_URL and FLEET_TOKEN, not shown)")
 PY
 fi
+# The time of day where the owner is, as the pipeline has it: a notice that
+# names a day should name the owner's day, not the machine's.
+tz="$(sed -n 's/^TZ=//p' /etc/douglas/voice.env 2>/dev/null | tail -n1)"
+if [ -n "$tz" ] && ! grep -q '^TZ=' "$env"; then
+    printf '\n# The owner'"'"'s time of day, for the days a notice names.\nTZ=%s\n' "$tz" >> "$env"
+fi
 chown root:root "$env" && chmod 600 "$env"
 
 systemctl daemon-reload

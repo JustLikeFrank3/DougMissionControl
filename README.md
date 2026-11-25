@@ -84,6 +84,12 @@ douglas/fetch-work.sh    run here: brings what a job changed from Douglas into a
 douglas/douglas-memory.py  what Douglas remembers from one conversation to the next: a
                          service of its own, with one door for him and one for the
                          owner (douglas/memory-setup.sh installs it)
+douglas/webui-setup.sh   Douglas as a model in Open WebUI, beside the bare one, and
+                         Open WebUI under a user of its own (webui-connect.py is
+                         the part that writes the connection)
+douglas/douglas-mcp.py   :9112 — what he remembers and sees, for the owner's other
+                         programs to read: six readings, nothing that writes
+                         (douglas/mcp-setup.sh installs it)
 dougvoice/setup.sh       Pi Zero 2 W + Whisplay HAT → DougVoice, Douglas's satellite
 dougvoice/dougvoice.py   :10700 Wyoming satellite launcher, and the LCD/LED/button face
 tests/                   shell tests for the above — `bash tests/test_*.sh`
@@ -603,10 +609,11 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `draw.env` | `douglas-draw`, the image server on `:8083` (loopback): `DRAW_MODEL_DIR` (default `/srv/models/draw`, holding `diffusion_models/`, `text_encoders/` and `vae/`: the files themselves, since the server refuses links that lead out of the directory), `DRAW_ARGS` (empty by default), `DRAW_HOST`/`DRAW_PORT`. It starts with no model in memory: the pipeline tells it which to hold before each picture. `provision.sh` builds stable-diffusion.cpp and enables the unit only once a model is in `diffusion_models/` |
 | `chatgpt.env` | `douglas-chatgpt`, ChatGPT's chat-only line to Douglas: `CHATGPT_SECRET` (required, at least 24 URL-safe characters: it is the path of the connector's address, and changing it revokes the connector), `CHATGPT_PORT` (default `9120`, loopback), `CHATGPT_PER_HOUR` (default `60`), `LLM_URL`. Not created by `provision.sh`: the connector is set up by hand, see `douglas-chatgpt.py` |
 | `work.env` | `douglas-work`, his workshop (see below): `WORK_OWNER` (the GitHub account a bare name such as "my kettle repo" is looked up on; without it a repository is named as owner/name), `WORK_GITHUB_TOKEN` (optional, for private repositories and for pushing: a fine-grained token limited to the repositories he may work with; read-only "Contents" is enough to read private ones), `WORK_PUSH` (`1`: a job's branch may be pushed and a pull request opened for it, each time only after a read-back and a yes; the token then needs "Contents" and "Pull requests" read and write), `WORK_BASE` (where a repository's work goes when that is not its default branch, as `owner/name=branch ...`: the code is read from that branch, jobs start from it, and pull requests are opened against it), `WORK_MAX_MB` (the largest repository cloned, default 500), `WORK_STEPS` and `WORK_SECONDS` (how long one job may go on: 100 steps of the model, 3600 seconds of work), `WORK_LOOK_STEPS` (how long a job that only reads may go on: 60 steps, and half an hour at most), `WORK_REVIEW` (`0`: a job's changes are not read over a second time before it ends), `WORK_DISK_MB` (how large one job's work tree may grow, default 4096), `LLM_URL` (the model server jobs think with, asked by the manager on their behalf) and `WORK_SLOT` (optional: a model server slot jobs keep to). Readable by `douglas-work` only |
-| `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
+| `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin. Root's alone. Open WebUI reads its connections from here only until it has run once; after that they are in its database, which is where `webui-setup.sh` adds Douglas |
+| `mcp.env` | `douglas-mcp`, what he remembers and sees for the owner's other programs: `DOUGLAS_MCP_TOKEN` (made by `mcp-setup.sh`; `show` prints it, and whoever holds it reads what he remembers), `DOUGLAS_MCP_PORT` (9112), `MEMORY_READER_SOCKET`, `VITALS_SOCKET`, `FLEET_URL` and `FLEET_TOKEN` (copied from the pipeline's), `TZ`. Root's alone |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `SEARCH_KEY` (a Brave Search API key: with it he can search the web; `SEARCH_URL` if the service is somewhere else), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER` (an app registered with Reddit and the Reddit name it is registered to: with them he can search Reddit; `REDDIT_USER_AGENT` to say who he is in other words), `DOUGLAS_TURN_LOOKUP_S` (how long one turn may go on looking things up before he must answer, default `20`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image server, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `IMAGE_DRAW` and `IMAGE_EDIT` (the model that draws and the model that edits, each a name and a file under `DRAW_MODEL_DIR`: `flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf` for drawing by default and nothing for editing, so without `IMAGE_EDIT` he draws and does not edit), `IMAGE_PARTS` (the text encoders and VAE the two share), `IMAGE_EDIT_STEPS` (default `8`: an edit's time is its steps, about 13 seconds each at a megapixel), `IMAGE_EDIT_SIDE` (default `1024`, the long side an edit comes out at), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he makes are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `EYES_EDGE` (the long side of what his eyes are shown at once, 1280) and `EYES_SHOT` (the long side he asks a phone to send when Pillow is there to cut a closer look from it, 3072), `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact), `MEMORY_SOCKET` (his door to his memory; `memory-setup.sh` adds it), `MEMORY_BUDGET` (characters of notes put with one message, 900), `MEMORY_EVERY_S` and `MEMORY_QUIET_S` (how often finished conversations are looked for, 60, and how long past the idle time one is left before it is gone through, 45), `FLEET_URL` and `FLEET_TOKEN` (Mission Control's fleet view on the Pi and the read token for it), `VITALS_SOCKET` (his own machine's vitals; `setup.sh` adds it), `SIGHT_OLD_S` (the age past which a reading is said to be old, 90), `NOTICES_EVERY_S` (how often it is asked whether a notice is to be said aloud, 30) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `SEARCH_KEY` (a Brave Search API key: with it he can search the web; `SEARCH_URL` if the service is somewhere else), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER` (an app registered with Reddit and the Reddit name it is registered to: with them he can search Reddit; `REDDIT_USER_AGENT` to say who he is in other words), `DOUGLAS_TURN_LOOKUP_S` (how long one turn may go on looking things up before he must answer, default `20`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image server, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `IMAGE_DRAW` and `IMAGE_EDIT` (the model that draws and the model that edits, each a name and a file under `DRAW_MODEL_DIR`: `flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf` for drawing by default and nothing for editing, so without `IMAGE_EDIT` he draws and does not edit), `IMAGE_PARTS` (the text encoders and VAE the two share), `IMAGE_EDIT_STEPS` (default `8`: an edit's time is its steps, about 13 seconds each at a megapixel), `IMAGE_EDIT_SIDE` (default `1024`, the long side an edit comes out at), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he makes are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `EYES_EDGE` (the long side of what his eyes are shown at once, 1280) and `EYES_SHOT` (the long side he asks a phone to send when Pillow is there to cut a closer look from it, 3072), `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact), `MEMORY_SOCKET` (his door to his memory; `memory-setup.sh` adds it), `MEMORY_BUDGET` (characters of notes put with one message, 900), `MEMORY_EVERY_S` and `MEMORY_QUIET_S` (how often finished conversations are looked for, 60, and how long past the idle time one is left before it is gone through, 45), `FLEET_URL` and `FLEET_TOKEN` (Mission Control's fleet view on the Pi and the read token for it), `VITALS_SOCKET` (his own machine's vitals; `setup.sh` adds it), `SIGHT_OLD_S` (the age past which a reading is said to be old, 90), `NOTICES_EVERY_S` (how often it is asked whether a notice is to be said aloud, 30), `DOUGLAS_API_TOKEN` (the token of his line for other programs, `/v1` on the pipeline's port; `webui-setup.sh` makes it, and without it the line is not there), `DOUGLAS_API_MODEL` (the name he goes by there, `douglas`), `DOUGLAS_API_WAIT_S` (how long a message waits for him to finish another turn before it is told he is busy, 30) |
 | `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token. `MEMORY_OWNER_SOCKET` (the owner's door to his memory; `memory-setup.sh` adds it), `AGENT_UNITS` (the services whose health it reports), `AGENT_DISKS` (the file systems, default `/ /srv/models`), `MODELS_DIR` (where the model files are). For the watch: `WATCH` (`0` switches it off), `WATCH_EVERY_S` (20), `FLEET_URL` and `FLEET_TOKEN` (the fleet view and its read token, the same two lines as the pipeline's; `setup.sh` copies them over, and without them the watch looks at this machine alone), `WATCH_ALWAYS_ON` (machines that should always answer, `dougvoice`), `WATCH_HOT` (`douglas=92/100 node1=75/82 workstation=85/92`: warning / critical, in °C), `WATCH_DISK` (`10/5`: per cent free), `WATCH_CRITICAL` (the services whose being down is critical), `WATCH_TASK_DAYS` (7) |
 | `memory.env` | `douglas-memory`, what he remembers (see below): `MEMORY_MAX` (memories kept in use, 5000; past that the least sure and longest unused are marked deleted), `MEMORY_EVENTS` (lines kept of the record of what he did, 5000) |
 
@@ -1550,6 +1557,99 @@ since the notices are on the machine that is gone. That event was tested with
 stand-ins and not by taking Douglas off the network. The lines are settings
 and are not learned from what is usual. Nothing is done about a notice.
 
+**The same Douglas wherever he is asked.** The phone, the panel and the
+puck all reached the pipeline, so they had one Douglas. Open WebUI did not:
+it talked to the model server, and what answered there was the bare model
+with none of his instructions, tools or memory.
+
+The pipeline has a line for the owner's other programs now: the OpenAI wire
+format, `/v1/models` and `/v1/chat/completions` on its own port, and Open
+WebUI lists what is behind it as a second model, `douglas`, beside the bare
+one (`sudo ./douglas/webui-setup.sh`). A message there is a turn like one
+typed on the phone. The last thing the person said is the message; his own
+instructions, tools and memory apply; and neither the system prompt the page
+sends nor the conversation it sends along is used, because he keeps his own
+conversation, and it is the same one on every line. So what is noted in Open
+WebUI is recalled by voice, and the other way round. What a chat page asks a
+model behind the person's back (a title for the conversation, tags, what to
+ask next, which of its own tools to call) is not a turn of his: those go to
+the bare model as they came, as they did before, and nothing of them is in
+his conversation or the record. Asked for as a stream, the answer is one: a
+line now and then that says he is thinking, then the answer in one piece. A
+message is one line of at most 2,000 characters; the bare model is still in
+the list for a long text.
+
+One thing cannot be had from that line: a yes. A push, a job made of somebody
+else's words and forgetting something are read back and wait for a yes on the
+phone, the panel and by voice. Asked for from the chat page, he says that it
+needs a yes, that one cannot be given there, and where it can. A chat page is
+a large program with the network on one side of it, and it is given his
+answers, not his say-so.
+
+The line has a token of its own (`DOUGLAS_API_TOKEN`), which opens those two
+routes and nothing else of the pipeline's, and it is answered on Douglas
+itself only. `webui-setup.sh` makes the token, and gives Open WebUI a user of
+its own while it is there: it ran as the user of the model server and the
+speech and picture services, and its database, with every conversation had
+in it, could be read by any user of the machine. The folder is its own now
+and its settings root's alone. Open WebUI keeps its connections in its
+database once it has run, so the connection is written there: two rows are
+read and written (`douglas/webui-connect.py`), nothing else in the database
+is looked at, and a copy of it is kept first. `off` takes the connection and
+the token away; `back` also puts Open WebUI under the user it had.
+
+For programs that are not chat pages there is `douglas-mcp`
+(`sudo ./douglas/mcp-setup.sh`): a Model Context Protocol server on `:9112`
+with six tools, every one a reading. `recall` (what he has noted that bears
+on a question), `known` (what he is surest of), `tasks`, `notices`, `fleet`
+and `vitals`. It has nothing that notes, corrects, forgets, says a word to
+Douglas, shows what was said to him, or runs anything. It asks the memory at
+a third door, `reader.sock`, which answers those questions and no others and
+does not so much as mark a memory as used; it reads the fleet with the read
+token and his machine from the socket any program on it may read. It runs as
+a user of its own, is reached from Douglas and the tailnet only (a machine on
+the home network that is not on the tailnet gets no answer), turns away
+anything that comes from a web page, and answers only to its token. Nobody
+holds that token until the owner gives it to a program: `mcp-setup.sh show`
+prints the address and the header for that. Which program gets it is the
+owner's to decide, since that program, and whoever is behind it, then reads
+what Douglas remembers.
+
+ChatGPT's line is as it was: the bare persona, no memory. It is published to
+the internet and answers to another company's service, and as Douglas it
+would hand what he remembers to both.
+
+*What was measured.* On the line: 401 without the token and from another
+address, the model's name with it. "Remember that the trial word for the
+shared test is amber kettle forty-one" was said on the Open WebUI line and
+"the second trial word is copper anvil nine" on the chat line; the pipeline
+was restarted, so that nothing was left of the conversation; asked on each
+line for the other's word, he gave both, from his memory, where each note
+shows which line it was said on. Told on the Open WebUI line to forget them
+he said that needs a yes that cannot be given there; told on the chat line he
+read them back, and forgot them on a yes. A title for a conversation, asked
+for the way Open WebUI asks, was answered by the bare model in 1.2 seconds
+and added nothing to the record. A turn took 3 to 9 seconds. Open WebUI was
+down for 9 seconds and came back as its own user; the model server's user
+can read neither its database nor its settings. *Not seen:* a conversation in
+Open WebUI's own page, which needs the owner's sign-in; what was sent to the
+line was what Open WebUI sends, by a program standing in for it.
+`douglas-mcp` was used from the workstation, over the tailnet, with the
+official client library (which speaks up to the 2025-11-25 revision of the
+protocol and settled on 2025-06-18 with it): six tools listed, all marked
+read-only, each called and answered, 401 without the token, and "remember"
+is not a tool. In the tests the memory is the same to the row after every
+reading. Each safeguard here was broken on purpose in a copy, one at a time: 43 of
+43 were caught by the tests.
+
+*What is not there.* Open WebUI's separate conversations are not separate to
+him: he has one, and a message edited or asked again there is a new turn. A
+picture he draws is not shown in Open WebUI (it is in Mission Control, with
+the line). His answer does not arrive word by word. No program has been
+given `douglas-mcp`'s token, so nothing uses it yet. And nothing here lets
+anything act: that is phase 4, where an approval can be given in Mission
+Control.
+
 **How he sounds.** Piper, the voice he started with, is quick and clear and
 sounds like a machine reading. He speaks with Kokoro instead: a small neural
 voice (82M parameters) that sounds like a person and still runs on the CPU,
@@ -1971,7 +2071,9 @@ python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
 python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
-python3 douglas/test_douglas_memory.py  # what he remembers, and the notices: both doors, on a database in a temp folder
+python3 douglas/test_douglas_memory.py  # what he remembers, and the notices: all three doors, on a database in a temp folder
+python3 douglas/test_douglas_mcp.py     # the MCP server: the real memory behind it, a stand-in fleet and vitals
+python3 douglas/test_webui_connect.py   # Douglas among Open WebUI's connections: a throwaway database and settings
 python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
 python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand-in model
 python3 douglas/test_douglas_chatgpt.py # ChatGPT's line to Douglas: the secret path, the exchange, the persona
@@ -1993,6 +2095,8 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `douglas/test_douglas_agent.py` | `douglas-agent` against a fake `/proc`, `/sys`, llama.cpp and systemd: the meters; disks, each file system once; services up, restarting, failed or switched off, and systemd refusing to say read as not known; model files and what is installed; the vitals socket giving the machine without the conversation and reading nothing sent to it. And the memory relay against the real `douglas-memory`: no token, nothing; a GET cannot change anything; only the allowed questions and their fields reach the door |
 | `douglas/test_douglas_memory.py` | `douglas-memory` on a database in a temp folder, through both doors and over real sockets: kept, said again, replaced, refused (a changed date, a "not", one more detail are not the same thing said again; a guess does not replace what was said, nor what was said the owner's correction); secrets refused; what is stored cannot close a note from inside; recall ranked and kept to its budget; forgotten out of reach and out of the index; corrected in place with its history; purged out of the file itself; a conversation gone through once; the cursor; the record of what he did, capped; each door refusing the other's questions; nothing lost across a reopen or a schema step; a backup taken while it runs, and whether the database is sound. And the notices: one for a thing for as long as it holds, made worse and told afresh, seen by the owner, where each kind goes, what Douglas's door may do with one (read it and mark it as told, and no more), old ones let go and never an open one, and a purged task taking its notice out of the file |
 | `pi/deck-api/test_fleet.py` | `GET /api/fleet` on a state set by hand: every machine with its role, whether it answers and when it last did; no address, token, flight plan or word of Douglas's conversation in it; a machine that is off reporting nothing; how long it has been up said only of a change that was seen. And the read token: it opens that route, from another machine, and is refused on every other route the program has, found by reading its source, with everything that acts stood in for and never reached. Who is gone: a machine after three looks in a row and once, the watch on Douglas when his machine answers and his agent does not, and each said to be back; and the count of notices for the panel's top bar, where not read is not none |
+| `douglas/test_douglas_mcp.py` | `douglas-mcp` on a real port, with the real memory service behind its door for readers and stand-ins for the fleet view and the vitals socket: who may ask (the token in the header and nothing else; a web page never); the protocol (which revision, what needs no answer, several at once, what it does not have said not to be there); each of the six readings in words; and that after all of them the memory is the same to the row, with nothing of what was asked or answered in the journal |
+| `douglas/test_webui_connect.py` | `webui-connect.py` against a throwaway database laid out as Open WebUI lays its own out: Douglas added beside the bare model with the token as his key, once however often it is run; taken out, with the connections after him moving up and keeping what was set for each; the settings file instead where nothing is saved yet; a layout it does not know left alone with how to do it by hand; and the token never printed |
 | `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; a push (not offered without a token or with pushing off; what would go said and nothing sent; another commit than the one read back refused; the branch on the stand-in GitHub afterwards and its main as it was; the pull request's branch, base, title and description; one that is open already, one that is refused after the branch went, and a push that is not taken; nothing but a job's branch ever pushed); and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). a tree moved aside for a link; a job nobody started, a report of the wrong kinds of thing and a question with a picture's address in it, none of them taken up; a job past its time ended by the manager; a model server that gives out with the work kept. Where the kernel has no Landlock 6 the job checks are left out, and the run says so; the tracker: the open issues, one by its number or by words of its title, a pull request that is not one; a job on the owner's own issue, given the issue as a reader of the page sees it, with other people's comments and what is hidden in the markup left out; somebody else's issue starting nothing until a yes, and a yes not holding once the issue has changed; the pull request named for the issue, closing it only where it goes into the default branch; a job that goes on from an earlier one's branch with what the owner wrote on the pull request, other people's comments only on a yes, a failed check with its annotations and the end of its log (fetched without the token); a second push adding to the open pull request and opening no other; a branch the owner added to on GitHub, one that has gone two ways, one moved under a running job, a pull request already merged; the branch a repository's work goes to when that is not its default; and a job's own changes checked by the runner and read over once, with the long conversation cut down; and a job that only reads: offered no tool that changes a file and refused when it tries one, ending with no commit and no branch, its report kept whole; what the report cites checked against the code (a file that is not there, a name that is nowhere, a name not at the lines given, a line a file does not have), sent back for it and marked when it is not put right, with nothing that does hold called wrong |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
@@ -2123,6 +2227,23 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   `the watch on DOUGLAS: not answering`. Douglas did not mention one: it is
   information (not mentioned unless switched on under WHERE THEY GO), it was
   marked as seen first, or the message came from the operator's line.
+- **`douglas` is not among Open WebUI's models, or answers with an error.**
+  The pipeline's first line in the journal ends `a model for other programs
+  as douglas` when it knows its token; `off` there means `douglas-voice` has
+  not been restarted since `webui-setup.sh` made one. The script's last lines
+  say whether the line answers. Open WebUI lists a connection's models only
+  while that connection answers, so with the pipeline down the bare model is
+  there alone. "Douglas is busy" is him in the middle of a turn on another
+  line. A title or tags that read oddly are the bare model's: those errands
+  never were his. After an Open WebUI upgrade that changes how it keeps its
+  settings, `webui-connect.py` says so and how to add the connection by hand.
+- **A program cannot reach `douglas-mcp`.** It answers on the tailnet and on
+  Douglas itself, not on the home network: use the machine's tailnet name. 401
+  is the token (`sudo ./douglas/mcp-setup.sh show`), 403 is a request that
+  carries an `Origin`, which is a browser's. Its journal has which reading
+  was asked for and how long it took. A reading that "could not be read" is
+  what it reads from: `systemctl status douglas-memory douglas-agent`, and
+  the fleet's read token.
 - **Douglas says Mission Control would not show the machines.** His read
   token is not the Pi's any more: on the Pi, `sudo ./pi/fleet-read.sh show`
   prints the two lines that belong in `/etc/douglas/voice.env`. "Did not
@@ -2252,6 +2373,20 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   mark one as told. Whether one is said aloud in the room is the owner's
   switch in Mission Control and is off until it is set. The journal has which
   notice and how bad, never its sentence, which may hold a task's words.
+- The pipeline's line for other programs (`/v1`) is answered on Douglas
+  itself only, to a token of its own that opens nothing else of the
+  pipeline's. What comes in that way is a turn of the owner's in everything
+  but one: no yes is taken from it, so nothing that changes anything outside
+  his own notes can be set going from a chat page. Open WebUI, which holds
+  that token, runs as a user of its own with its database closed to every
+  other user.
+- `douglas-mcp` reads and does not write: the door it has to the memory
+  answers no question that changes anything, and the service has no other
+  door, no token of the pipeline's or the deck's, and nothing it can run. It
+  is reached from Douglas and the tailnet only and turns away requests that
+  come from a web page. Its token is as good as reading what Douglas
+  remembers, in one question at a time: it is in a file that is root's
+  alone, and a program has it only if the owner puts it there.
 - `douglas-agent` gives this machine's vitals to any program on it, at a
   socket that reads nothing and answers one thing. What comes out is what any
   of them can read for itself from `/proc`, `/sys` and `systemctl`: no

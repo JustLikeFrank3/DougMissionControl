@@ -265,6 +265,37 @@ check("nor does the owner's door do the assistant's part",
                                                            "cursor", "matching")], [False] * 7)
 check("a question that is not one is answered as that",
       [desk.call("assistant", q)["ok"] for q in (None, [], "recall", {"op": 3}, {"text": "kettle"})], [False] * 5)
+# A third door, for a program that only reads.
+rd = lambda **q: desk.call("reader", q)          # noqa: E731
+EVERYTHING_ELSE = [dict(op="remember", kind="fact", subject="planted", text="Planted through the reader's door.",
+                        source="said"), dict(op="forget", ids=[first]), dict(op="matching", text="kettle"),
+                   dict(op="consolidate", conversation={}, items=[]), dict(op="log", name="x"),
+                   dict(op="cursor", name="transcript", value={"offset": 1}), dict(op="notice_told", ids=[1]),
+                   dict(op="notice_raise", key="x", rule="x", subject="x", severity="critical", text="Made up."),
+                   dict(op="notice_clear", key="x"), dict(op="notice_ack", id=1),
+                   dict(op="notice_prefs", severity="critical", aloud=True)] + OWNER_ONLY
+store.flush()
+uses = lambda: (store.db.execute("SELECT SUM(uses) FROM memories").fetchone()[0], dict(store.used))   # noqa: E731
+got = rd(op="recall", text="kettle display")
+check("the reader's door answers what bears on a question, what he is surest of, his open tasks, the open notices "
+      "and how much there is",
+      (got["ok"], [m["id"] for m in got["memories"]] == [m["id"] for m in a(op="recall", text="kettle display")["memories"]],
+       rd(op="known")["ok"], rd(op="tasks")["ok"], sorted(rd(op="notices")), rd(op="stats")["active"] == o(op="stats")["active"]),
+      (True, True, True, True, ["ok", "open"], True))
+store.flush()
+used_by_him = uses()
+before, events_before = o(op="export")["memories"], len(o(op="events", limit=500)["events"])
+for _ in range(3):
+    rd(op="recall", text="kettle display")
+store.flush()
+check("and nothing else: it cannot note, forget, hand in a conversation, write to the log, move the cursor, touch a "
+      "notice, or do anything that is the owner's; and the memory is as it was",
+      ([rd(**q)["ok"] for q in EVERYTHING_ELSE], o(op="export")["memories"] == before,
+       len(o(op="events", limit=500)["events"]) == events_before), ([False] * len(EVERYTHING_ELSE), True, True))
+check("what a reader looked up is not marked as used by him", uses(), used_by_him)
+check("a door this does not know of is no door, and not Douglas's by default",
+      [desk.call(role, {"op": "recall", "text": "kettle"})["ok"] for role in ("visitor", "", None, "Assistant")],
+      [False] * 4)
 os.makedirs(mem.RUN, exist_ok=True)
 threading.Thread(target=mem.serve, daemon=True).start()
 
@@ -279,7 +310,7 @@ def knock(door: str, **req) -> dict:
 
 
 for _ in range(100):
-    if all(os.path.exists(os.path.join(mem.RUN, d + ".sock")) for d in ("assistant", "owner")):
+    if all(os.path.exists(os.path.join(mem.RUN, d + ".sock")) for d in ("assistant", "owner", "reader")):
         break
     time.sleep(0.05)
 check("through the real doors, who a caller is is the door it came in by",
@@ -288,6 +319,10 @@ check("through the real doors, who a caller is is the door it came in by",
        knock("assistant", op="raw", line="not json")["ok"],
        [oct(os.stat(os.path.join(mem.RUN, d + ".sock")).st_mode & 0o777) for d in ("assistant", "owner")]),
       (True, False, True, False, False, ["0o660", "0o660"]))
+check("and through the reader's: it reads, and is refused what the other two doors do",
+      (knock("reader", op="recall", text="kettle display")["ok"], knock("reader", op="list")["ok"],
+       knock("reader", op="remember", kind="fact", subject="x", text="Through the real door.", source="said")["ok"],
+       oct(os.stat(os.path.join(mem.RUN, "reader.sock")).st_mode & 0o777)), (True, False, False, "0o660"))
 
 print("== it outlasts everything around it")
 count, texts = o(op="stats")["active"], sorted(m["text"] for m in o(op="export")["memories"])

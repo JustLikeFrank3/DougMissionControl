@@ -345,7 +345,11 @@ WEBUI_SECRET_KEY=$secret
 CONF
     chmod 600 "$env"
 fi
-chown root:douglas /etc/douglas/open-webui.env && chmod 640 /etc/douglas/open-webui.env
+# Its own user (the unit names it), and its settings root's alone: systemd
+# reads them for the unit.
+getent passwd open-webui >/dev/null \
+    || useradd --system --user-group --no-create-home --home-dir /var/lib/open-webui --shell /usr/sbin/nologin open-webui
+chown root:root /etc/douglas/open-webui.env && chmod 600 /etc/douglas/open-webui.env
 
 # ── the voice pipeline ───────────────────────────────────────────────────
 step "douglas-voice"
@@ -520,6 +524,16 @@ if "$here/memory-setup.sh"; then
     systemctl try-restart douglas-voice 2>/dev/null || true
 else
     warn "the memory was not set up - he remembers nothing past a conversation (./memory-setup.sh says why)"
+fi
+
+# ── Douglas as a model in Open WebUI ─────────────────────────────────────
+# Beside the bare model. This makes the token for his line for other
+# programs, so the pipeline is restarted once more to learn it.
+step "Douglas in Open WebUI"
+if "$here/webui-setup.sh"; then
+    systemctl try-restart douglas-voice 2>/dev/null || true
+else
+    warn "Douglas is not a model in Open WebUI - it lists the bare model alone (./webui-setup.sh says why)"
 fi
 
 # ── what is up ───────────────────────────────────────────────────────────

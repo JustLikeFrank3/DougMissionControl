@@ -12,7 +12,7 @@ model, restart the pipeline, reboot the machine: the memory is as it was.
     douglas-memory.py check          is the database sound, and what is in it
 (the last two by hand, as root or as the douglas-memory user)
 
-Two doors, two kinds of caller, told apart by which door they can open
+Three doors, three kinds of caller, told apart by which door they can open
 (the file system decides that, not anything a caller says of itself):
 
     assistant.sock   the voice pipeline. It may ask what bears on a message
@@ -26,6 +26,12 @@ Two doors, two kinds of caller, told apart by which door they can open
     owner.sock       Mission Control, through douglas-agent: the owner's
                      hands. List, read with its history, correct, delete,
                      restore, purge for good, read the log, export.
+    reader.sock      a program that only reads (douglas-mcp, for the owner's
+                     other programs): what bears on a question, what he is
+                     surest of, his open tasks, the open notices, how much
+                     there is. Nothing asked here writes anything, not even
+                     that a memory was used. It is there only where
+                     mcp-setup.sh has put it.
 
 Notices are kept here too, because this is where durable things on Douglas
 live: what the watch in douglas-agent raised (a machine gone, a service
@@ -411,12 +417,14 @@ class Store:
 
     # -- reading, for the assistant ---------------------------------------------
 
-    def recall(self, text: str, limit: int = 6, budget: int = 900, kinds=None) -> list[dict]:
+    def recall(self, text: str, limit: int = 6, budget: int = 900, kinds=None, mark: bool = True) -> list[dict]:
         """What is remembered that bears on a message: the active memories
         that share its words, weighed by how sure each is, who vouches for
         it and how old it is, as many as fit in `budget` characters. One
         that does not fit is passed over for a shorter one, not the end of
-        the list. Each that is handed out is marked as used."""
+        the list. Each that is handed out is marked as used, unless it is
+        a reader asking (`mark`): what somebody else looked up is not his
+        having used it."""
         now = time.time()
         limit, budget = min(max(1, int(limit)), 12), min(max(100, int(budget)), 3000)
         q = self.query(text)
@@ -451,7 +459,7 @@ class Store:
             out.append(self.shown(r))
             used += size
         with self.used_lock:                # noted here, written down later (settle)
-            for m in out:
+            for m in out if mark else []:
                 seen = self.used.setdefault(m["id"], [0, now])
                 seen[0], seen[1] = seen[0] + 1, now
         return out
@@ -951,6 +959,26 @@ class Desk:
             return {"marked": s.marked(r.get("ids"), "spoken" if r.get("aloud") else "told")}
         raise Problem(f"That is not something the assistant's door answers: {op!r}.")
 
+    def reader(self, op: str, r: dict):
+        """A program that only reads. Each of these is something Douglas's
+        own door answers too; none of them writes, and what he may do there
+        beyond reading (note, forget, hand in a conversation, mark a notice
+        as told, write to the log) is not here at all."""
+        s = self.store
+        if op == "recall":
+            return {"memories": s.recall(str(r.get("text") or "")[:2000], whole(r.get("limit") or 6, 12, 1),
+                                         whole(r.get("budget") or 1500, 3000, 100),
+                                         r.get("kinds") if isinstance(r.get("kinds"), list) else None, mark=False)}
+        if op == "known":
+            return {"memories": s.known()}
+        if op == "tasks":
+            return self.assistant("tasks", {})
+        if op == "notices":
+            return {"open": s.notices_for_him()["open"]}
+        if op == "stats":
+            return s.stats()
+        raise Problem(f"That is not something the reader's door answers: {op!r}.")
+
     def owner(self, op: str, r: dict):
         s = self.store
         if op == "list":
@@ -998,7 +1026,10 @@ class Desk:
             return {"ok": False, "text": "A question is one line of JSON with an op in it."}
         began = time.time()
         try:
-            out = (self.owner if role == "owner" else self.assistant)(op, req)
+            asked = {"owner": self.owner, "assistant": self.assistant, "reader": self.reader}.get(role)
+            if asked is None:                    # a door this does not know is no door
+                return {"ok": False, "text": "There is no such door."}
+            out = asked(op, req)
         except Problem as e:
             return {"ok": False, "text": str(e)}
         except (TypeError, ValueError, sqlite3.Error) as e:
@@ -1036,7 +1067,7 @@ def serve() -> None:
     names = (os.environ.get("LISTEN_FDNAMES") or "").split(":")
     if os.environ.get("LISTEN_PID") == str(os.getpid()) and int(os.environ.get("LISTEN_FDS") or 0) >= 1:
         for n, name in enumerate(names):          # systemd made the doors, and says which is which
-            if name in ("assistant", "owner"):
+            if name in ("assistant", "owner", "reader"):
                 srv = Server(os.path.join(RUN, name + ".sock"), Door, bind_and_activate=False)
                 srv.socket.close()
                 srv.socket = socket.socket(fileno=3 + n)
@@ -1044,7 +1075,7 @@ def serve() -> None:
                 servers.append(srv)
     else:                                         # run by hand: the doors are made here
         os.makedirs(RUN, exist_ok=True)
-        for name in ("assistant", "owner"):
+        for name in ("assistant", "owner", "reader"):
             path = os.path.join(RUN, name + ".sock")
             try:
                 os.unlink(path)

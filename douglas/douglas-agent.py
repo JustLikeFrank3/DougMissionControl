@@ -111,7 +111,7 @@ MEMORY_ANSWER_MAX = 240_000              # what the panel's relay will carry on
 # where the model files are and where the programs are installed.
 AGENT_UNITS = tuple((os.environ.get("AGENT_UNITS") or
                      "llama-server llama-eyes douglas-voice douglas-memory douglas-work douglas-job "
-                     "douglas-tts douglas-draw douglas-agent douglas-chatgpt open-webui "
+                     "douglas-tts douglas-draw douglas-agent douglas-chatgpt douglas-mcp open-webui "
                      "wyoming-whisper wyoming-piper").split())
 AGENT_DISKS = tuple((os.environ.get("AGENT_DISKS") or "/ /srv/models").split())
 MODELS_DIR = os.environ.get("MODELS_DIR", "/srv/models")

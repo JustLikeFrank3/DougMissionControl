@@ -71,6 +71,7 @@ from __future__ import annotations
 import array
 import base64
 import email.utils
+import hmac
 import html
 import io
 import ipaddress
@@ -275,6 +276,37 @@ MEMORY_BUDGET = int(E("MEMORY_BUDGET", "900"))          # characters of notes pu
 MEMORY_EVERY_S = float(E("MEMORY_EVERY_S", "60"))       # how often finished conversations are looked for
 MEMORY_QUIET_S = float(E("MEMORY_QUIET_S", "45"))       # past the idle time, before one is gone through
 OPS_VIA = "ops"         # a turn sent by whoever looks after the machine: answered, never remembered
+# A line for the owner's other programs. Open WebUI, and anything else that
+# speaks the OpenAI wire format, can talk to him as a model: GET /v1/models
+# and POST /v1/chat/completions on the pipeline's own port. What comes in is
+# a turn like one typed on the phone. The last thing the person said is the
+# message; his own instructions, tools and memory apply; and the conversation
+# the caller sends along is not used, because he keeps his own, which is the
+# same one on every line. The line has a token of its own
+# (DOUGLAS_API_TOKEN, in the Authorization header), which opens these two
+# routes and nothing else, and it is answered only on this machine. Without
+# the token the routes are not there.
+API_TOKEN = E("DOUGLAS_API_TOKEN", "")
+API_MODEL = E("DOUGLAS_API_MODEL", "douglas")           # the name he goes by as a model
+API_VIA = "webui"
+API_WAIT_S = float(E("DOUGLAS_API_WAIT_S", "30"))       # how long a message waits for him to finish another turn
+API_BEAT_S = 10.0                                       # while he thinks, a line that says so, this often
+API_BODY_MAX = 32 * 1024 * 1024                         # a caller sends its whole conversation, pictures and all
+# A yes cannot be given from this line: whatever needs one is said to need
+# one, and is asked for where the owner is known to be (the phone, the
+# panel, his voice). A chat page is a big program with the network on one
+# side, and it is given his answers, not his say-so.
+NO_YES = (API_VIA,)
+NO_YES_SAID = {
+    "": "That would change something, which needs your yes, and a yes cannot be given from this page. "
+        "Ask me on the phone, on the panel or by voice.",
+    "push": "A push needs your yes, and a yes cannot be given from this page. Ask me on the phone, on the "
+            "panel or by voice.",
+    "job": "That job needs your yes first, and a yes cannot be given from this page. Ask me on the phone, on "
+           "the panel or by voice.",
+    "forget": "Forgetting something needs your yes, and a yes cannot be given from this page. Ask me on the "
+              "phone, on the panel or by voice, or delete it in Mission Control.",
+}
 # What he can see of the machines around him, and of his own. Readings, and
 # nothing else: neither of these can be asked to do anything.
 # FLEET_URL is Mission Control's view of the fleet on the Pi
@@ -312,6 +344,7 @@ SOURCES = {
     "deck": "the Doug Mission Control touchscreen",
     "phone": "the Mission Control page on a phone",
     "chat": "a chat window",
+    API_VIA: "the Open WebUI chat page",
 }
 HISTORY_TURNS = int(E("VOICE_HISTORY_TURNS", "6"))       # exchanges kept
 HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "300"))  # forget after quiet
@@ -335,7 +368,7 @@ VOICE_STATE_FILE = E("VOICE_STATE_FILE", "/run/douglas/voice.json")
 TRANSCRIPT_FILE = E("TRANSCRIPT_FILE", "/var/lib/douglas/transcript.jsonl")
 
 STATES = ("idle", "listening", "thinking", "speaking")
-VIAS = ("voice", "chat", "deck", "phone", OPS_VIA)
+VIAS = ("voice", "chat", "deck", "phone", API_VIA, OPS_VIA)
 
 
 def log(msg: str) -> None:
@@ -5351,6 +5384,56 @@ class Pipeline:
                          speak and self.linked(), image), daemon=True).start()
         return True, "thinking"
 
+    def ask(self, text: str, via: str = API_VIA, image: bytes = b"",
+            wait: float | None = None) -> tuple[bool, str]:
+        """A typed turn answered to whoever sent it: his reply itself, once
+        it is ready, where say() hands back at once and the reply goes to
+        the screens. For a program that waits for its answer (a chat page).
+        If he is in the middle of another turn it waits a little for him to
+        finish, and says so if he does not. Never spoken."""
+        text = " ".join(str(text or "").split())
+        if len(text) > MAX_SAY_CHARS:
+            return False, (f"That is longer than Douglas takes at once ({len(text):,} characters, "
+                           f"{MAX_SAY_CHARS:,} at most). Give the bare model a long text.")
+        if image:
+            if not EYES_URL:
+                return False, "Douglas cannot see pictures: no vision model is set up"
+            if not picture_type(image):
+                return False, "that is not a picture Douglas can open (JPEG, PNG, GIF or BMP)"
+            text = text or "What is this?"
+        if not text:
+            return False, "nothing to say"
+        via = via if via in VIAS else API_VIA
+        until = time.time() + (API_WAIT_S if wait is None else wait)
+        while True:
+            with self._lock:
+                if self.state not in ("listening", "thinking"):
+                    self._turn += 1                  # a typed turn ends any speech
+                    self._played.set()
+                    self._hush()
+                    turn = self._turn
+                    self.st.update(state="thinking")
+                    break
+                busy = self.state
+            if time.time() >= until:
+                return False, f"Douglas is busy ({busy}): try again in a moment"
+            time.sleep(0.2)
+        began = time.time()
+        try:
+            reply = self._exchange(text, via, turn, readable, False, image)
+        except Exception as e:                   # noqa: BLE001 - never wedge
+            log(f"a turn from {via} failed: {e}")
+            self.tr.append("douglas", f"(I could not answer: {str(e)[:120]})", via)
+            return False, "Douglas could not answer that"
+        finally:
+            with self._lock:
+                if self._current(turn) and self.state != "listening":
+                    self.st.update(state="idle")
+        if reply is None:
+            return False, "that message was overtaken by a newer one"
+        log(f"a message from {via} answered in {time.time() - began:.1f} s")      # how long, never what
+        return True, reply
+
     def hear(self, audio: bytes, rate: int, via: str = "phone",
              ask_id: str = "") -> tuple[bool, str]:
         """A turn recorded somewhere else, a phone's own microphone, and to
@@ -5876,7 +5959,11 @@ class Pipeline:
         if not self._current(turn):
             return None         # and a change this turn put forward is never read back
         change = ctx["held"]
-        if change:
+        if change and via in NO_YES:
+            # Not read back and not left waiting: said plainly, with where to ask.
+            log(f"{change.get('kind') or 'a change'} not put forward: no yes can be given from {via}")
+            reply = NO_YES_SAID.get(change.get("kind") or "", NO_YES_SAID[""])
+        elif change:
             # The reply is the read-back, whatever the model went on to say,
             # and only now, with it on its way to the person, can a yes count.
             # It is not tidied for speech the way the model's words are: that
@@ -6089,6 +6176,72 @@ class Pipeline:
 PIPE: Pipeline | None = None
 
 
+# What a chat page asks a model behind the person's back: a title for the
+# conversation, tags, what to ask next, which of its own tools to call.
+# Those are the page's errands and not turns of his. They go to the bare
+# model as the page sent them, as they did before he was a model there.
+API_ERRAND = re.compile(r"\s*(?:### Task:|Your task is to reflect the speaker's likely facial expression|"
+                        r"You have been provided with a set of responses from various models)")
+API_ERRAND_SYSTEM = re.compile(r"\s*Available Tools:")
+
+
+def api_asked(body: dict) -> tuple[str, bytes, bool]:
+    """What a request in the OpenAI wire format asks: the last thing the
+    person said, the first picture that came with it, and whether it is one
+    of a chat page's own errands. ValueError, with words for the caller,
+    when it is not something that can be answered."""
+    msgs = body.get("messages")
+    if not isinstance(msgs, list) or not msgs or not all(isinstance(m, dict) for m in msgs):
+        raise ValueError("messages must be a list of messages")
+    if msgs[-1].get("role") != "user":
+        raise ValueError("the last message must be the user's")
+    content, words, image = msgs[-1].get("content"), [], b""
+    for part in content if isinstance(content, list) else [{"type": "text", "text": content}]:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and isinstance(part.get("text"), str):
+            words.append(part["text"])
+        elif part.get("type") == "image_url" and not image:
+            url = part.get("image_url")
+            url = url.get("url") if isinstance(url, dict) else url
+            if isinstance(url, str) and url.startswith("data:image/") and "," in url:
+                try:
+                    image = base64.b64decode(url.split(",", 1)[1], validate=True)
+                except ValueError:
+                    raise ValueError("a picture must be base64") from None
+    text = "\n".join(words)
+    first = msgs[0].get("content") if msgs[0].get("role") == "system" else ""
+    errand = bool(API_ERRAND.match(text)) or (isinstance(first, str) and bool(API_ERRAND_SYSTEM.match(first)))
+    return text, image, errand
+
+
+def api_bare(body: dict) -> tuple[int, bytes]:
+    """One of a chat page's own errands, handed to the bare model as the
+    page sent it, and the model's answer as it gave it. Not streamed, and
+    not a turn: nothing of it is in his conversation or the record."""
+    req = urllib.request.Request(f"{LLM_URL}/v1/chat/completions",
+                                 data=json.dumps(dict(body, model=LLM_MODEL, stream=False)).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as r:
+            return 200, r.read(API_BODY_MAX)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(65536)
+    except (urllib.error.URLError, OSError):
+        return 502, json.dumps(api_error("the model server did not answer", "server_error")).encode()
+
+
+def api_error(message: str, kind: str = "invalid_request_error") -> dict:
+    return {"error": {"message": message, "type": kind}}
+
+
+def api_chunk(cid: str, delta: dict, finish: str | None = None) -> bytes:
+    """One piece of a streamed answer, as the wire format has it."""
+    return b"data: " + json.dumps({
+        "id": cid, "object": "chat.completion.chunk", "created": int(time.time()), "model": API_MODEL,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}).encode() + b"\n\n"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "douglas-voice/1"
 
@@ -6107,10 +6260,90 @@ class Handler(BaseHTTPRequestHandler):
     def _allowed(self, u) -> bool:
         return not PTT_TOKEN or (parse_qs(u.query).get("token") or [""])[0] == PTT_TOKEN
 
+    def _api_allowed(self) -> bool:
+        """The line for the owner's other programs: with its own token, in
+        the header, and from this machine. The pipeline's own token does not
+        open it, and its token opens nothing else."""
+        given = self.headers.get("Authorization") or ""
+        return (bool(API_TOKEN) and self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+                and hmac.compare_digest(given.encode(), ("Bearer " + API_TOKEN).encode()))
+
+    def _api_chat(self) -> None:
+        """POST /v1/chat/completions: a turn, answered whole or as a stream."""
+        if not self._api_allowed():
+            return self._send(401 if API_TOKEN else 404, api_error("not allowed"))
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > API_BODY_MAX:
+                return self._send(413, api_error("that is more than can be taken at once"))
+            body = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("a JSON object is expected")
+            text, image, errand = api_asked(body)
+        except ValueError as e:
+            return self._send(400, api_error(str(e)[:200] or "that could not be read"))
+        if errand:
+            code, out = api_bare(body)
+            return self._send(code, out, "application/json")
+        if len(image) > MAX_IMAGE_BYTES:
+            return self._send(400, api_error("that picture is too big"))
+        said = " ".join(text.split())
+        if not said and not image:
+            return self._send(400, api_error("there is nothing in the last message"))
+        if len(said) > MAX_SAY_CHARS:
+            return self._send(400, api_error(
+                f"that is longer than Douglas takes at once ({len(said):,} characters, {MAX_SAY_CHARS:,} at "
+                "most): give the bare model a long text"))
+        assert PIPE is not None
+        cid = "chatcmpl-" + os.urandom(8).hex()
+        if not body.get("stream"):
+            ok, reply = PIPE.ask(text, API_VIA, image)
+            if not ok:
+                return self._send(503, api_error(reply, "server_error"))
+            return self._send(200, {
+                "id": cid, "object": "chat.completion", "created": int(time.time()), "model": API_MODEL,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": reply},
+                             "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+        # Streamed: he answers in one piece, so the stream is a line now and
+        # then that says he is thinking (a comment, which a reader of the
+        # format passes over), and then the answer.
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        got: dict = {}
+        turn = threading.Thread(target=lambda: got.update(zip(("ok", "reply"), PIPE.ask(text, API_VIA, image))),
+                                daemon=True)
+        turn.start()
+        try:
+            while turn.is_alive():
+                turn.join(API_BEAT_S)
+                if turn.is_alive():
+                    self.wfile.write(b": he is thinking\n\n")
+                    self.wfile.flush()
+            if got.get("ok"):
+                self.wfile.write(api_chunk(cid, {"role": "assistant", "content": got["reply"]})
+                                 + api_chunk(cid, {}, "stop"))
+            else:
+                self.wfile.write(b"data: " + json.dumps(api_error(
+                    got.get("reply") or "Douglas could not answer that", "server_error")).encode() + b"\n\n")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except OSError:
+            pass                # whoever asked has gone: the turn is in the record all the same
+
     def do_GET(self):  # noqa: N802
         u = urlparse(self.path)
         if u.path == "/health":
             return self._send(200, b"ok")
+        if u.path == "/v1/models":
+            if not self._api_allowed():
+                return self._send(401 if API_TOKEN else 404, api_error("not allowed"))
+            return self._send(200, {"object": "list", "data": [
+                {"id": API_MODEL, "object": "model", "created": 0, "owned_by": "douglas"}]})
         if u.path == "/speech":
             # The reply to a recorded turn, as audio, for the phone that sent
             # the recording. 202 while he is still thinking.
@@ -6137,6 +6370,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         u = urlparse(self.path)
+        if u.path == "/v1/chat/completions":
+            return self._api_chat()
         if u.path not in ("/ptt", "/say", "/hear"):
             return self._send(404, {"error": "not found"})
         if not self._allowed(u):
@@ -6233,7 +6468,8 @@ def main() -> None:
         + f", jobContext {urllib.parse.urlsplit(JOBCONTEXT_URL).netloc if jc_on() else 'off'}"
         + (f" ({', '.join(JOBCONTEXT_AREAS)} only)" if jc_on() and JOBCONTEXT_AREAS else "")
         + f", workshop {'on' if WORK_SOCKET and TOOLS_ON else 'off'}"
-        + f", memory {'on' if MEMORY_SOCKET else 'off'}")
+        + f", memory {'on' if MEMORY_SOCKET else 'off'}"
+        + f", a model for other programs {'as ' + API_MODEL if API_TOKEN else 'off'}")
     srv.serve_forever()
 
 

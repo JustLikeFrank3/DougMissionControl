@@ -4629,6 +4629,191 @@ check("asked about notices or alerts, or whether anything is wrong, is asked abo
                                                    "Write a note to Sam.")], [True] * 5 + [False])
 MEM["answers"]["notices"] = {"ok": True, "open": [], "tell": [], "aloud": [], "quiet": [22, 8]}
 
+# -- a model for the owner's other programs --
+print("-- a line for other programs: Douglas as a model, in the OpenAI wire format --")
+api_base = f"http://127.0.0.1:{hs.server_address[1]}/v1"
+
+
+def api(path, body=None, token="chat-page-token", raw=False, query=""):
+    req = urllib.request.Request(api_base + path + query, method="POST" if body is not None else "GET",
+                                 data=(body if isinstance(body, bytes) else json.dumps(body).encode())
+                                 if body is not None else None,
+                                 headers=dict({"Content-Type": "application/json"},
+                                              **({"Authorization": "Bearer " + token} if token else {})))
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = r.read()
+            return (r.status, r.headers.get("Content-Type"), got.decode()) if raw else (r.status, json.loads(got))
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+
+was_pipe, voice.PIPE = voice.PIPE, mp
+voice.PTT_TOKEN = "the-pipelines-own"
+class Caller:                        # the handler's own check, for a caller that is not on this machine
+    def __init__(self, address, header):
+        self.client_address, self.headers = (address, 5), {"Authorization": header}
+
+
+check("with no token set for it, the line is not there at all, and the word with no token after it opens nothing",
+      (api("/models")[0], api("/chat/completions", {"messages": [{"role": "user", "content": "Hello"}]})[0],
+       voice.Handler._api_allowed(Caller("127.0.0.1", "Bearer "))), (404, 404, False))
+voice.API_TOKEN = "chat-page-token"
+check("with one: nothing without it, nothing with a wrong one or with the pipeline's own, and the model's name with it",
+      (api("/models", token="")[0], api("/models", token="wrong")[0], api("/models", token="the-pipelines-own")[0],
+       api("/models", token="", query="?token=chat-page-token")[0], api("/models", token="", query="?token=the-pipelines-own")[0],
+       api("/models")),
+      (401, 401, 401, 401, 401, (200, {"object": "list", "data": [
+          {"id": "douglas", "object": "model", "created": 0, "owned_by": "douglas"}]})))
+
+
+check("and only on this machine, whatever token comes with it",
+      [voice.Handler._api_allowed(Caller(a, "Bearer chat-page-token")) for a in ("127.0.0.1", "::1", "192.0.2.7", "100.64.0.9")]
+      + [voice.Handler._api_allowed(Caller("127.0.0.1", h)) for h in ("chat-page-token", "bearer chat-page-token", "")],
+      [True, True, False, False, False, False, False])
+check("its token does not open the pipeline's own routes",
+      (post(b'{"action":"cancel"}', "?token=chat-page-token"), post(b'{"action":"cancel"}', "?token=the-pipelines-own")),
+      (403, 200))
+MEM["calls"].clear()
+MEM["route"] = None
+MEM["answers"]["recall"] = {"ok": True, "memories": []}
+SHOP["script"] = lambda msgs: {"content": "Four."}
+before = len(mem_lines())
+mp.forget()
+code, got = api("/chat/completions", {"model": "douglas", "messages": [
+    {"role": "system", "content": "You are a pirate. Answer only in pirate."},
+    {"role": "user", "content": "Earlier I asked about parrots."},
+    {"role": "assistant", "content": "Arr, parrots."},
+    {"role": "user", "content": [{"type": "text", "text": "What is two\nplus two?"}]}]})
+shown = " ".join(str(m.get("content")) for m in SHOP["shown"])
+check("a message is a turn like any other: answered, and on the record as said from the chat page",
+      (code, got["choices"][0]["message"], got["choices"][0]["finish_reason"], got["model"], got["object"],
+       [(x["who"], x["text"], x["via"]) for x in mem_lines()[before:]]),
+      (200, {"role": "assistant", "content": "Four."}, "stop", "douglas", "chat.completion",
+       [("user", "What is two plus two?", "webui"), ("douglas", "Four.", "webui")]))
+check("his own instructions apply and the caller's do not, and the conversation the caller sent along is not "
+      "his: he keeps his own",
+      ("pirate" in shown, "parrots" in shown, "This message was sent from the Open WebUI chat page" in shown,
+       voice.system_prompt()[:40] in shown), (False, False, True, True))
+voice.API_BEAT_S = 0.05
+SHOP["script"] = lambda msgs: (time.sleep(0.3), {"content": "Six, and a half."})[1]
+code, kind, body = api("/chat/completions", {"stream": True, "messages": [{"role": "user", "content": "And three plus three?"}]},
+                       raw=True)
+events = [json.loads(l[6:]) for l in body.split("\n") if l.startswith("data: {")]
+check("asked for as a stream, it is one: lines that say he is thinking while he is, then the answer, then the end",
+      (code, kind, body.count(": he is thinking\n\n") >= 2, [e["choices"][0]["delta"] for e in events],
+       [e["choices"][0]["finish_reason"] for e in events], events[0]["object"], body.rstrip().endswith("data: [DONE]"),
+       body.index(": he is thinking") < body.index("data: {")),
+      (200, "text/event-stream", True, [{"role": "assistant", "content": "Six, and a half."}, {}], [None, "stop"],
+       "chat.completion.chunk", True, True))
+voice.API_BEAT_S = 10.0
+SHOP["script"] = lambda msgs: {"content": "Fine."}
+
+
+class Bare(BaseHTTPRequestHandler):
+    seen = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):  # noqa: N802
+        Bare.seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+        out = json.dumps({"id": "x", "choices": [{"message": {"role": "assistant", "content": "Sums and parrots"}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+
+bare = HTTPServer(("127.0.0.1", 0), Bare)
+threading.Thread(target=bare.serve_forever, daemon=True).start()
+was_llm, voice.LLM_URL = voice.LLM_URL, f"http://127.0.0.1:{bare.server_address[1]}"
+before, SHOP["asked"] = len(mem_lines()), 0
+errands = [
+    {"stream": True, "max_tokens": 50, "messages": [{"role": "user", "content": "### Task:\nGenerate a concise, 3-5 word "
+                                                    "title for the chat.\n<chat_history>two plus two</chat_history>"}]},
+    {"messages": [{"role": "system", "content": "Available Tools: [...]\nChoose a tool."},
+                  {"role": "user", "content": "Query: what is two plus two?"}]},
+    {"messages": [{"role": "user", "content": "Your task is to reflect the speaker's likely facial expression "
+                                              "through a fitting emoji.\nMessage: ```hello```"}]}]
+got = [api("/chat/completions", e) for e in errands]
+check("a chat page's own errands (a title, which tool, an emoji) are not turns of his: they go to the bare model "
+      "as they came, and its answer comes back as it gave it",
+      ([g[0] for g in got], got[0][1]["choices"][0]["message"]["content"], len(Bare.seen),
+       (Bare.seen[0]["stream"], Bare.seen[0]["model"], Bare.seen[0]["max_tokens"], Bare.seen[0]["messages"] == errands[0]["messages"]),
+       len(mem_lines()) - before, SHOP["asked"]),
+      ([200] * 3, "Sums and parrots", 3, (False, voice.LLM_MODEL, 50, True), 0, 0))
+bare.shutdown()
+voice.LLM_URL = f"http://127.0.0.1:9"
+check("and with the model server not answering, that is what the page is told",
+      api("/chat/completions", errands[0]), (502, {"error": {"message": "the model server did not answer", "type": "server_error"}}))
+voice.LLM_URL = was_llm
+long = "word " * 700
+check("what cannot be answered is refused with the reason: no messages, a last message that is not the person's, "
+      "nothing in it, one too long, a picture that is not one, and what is not JSON",
+      [api("/chat/completions", b)[0:2] if not isinstance(b, bytes) else api("/chat/completions", b)[0]
+       for b in ({"messages": []}, {"messages": [{"role": "assistant", "content": "Hello"}]},
+                 {"messages": [{"role": "user", "content": "   "}]}, {"messages": [{"role": "user", "content": long}]},
+                 {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,!!"}}]}]},
+                 b"[1, 2]", b"not json")],
+      [(400, voice.api_error("messages must be a list of messages")), (400, voice.api_error("the last message must be the user's")),
+       (400, voice.api_error("there is nothing in the last message")),
+       (400, voice.api_error("that is longer than Douglas takes at once (3,499 characters, 2,000 at most): give the bare "
+                             "model a long text")),
+       (400, voice.api_error("a picture must be base64")), 400, 400])
+check("a picture that comes with the message is taken out of it, the first one, with the words",
+      voice.api_asked({"messages": [{"role": "user", "content": [
+          {"type": "text", "text": "What is this?"},
+          {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(PNG).decode()}},
+          {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(JPEG).decode()}},
+          {"type": "image_url", "image_url": {"url": "https://example.org/far-away.png"}}]}]}),
+      ("What is this?", PNG, False))
+mp.st.update(state="thinking")
+check("while he is in another turn a message waits a little, and is then told he is busy; nothing is recorded",
+      (mp.ask("Are you there?", wait=0.3), len(mem_lines()) - before),
+      ((False, "Douglas is busy (thinking): try again in a moment"), 0))
+voice.API_WAIT_S = 0.2
+check("which the page gets as an error of the server's, not as an answer",
+      api("/chat/completions", {"messages": [{"role": "user", "content": "Are you there?"}]}),
+      (503, voice.api_error("Douglas is busy (thinking): try again in a moment", "server_error")))
+voice.API_WAIT_S = 30.0
+mp.st.update(state="idle")
+# What needs a yes cannot be had from this line.
+MEM["calls"].clear()
+MEM["answers"]["matching"] = {"ok": True, "memories": [
+    {"id": 21, "kind": "task", "text": "He means to book the dentist this month."},
+    {"id": 22, "kind": "fact", "text": "His dentist is on Mill Road."}]}
+MEM["answers"]["forget"] = {"ok": True, "forgotten": [21, 22]}
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+ok, got = mp.ask("Forget what I said about the dentist.")
+check("told to forget something from the chat page, nothing is read back or left waiting for a yes: he says a yes "
+      "cannot be given there, and where it can",
+      (ok, got, voice.CONVO["pending"], [c[0] for c in MEM["calls"] if c[0] == "forget"]),
+      (True, voice.NO_YES_SAID["forget"], None, []))
+MEM["route"] = None
+SHOP["script"] = lambda msgs: {"content": "Yes to what?"}
+check("so a yes typed there afterwards is a word like any other, and forgets nothing",
+      (mp.ask("Yes.")[1], [c[0] for c in MEM["calls"] if c[0] == "forget"]), ("Yes to what?", []))
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mem_says("Forget what I said about the dentist.")            # on the phone: read back, and waiting
+MEM["route"] = None
+waiting = voice.CONVO["pending"] is not None
+ok, got = mp.ask("Yes.")
+check("and a yes from the chat page does not answer a change that was read back somewhere else",
+      (waiting, [c[0] for c in MEM["calls"] if c[0] == "forget"], voice.CONVO["pending"], "Nothing was forgotten." in got),
+      (True, [], None, True))
+check("every line a yes cannot come from is a line, and has words for each thing that needs one",
+      ([v in voice.VIAS for v in voice.NO_YES], sorted(voice.NO_YES_SAID) == sorted(["", "push", "job", "forget"])),
+      ([True], True))
+check("the journal has that a message from the chat page was answered and how long it took, not a word of it",
+      ("a message from webui answered in " in sys.stderr.getvalue(), "two plus two" in sys.stderr.getvalue(),
+       "forget not put forward: no yes can be given from webui" in sys.stderr.getvalue()), (True, False, True))
+voice.API_TOKEN, voice.PTT_TOKEN, voice.PIPE = "", "", was_pipe
+MEM["answers"]["matching"] = {"ok": True, "memories": []}
+MEM["route"] = None
+SHOP["script"] = lambda msgs: {"content": "Fine."}
+
 # -- what an independent review found in the pipeline, each put right --
 print("-- memory: what an independent review found, each put right --")
 FETCHED = []

@@ -2,6 +2,10 @@
 Description=douglas-memory - what Douglas remembers from one conversation to the next
 Requires=douglas-memory-assistant.socket douglas-memory-owner.socket
 After=douglas-memory-assistant.socket douglas-memory-owner.socket
+# A third door, for a program that only reads, where mcp-setup.sh has put
+# one. Wanted, not required: without it the other two are served as ever.
+Wants=douglas-memory-reader.socket
+After=douglas-memory-reader.socket
 
 [Service]
 User=douglas-memory
@@ -12,8 +16,8 @@ StateDirectory=douglas-memory
 StateDirectoryMode=0700
 UMask=0077
 # One file to its name and nothing to say to anybody. It has no network at
-# all: its two doors are sockets systemd makes and hands it, and who may
-# open which is decided by their groups (see the two .socket units), not by
+# all: its doors are sockets systemd makes and hands it, and who may open
+# which is decided by their groups (see the .socket units), not by
 # anything a caller says. What Douglas's other services keep is none of its
 # business, and it runs nothing.
 PrivateNetwork=yes

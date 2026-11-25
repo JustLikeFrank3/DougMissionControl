@@ -4,9 +4,14 @@ After=network-online.target llama-server.service
 Wants=network-online.target
 
 [Service]
-User=douglas
-Group=douglas
+# A user of its own (webui-setup.sh makes it): its database holds every
+# conversation had in it and a token that speaks to Douglas, and is nobody
+# else's to read.
+User=open-webui
+Group=open-webui
 StateDirectory=open-webui
+StateDirectoryMode=0700
+UMask=0077
 Environment=DATA_DIR=/var/lib/open-webui HOME=/var/lib/open-webui
 # onnxruntime (inside this service) reports usage to Microsoft unless told
 # not to. Nothing in this house needs that.

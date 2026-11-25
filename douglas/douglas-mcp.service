@@ -1,0 +1,49 @@
+[Unit]
+Description=douglas-mcp - what Douglas remembers and sees, for the owner's other programs to read (MCP on :9112)
+After=network-online.target douglas-memory.service douglas-agent.service
+Wants=network-online.target
+
+[Service]
+User=douglas-mcp
+Group=douglas-mcp
+# The memory's door for readers, and no other door of it.
+SupplementaryGroups=douglas-memory-reader
+EnvironmentFile=/etc/douglas/mcp.env
+ExecStart=/usr/bin/python3 -I /opt/douglas/douglas-mcp.py
+# Reached from this machine and the tailnet and from nowhere else, and it
+# calls out to nothing but the Pi, which is on the tailnet too. A machine on
+# the home network that is not on the tailnet gets no answer at all.
+IPAddressDeny=any
+IPAddressAllow=localhost 100.64.0.0/10 fd7a:115c:a1e0::/48
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# It reads three things (a socket of the memory's, a socket of the agent's,
+# one address on the Pi) and writes nothing anywhere. What Douglas's other
+# services keep is none of its business.
+InaccessiblePaths=/etc/douglas -/var/lib/douglas -/var/lib/douglas-memory -/var/lib/douglas-work -/var/lib/douglas-spool -/var/lib/open-webui -/srv/models
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+MemoryMax=256M
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

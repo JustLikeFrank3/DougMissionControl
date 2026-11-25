@@ -7,11 +7,11 @@ do. The rule throughout: **broad visibility, narrow authority.** He gets to
 see and to remember; he does not get to act on anything he could not act on
 before.
 
-Phases 1 to 3 are built and running (the README's "A memory", "What he can
-see of the machines, and of himself" and "What is noticed without anyone
-asking" say how they work and what was measured). Phases 4 to 6 are designed
-here; the owner has said in which order, and that the house waits to be
-asked for by name.
+Phases 1, 2, 3 and 5 are built and running (the README's "A memory", "What
+he can see of the machines, and of himself", "What is noticed without anyone
+asking" and "The same Douglas wherever he is asked" say how they work and
+what was measured). Phases 4 and 6 are designed here; the owner has said in
+which order, and that the house waits to be asked for by name.
 
 ## 1. What was found
 
@@ -303,18 +303,46 @@ void after its time; a tool switched off is not offered within one turn and
 cannot be switched on from a conversation; the record of what he did shows
 who approved what, and from where.
 
-### Phase 5: one Douglas on every interface (designed)
+### Phase 5: one Douglas on every interface (built)
 
-The ChatGPT connector and Open WebUI go through the pipeline's `/say`, so
-that they get his instructions, his tools and his memory instead of the
-bare model. For other programs on the owner's machines, an MCP server on
-Douglas with read operations only: recall from his memory (the assistant's
-door, so the same limits), the fleet view (the read token), his vitals. It
-gets an identity of its own, and nothing it offers changes anything.
+- The pipeline has a line for the owner's other programs: the OpenAI wire
+  format at `/v1` on its own port, with a token of its own, answered on
+  Douglas itself only. A message there is a turn like one typed on the
+  phone, in the one conversation he keeps; the caller's own system prompt
+  and conversation are not used; a chat page's own errands (a title, tags)
+  go to the bare model as before.
+- Open WebUI lists him as a second model beside the bare one
+  (`douglas/webui-setup.sh`), and runs as a user of its own, with its
+  database closed to the other users of the machine.
+- `douglas-mcp`: a Model Context Protocol server with six readings (recall,
+  known, tasks, notices, fleet, vitals) and nothing that writes, behind a
+  third, read-only door on the memory service. A user of its own, a token
+  of its own, reached from Douglas and the tailnet only.
+
+What differs from the design, and why:
+
+- No yes is taken from the chat page's line. The design had every line
+  alike. But a chat page is a large program that faces the network, and
+  what needs a yes is what reaches outside his own notes: he says so, and
+  where the yes can be given. Phase 4 makes that Mission Control.
+- The MCP server has a door of its own on the memory, not Douglas's. His
+  door also notes, forgets and marks things as told; a program that reads
+  for somebody else should not be able to, and should not count as him
+  having used a memory.
+- ChatGPT's connector was left as it is, on the owner's word: see section 4.
+- Nothing was handed the MCP server's token. Which program reads what
+  Douglas remembers is the owner's to say.
 
 *Accepted when:* the same question gets the same remembered answer from the
 phone, the panel, the voice satellite, Open WebUI and the connector, and a
-note made on one is recalled on the others.
+note made on one is recalled on the others. *Seen:* a note made on the Open
+WebUI line was recalled on the chat line and the other way round, with the
+pipeline restarted in between; the lines of the phone, the panel and the
+satellite are the same code with another name on the turn, and the
+connector is deliberately not among them. A conversation in Open WebUI's
+own page was not seen, since that takes the owner's sign-in: what was sent
+to the line was what Open WebUI sends. The MCP server answered the official
+client library from the workstation, over the tailnet.
 
 ### Phase 6: the house (designed, nothing granted)
 
@@ -361,9 +389,15 @@ Decided by the owner on 2026-11-24, and done or kept accordingly:
   what he remembered was there.
 - Phase 3 is built and running (2026-11-24). Saying a notice aloud is off
   for every severity until switched on in Mission Control.
+- Phase 5 is built and running (2026-11-24): Open WebUI lists Douglas beside
+  the bare model, and `douglas-mcp` is up with a token nobody has been
+  given.
 
 Still the owner's to say:
 
+- Which program, if any, is given `douglas-mcp`'s token
+  (`sudo ./douglas/mcp-setup.sh show`). Whatever holds it reads what Douglas
+  remembers.
 - Phase 6, by name, when its turn comes.
 - Whether a notice should reach a phone whose page is closed. That means
   another company's push service, or one more thing to run at home.
@@ -389,6 +423,11 @@ tool. Each takes effect when `douglas-voice` is next restarted.
 switches the watch off: nothing is raised or cleared after that, what was
 raised stays in the list, and the two switches under WHERE THEY GO in
 Mission Control stop Douglas mentioning notices without touching the watch.
+`douglas/webui-setup.sh off` takes Douglas out of Open WebUI's models and
+his line's token out of `voice.env` (`back` also returns Open WebUI to the
+user it ran as; its database from before is kept beside it), and
+`douglas/mcp-setup.sh off` stops the MCP server and takes its door on the
+memory and its token away.
 The programs
 and settings from before each phase are kept in the home directory of the
 account that installed them, on Douglas and on the Pi.
