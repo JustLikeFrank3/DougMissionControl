@@ -20,7 +20,7 @@ def check(label, got, want):
 relay_as_it_is = d.douglas_memory          # before it is stood in for below
 DONE = []
 for name in ("fire_boot", "fire_shutdown", "fire_launch", "fire_abort", "douglas_say", "douglas_hear",
-             "douglas_ptt", "douglas_memory", "sim_command"):
+             "douglas_ptt", "douglas_memory", "douglas_owner", "sim_command"):
     if hasattr(d, name):
         setattr(d, name, (lambda n: lambda *a, **k: (DONE.append(n), (False, "stood in"))[1])(name))
 STATUS = {"agent": True, "ts": 1_800_000_000.0,

@@ -1721,6 +1721,29 @@ def douglas_ptt(action: str) -> tuple[bool, str]:
     return bool(got.get("ok")), str(got.get("message") or "")
 
 
+def douglas_owner(what: str, body: dict) -> tuple[int, dict]:
+    """Two things only the owner's screens ask of Douglas, each passed to his
+    agent in the one shape it has. `approval`: the answer to a change of his
+    that is waiting for a yes, by the number of what was read back.
+    `switch`: one of his tools, on or off."""
+    if not DOUGLAS_AGENT_TOKEN:
+        return 502, {"ok": False, "message": "DOUGLAS_AGENT_TOKEN unset in boot.env"}
+    if what == "approval":
+        pid, yes = body.get("id"), body.get("yes")
+        if not isinstance(pid, str) or not pid or not isinstance(yes, bool):
+            return 400, {"ok": False, "message": "an answer is the number of what is waiting, and yes: true or false"}
+        ask = {"id": pid[:32], "yes": yes, "via": "phone" if body.get("via") == "phone" else "deck"}
+    else:
+        tool, on = body.get("tool"), body.get("on")
+        if not isinstance(tool, str) or not re.fullmatch(r"[a-z_]{1,24}", tool) or not isinstance(on, bool):
+            return 400, {"ok": False, "message": "a switch is a tool, and on: true or false"}
+        ask = {"tool": tool, "on": on}
+    got = _ws_json(f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/{what}?token={DOUGLAS_AGENT_TOKEN}", ask, timeout=8)
+    if not isinstance(got, dict):
+        return 502, {"ok": False, "message": "douglas-agent did not answer"}
+    return 200, got
+
+
 # A phone on a poor link sends a question again when the first copy got no
 # answer, and sometimes that copy had arrived and only the reply was lost. So
 # the page gives each question an id, and one Douglas has already taken is
@@ -2370,6 +2393,21 @@ class Handler(BaseHTTPRequestHandler):
             self._note((op if known else "not a change")
                        + (f" of {'notice' if known and op.startswith('notice') else 'memory'} {which}"
                           if isinstance(which, int) else "")
+                       + ("" if out.get("ok") else " refused"))
+            return self._json(code, out)
+
+        if path == "/api/douglas/approval":
+            code, out = douglas_owner("approval", body)
+            # That an answer was given and which way: never what it was to.
+            self._note(("yes" if body.get("yes") is True else "no" if body.get("yes") is False else "not an answer")
+                       + ("" if out.get("ok") else " refused"))
+            return self._json(code, out)
+
+        if path == "/api/douglas/switch":
+            code, out = douglas_owner("switch", body)
+            tool = body.get("tool")
+            self._note((f"{tool[:24]} " if isinstance(tool, str) and re.fullmatch(r"[a-z_]{1,24}", tool) else "")
+                       + ("on" if body.get("on") is True else "off" if body.get("on") is False else "not a switch")
                        + ("" if out.get("ok") else " refused"))
             return self._json(code, out)
 

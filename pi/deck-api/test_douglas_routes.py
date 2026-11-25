@@ -397,11 +397,48 @@ check("a notice cannot be raised or cleared from a screen: that is the watch's, 
 check("nor ask what only he asks of his memory",
       [post("/api/douglas/memory", {"op": op, "text": "The sky is green."})[0] for op in ("remember", "consolidate", "forget", "log")],
       [400] * 4)
+# An answer to what is waiting for a yes, and the owner's switches.
+code, out, log = post("/api/douglas/approval", {"id": "a1b2c3d4", "yes": True, "via": "phone", "text": "push everything"})
+check("a yes given on a screen is passed to his agent as the number of what it answers, a yes, and which screen: "
+      "and the journal has that one was given, not to what",
+      (code, ASKED[-1][0], ASKED[-1][1], ASKED[-1][3], log.strip()),
+      (200, "POST", "/approval", {"id": "a1b2c3d4", "yes": True, "via": "phone"},
+       "http: /api/douglas/approval from 127.0.0.1: yes refused"))
+code, out, log = post("/api/douglas/approval", {"id": "a1b2c3d4", "yes": False, "via": "the moon"})
+check("a no likewise, from the panel unless it says the phone", (ASKED[-1][3], log.strip()),
+      ({"id": "a1b2c3d4", "yes": False, "via": "deck"}, "http: /api/douglas/approval from 127.0.0.1: no refused"))
+n = len(ASKED)
+check("what is not an answer is not passed on: no number, or a yes that only looks like one",
+      ([post("/api/douglas/approval", b)[0] for b in ({}, {"yes": True}, {"id": "a1b2c3d4"}, {"id": "a1b2c3d4", "yes": "true"},
+                                                       {"id": "a1b2c3d4", "yes": 1}, {"id": 5, "yes": True})],
+       len(ASKED) - n), ([400] * 6, 0))
+code, out, log = post("/api/douglas/switch", {"tool": "search", "on": False, "op": "write"})
+check("a switch is passed on as the tool and the way, and the journal has both",
+      (code, ASKED[-1][1], ASKED[-1][3], log.strip()),
+      (200, "/switch", {"tool": "search", "on": False}, "http: /api/douglas/switch from 127.0.0.1: search off refused"))
+n = len(ASKED)
+check("what is not a switch is not passed on: no tool, a name that is not one, an on that is not true or false",
+      ([post("/api/douglas/switch", b)[0] for b in ({}, {"tool": "search"}, {"tool": "search", "on": "off"},
+                                                     {"tool": "../etc", "on": True}, {"tool": "Search Engine", "on": True},
+                                                     {"tool": ["search"], "on": True})], len(ASKED) - n), ([400] * 6, 0))
 d.DECK_TOKEN = "deck-token"
 away = {"X-Forwarded-For": "100.64.0.9"}
 check("from anywhere but the panel itself, his memory wants the deck token",
       (look("op=list", away)[0], look("op=list&token=deck-token", away)[0], look("op=list&token=wrong", away)[0]),
       (403, 200, 403))
+def owners(path, query, body):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}{query}", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+n = len(ASKED)
+check("so do an answer and a switch: from another machine, nothing without the deck's token",
+      ([owners(p, q, b) for p, b in (("/api/douglas/approval", {"id": "a1b2c3d4", "yes": True}),
+                                     ("/api/douglas/switch", {"tool": "search", "on": True}))
+        for q in ("", "?token=wrong", "?token=deck-token")], len(ASKED) - n), ([403, 403, 200, 403, 403, 200], 2))
 def change(query, body):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/douglas/memory{query}", json.dumps(body).encode(),
                                  {"Content-Type": "application/json", "X-Forwarded-For": "100.64.0.9"})

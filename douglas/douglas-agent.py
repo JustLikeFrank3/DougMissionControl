@@ -104,6 +104,8 @@ TRANSCRIPT_FILE = os.environ.get("TRANSCRIPT_FILE", "/var/lib/douglas/transcript
 TRANSCRIPT_TURNS = int(os.environ.get("TRANSCRIPT_TURNS", "40"))
 VOICE_PTT_URL = os.environ.get("VOICE_PTT_URL", "")
 MEMORY_OWNER_SOCKET = os.environ.get("MEMORY_OWNER_SOCKET", "")
+# The door of douglas-switch: where the owner's screens switch his tools on and off.
+SWITCH_SOCKET = os.environ.get("SWITCH_SOCKET", "")
 MEMORY_BODY_MAX = 64 * 1024              # a correction is a sentence or two
 MEMORY_ANSWER_MAX = 240_000              # what the panel's relay will carry on
 # What this machine is asked about itself, beyond the meters: the services
@@ -478,7 +480,59 @@ def voice_state() -> dict:
             "last_turn": v.get("last_turn"),
             # The last time he listened: how long, how loud, how many words.
             # What lets a panel say "heard nothing" instead of saying nothing.
-            "heard": heard if isinstance(heard, dict) else None}
+            "heard": heard if isinstance(heard, dict) else None,
+            # A change that is waiting for the owner's yes, in the words that
+            # were read back, and which of his tools are on, off or not set
+            # up. Passed on only in the shape they are known to have.
+            "pending": _pending(v.get("pending")),
+            "tools": ({str(k)[:24]: s for k, s in list(v["tools"].items())[:40] if s in ("on", "off", "absent")}
+                      if isinstance(v.get("tools"), dict) else None)}
+
+
+def _pending(p) -> dict | None:
+    if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not p["id"]:
+        return None
+    num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
+    return {"id": p["id"][:32], "kind": str(p.get("kind") or "")[:24], "text": str(p.get("text") or "")[:1500],
+            "via": str(p.get("via") or "")[:12], "asked": num(p.get("asked")), "until": num(p.get("until"))}
+
+
+def relay_approval(body: dict) -> tuple[int, dict]:
+    """The owner's answer, on one of their screens, to the change that is
+    waiting: passed to the pipeline with the number of what it answers. A
+    yes is a true and a no a false; anything else is not passed on."""
+    pid, yes = body.get("id"), body.get("yes")
+    if not isinstance(pid, str) or not pid or not isinstance(yes, bool):
+        return 400, {"ok": False, "message": "an answer is the number of what is waiting, and yes: true or false"}
+    url = VOICE_PTT_URL.replace("/ptt", "/approve", 1) if VOICE_PTT_URL else ""
+    return _relay(url, {"id": pid[:32], "yes": yes, "via": "phone" if body.get("via") == "phone" else "deck"},
+                  "approved" if yes else "refused", timeout=5)
+
+
+def relay_switch(body: dict) -> tuple[int, dict]:
+    """The owner switching something of Douglas's on or off: passed to
+    douglas-switch, the one program that writes that down. This one has the
+    key to its door (a group of this unit's); the pipeline does not."""
+    tool, on = body.get("tool"), body.get("on")
+    if not isinstance(tool, str) or not isinstance(on, bool):
+        return 400, {"ok": False, "message": "a switch is a tool, and on: true or false"}
+    if not SWITCH_SOCKET:
+        return 200, {"ok": False, "message": "the switches are not installed on Douglas"}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect(SWITCH_SOCKET)
+            s.sendall(json.dumps({"op": "set", "tool": tool[:24], "on": on}).encode() + b"\n")
+            with s.makefile("rb") as f:
+                out = json.loads(f.readline(8192) or b"null")
+        if not isinstance(out, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        return 200, {"ok": False, "message": "the switches did not answer"}
+    print(f"douglas-agent: {tool[:24]} switched {'on' if on else 'off'} from a screen"
+          + ("" if out.get("ok") else ", refused"), flush=True)
+    return 200, {"ok": bool(out.get("ok")), "message": str(out.get("text") or ("on" if on else "off"))[:200],
+                 "off": [str(x)[:24] for x in out.get("off") or []][:40] if isinstance(out.get("off"), list) else None}
 
 
 def transcript() -> list[dict]:
@@ -1005,7 +1059,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        if path not in ("/ptt", "/say", "/hear", "/memory"):
+        if path not in ("/ptt", "/say", "/hear", "/memory", "/approval", "/switch"):
             return self._send(404, {"error": "not found"})
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
@@ -1020,7 +1074,8 @@ class Handler(BaseHTTPRequestHandler):
             body = body if isinstance(body, dict) else {}
             code, out = memory(body.get("op"), body, MEMORY_CHANGES)
             return self._send(code, out)
-        relay = {"/say": relay_say, "/hear": relay_hear}.get(path, relay_ptt)
+        relay = {"/say": relay_say, "/hear": relay_hear, "/approval": relay_approval,
+                 "/switch": relay_switch}.get(path, relay_ptt)
         code, out = relay(body if isinstance(body, dict) else {})
         return self._send(code, out)
 

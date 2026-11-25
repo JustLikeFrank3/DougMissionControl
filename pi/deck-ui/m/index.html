@@ -86,6 +86,9 @@
       </div>
       <div class="sub" id="dgl-model">—</div>
       <div class="meters" id="dgl-meters"></div>
+      <!-- A change of his that is waiting for a yes: shown only while one
+           is, with the words that were read back. -->
+      <div id="dgl-apv" hidden></div>
       <div class="log" id="dgl-log"></div>
       <!-- Typed turns join the same conversation as spoken ones; the reply
            arrives in the log above, not in this box. The camera button is
@@ -140,6 +143,19 @@
         <div id="mem"></div>
         <h2 class="sub2">WHAT HE DID</h2>
         <div class="events" id="did"></div>
+      </div>
+    </section>
+
+    <!-- What he may use, and the switch for each. A touch takes one away
+         and giving it back takes a hold; he finds out at his next turn and
+         cannot reach the switches himself. Closed until tapped. -->
+    <section class="card memc" id="sw-card">
+      <button type="button" class="head tap" id="sw-head" aria-expanded="false">
+        <h2>WHAT HE MAY USE</h2>
+        <span class="pill" id="sw-count">—</span>
+      </button>
+      <div class="mem-body" id="sw-body" hidden>
+        <div id="sw"></div>
       </div>
     </section>
 

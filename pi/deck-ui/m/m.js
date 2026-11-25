@@ -16,6 +16,7 @@ import { fmtAgo, fmtClock, fmtDur, fmtTime } from '../js/format.js';
 import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
 import { noticesView } from '../js/notices.js';
+import { approvalView, switchesView } from '../js/owner.js';
 
 var $ = function (id) { return document.getElementById(id); };
 var KEY = 'dmc-deck-token';
@@ -463,6 +464,13 @@ function paintDouglas(d) {
   paintAsk();
   d = d || {};
   var agent = !!d.agent;
+  // What is waiting for a yes, and what he may use: both from his own state.
+  var tools = agent && d.voice ? d.voice.tools : null;
+  approval.paint(agent && d.voice ? d.voice.pending : null);
+  switches.paint(tools);
+  var off = tools ? Object.keys(tools).filter(function (k) { return tools[k] === 'off'; }).length : -1;
+  $('sw-count').textContent = off < 0 ? '—' : off ? off + ' OFF' : 'ALL ON';
+  $('sw-count').className = 'pill' + (off > 0 ? ' busy' : off === 0 ? ' ok' : '');
 
   var host = d.host || {}, gpu = d.gpu || {}, llm = d.llm || {};
   var gUsed = (gpu.vram_used_bytes || 0) + (gpu.gtt_used_bytes || 0);
@@ -1093,6 +1101,14 @@ function tickMem() {
 // the one thing here that is news.
 var notices = noticesView($('ntc'), { get: getJSON, post: post, count: $('ntc-count') });
 function tickNotices() { notices.refresh(); }
+
+var approval = approvalView($('dgl-apv'), { post: post, via: 'phone' });
+var switches = switchesView($('sw'), { post: post });
+$('sw-head').addEventListener('click', function () {
+  var open = $('sw-body').hidden;
+  $('sw-body').hidden = !open;
+  $('sw-head').setAttribute('aria-expanded', open ? 'true' : 'false');
+});
 
 function paintMemOpen() {
   $('mem-body').hidden = !memOpen;

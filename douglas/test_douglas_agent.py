@@ -138,6 +138,102 @@ check("ptt without a pipeline says so",
       (200, {"ok": False, "message": "no voice pipeline installed on Douglas yet"}))
 check("ptt rejects unknown action", agent.relay_ptt({"action": "x"})[0], 400)
 
+print("-- what is waiting for a yes, and the owner's switches --")
+WAITING = {"id": "a1b2c3d4", "kind": "push", "text": "This would push 2 commits to kettle.", "via": "webui",
+           "asked": 1_800_000_000.0, "until": 1_800_000_180.0}
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "pending": dict(WAITING, extra="x" * 5000),
+               "tools": {"search": "on", "repo": "off", "draw": "absent", "shell": "enabled", "memory": 1}}, f)
+got = agent.voice_state()
+check("the change that is waiting is passed to the owner's screens in the shape it is known to have, and each tool "
+      "as on, off or not set up and nothing else", (got["pending"], got["tools"]),
+      (WAITING, {"search": "on", "repo": "off", "draw": "absent"}))
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "pending": {"text": "No number."}, "tools": ["search"]}, f)
+check("what is not in that shape is not passed on at all",
+      (agent.voice_state()["pending"], agent.voice_state()["tools"]), (None, None))
+check("an answer needs the number of what it answers and a true or a false: nothing else is passed to the pipeline",
+      [agent.relay_approval(b)[0] for b in ({}, {"id": "a1b2c3d4"}, {"id": "a1b2c3d4", "yes": "true"},
+                                             {"id": "a1b2c3d4", "yes": 1}, {"id": 7, "yes": True}, {"id": "", "yes": True})],
+      [400] * 6)
+check("and with no pipeline it says so", agent.relay_approval({"id": "a1b2c3d4", "yes": True}),
+      (200, {"ok": False, "message": "no voice pipeline installed on Douglas yet"}))
+
+
+class Pipe(BaseHTTPRequestHandler):
+    seen = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):  # noqa: N802
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        Pipe.seen.append((self.path.split("?")[0], body))
+        ok = body.get("id") == "a1b2c3d4"
+        out = json.dumps({"ok": ok, "message": "approved" if ok else "That is no longer waiting for an answer."}).encode()
+        self.send_response(200 if ok else 409)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+
+pipe = HTTPServer(("127.0.0.1", 0), Pipe)
+threading.Thread(target=pipe.serve_forever, daemon=True).start()
+agent.VOICE_PTT_URL = f"http://127.0.0.1:{pipe.server_address[1]}/ptt?token=p"
+check("a yes given on the phone goes to the pipeline with its number, as a yes from the phone; a no as a no; and "
+      "what the pipeline says of a number it does not know comes back as it said it",
+      (agent.relay_approval({"id": "a1b2c3d4", "yes": True, "via": "phone", "extra": "x"}),
+       agent.relay_approval({"id": "a1b2c3d4", "yes": False, "via": "somewhere"}),
+       agent.relay_approval({"id": "zzzz", "yes": True}), Pipe.seen),
+      ((200, {"ok": True, "message": "approved"}), (200, {"ok": True, "message": "refused"}),
+       (200, {"ok": False, "message": "That is no longer waiting for an answer."}),
+       [("/approve", {"id": "a1b2c3d4", "yes": True, "via": "phone"}), ("/approve", {"id": "a1b2c3d4", "yes": False, "via": "deck"}),
+        ("/approve", {"id": "zzzz", "yes": True, "via": "deck"})]))
+pipe.shutdown()
+agent.VOICE_PTT_URL = ""
+check("a switch is a tool and a true or a false; without the switches installed it says so",
+      ([agent.relay_switch(b)[0] for b in ({}, {"tool": "search"}, {"tool": "search", "on": "off"}, {"tool": 3, "on": True})],
+       agent.relay_switch({"tool": "search", "on": False})),
+      ([400] * 4, (200, {"ok": False, "message": "the switches are not installed on Douglas"})))
+import socket as _socket      # noqa: E402
+sdir = tempfile.mkdtemp(dir=os.environ.get("XDG_RUNTIME_DIR") or None)
+spath, SWITCHED = os.path.join(sdir, "switch.sock"), []
+sdoor = _socket.socket(_socket.AF_UNIX)
+sdoor.bind(spath)
+sdoor.listen(4)
+
+
+def switches():
+    while True:
+        c, _ = sdoor.accept()
+        with c, c.makefile("rb") as f:
+            q = json.loads(f.readline())
+            SWITCHED.append(q)
+            known = q.get("tool") in ("search", "repo")
+            c.sendall(json.dumps({"ok": True, "off": ["search"]} if known else
+                                 {"ok": False, "text": "That is not something of his that can be switched."}).encode() + b"\n")
+
+
+threading.Thread(target=switches, daemon=True).start()
+agent.SWITCH_SOCKET = spath
+import contextlib as _ctx, io as _io      # noqa: E401, E402
+said_by_agent = _io.StringIO()
+with _ctx.redirect_stdout(said_by_agent):
+    got = (agent.relay_switch({"tool": "search", "on": False, "op": "write", "text": "x"}),
+           agent.relay_switch({"tool": "shell", "on": True}))
+check("it is passed to the one program that writes it down, as one question and nothing added to it; what that says "
+      "comes back, a refusal as a refusal",
+      (got, SWITCHED),
+      (((200, {"ok": True, "message": "off", "off": ["search"]}),
+        (200, {"ok": False, "message": "That is not something of his that can be switched.", "off": None})),
+       [{"op": "set", "tool": "search", "on": False}, {"op": "set", "tool": "shell", "on": True}]))
+check("and the journal has which and which way", said_by_agent.getvalue().splitlines(),
+      ["douglas-agent: search switched off from a screen", "douglas-agent: shell switched on from a screen, refused"])
+agent.SWITCH_SOCKET = os.path.join(sdir, "nobody.sock")
+check("the switches not answering is said", agent.relay_switch({"tool": "search", "on": True}),
+      (200, {"ok": False, "message": "the switches did not answer"}))
+agent.SWITCH_SOCKET = ""
+
 print("-- the machine's own account of itself: disks, services, model files, what is installed --")
 import socket      # noqa: E402
 import subprocess  # noqa: E402

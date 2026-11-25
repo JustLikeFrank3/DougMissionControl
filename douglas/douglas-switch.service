@@ -1,0 +1,42 @@
+[Unit]
+Description=douglas-switch - the owner's off-switches for what Douglas may use
+Requires=douglas-switch.socket
+After=douglas-switch.socket
+
+[Service]
+User=douglas-switch
+Group=douglas-switch
+ExecStart=/usr/bin/python3 -I /opt/douglas/douglas-switch.py serve
+# One small file, which the voice pipeline reads and this alone writes.
+StateDirectory=douglas-switch
+StateDirectoryMode=0755
+UMask=0022
+# It takes "this tool, on or off" at its door and writes that down. It has
+# no network, reads nothing else and runs nothing.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+InaccessiblePaths=/etc/douglas -/var/lib/douglas -/var/lib/douglas-memory -/var/lib/douglas-work -/var/lib/douglas-spool -/var/lib/open-webui -/srv/models
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+MemoryMax=64M
+Restart=on-failure
+RestartSec=3

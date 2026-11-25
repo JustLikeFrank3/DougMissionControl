@@ -24,6 +24,7 @@ const nav = await import(pathToFileURL(path.join(UI, 'nav.js')));
 const mem = await import(pathToFileURL(path.join(UI, 'memory.js')));
 const fleet = await import(pathToFileURL(path.join(UI, 'fleet.js')));
 const ntc = await import(pathToFileURL(path.join(UI, 'notices.js')));
+const own = await import(pathToFileURL(path.join(UI, 'owner.js')));
 
 let passed = 0;
 const failures = [];
@@ -503,6 +504,32 @@ test('a machine line carries only what was read, and says when it is old', () =>
   assert.equal(fleet.machineLine({ up: true, reports: { temp_c: null, load: undefined } }, now).text, '');
   assert.equal(fleet.diskPct({ total_bytes: 0, used_bytes: 5 }), null);
   assert.equal(fleet.diskPct(null), null);
+});
+
+/* ── an answer, and the switches ─────────────────────────────────────────── */
+
+test('how long a change still waits, and that one whose time is up is not said to wait', () => {
+  assert.equal(own.left(1000 + 130, 1000), '2 m 10 s left');
+  assert.equal(own.left(1000 + 59.9, 1000), '59 s left');
+  assert.equal(own.left(1000, 1000), 'no longer waiting');
+  assert.equal(own.left(900, 1000), 'no longer waiting');
+  assert.equal(own.left(undefined, 1000), 'no longer waiting', 'no time known is not time left');
+});
+
+test('what is waiting says what it is and where it was asked for', () => {
+  assert.equal(own.waitingHead({ kind: 'push', via: 'webui' }), 'A PUSH · asked on the chat page');
+  assert.equal(own.waitingHead({ kind: 'forget', via: 'phone' }), 'FORGETTING · asked on the phone');
+  assert.equal(own.waitingHead({ kind: 'something new', via: 'elsewhere' }), 'A CHANGE · asked on another line');
+  assert.equal(own.waitingHead(null), 'A CHANGE · asked on another line');
+});
+
+test('every tool he has is a row with its state, and one this page has no words for is not hidden', () => {
+  const rows = own.switchRows({ search: 'off', memory: 'on', draw: 'absent', teleport: 'on' });
+  assert.deepEqual(rows.map(r => [r.name, r.state]),
+                   [['memory', 'on'], ['search', 'off'], ['draw', 'absent'], ['teleport', 'on']]);
+  assert.equal(rows[3].label, 'teleport');
+  assert.deepEqual(own.switchRows(null), [], 'not read is no rows, which the view says in words');
+  assert.equal(new Set(own.TOOLS.map(t => t[0])).size, own.TOOLS.length, 'no tool is listed twice');
 });
 
 /* ── what the watch raised ──────────────────────────────────────────────── */

@@ -21,11 +21,13 @@ import { fmtAgo } from './format.js';
 import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
 import { noticesView, navNotices } from './notices.js';
+import { approvalView, switchesView } from './owner.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
 var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
+var approval = null, switches = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -92,6 +94,7 @@ function showTab(name) {
   $('dgl-log').hidden = $('dgl-askbar').hidden = name !== 'convo';
   $('dgl-mem').hidden = name !== 'mem';
   $('dgl-ntc').hidden = name !== 'ntc';
+  $('dgl-sw').hidden = name !== 'sw';
   $('dgl-did').hidden = name !== 'did';
   if (name === 'convo') { var log = $('dgl-log'); log.scrollTop = log.scrollHeight; }
   tickMemory();
@@ -122,6 +125,15 @@ function paint(d) {
   d = d || {};
   var agent = !!d.agent;
   var voice = d.voice || {};
+  // A change of his that waits for a yes shows whichever tab is up; what he
+  // may use has a tab of its own.
+  if (approval) approval.paint(agent ? voice.pending : null);
+  if (switches) {
+    var tools = agent ? voice.tools : null;
+    switches.paint(tools);
+    var off = tools ? Object.keys(tools).filter(function (k) { return tools[k] === 'off'; }).length : 0;
+    $('dgl-sw-count').textContent = off ? off + ' OFF' : '';
+  }
   var vstate = agent && VOICE_SUB[voice.state] ? voice.state : 'absent';
 
   var ptt = $('dgl-ptt');
@@ -293,6 +305,8 @@ export function wireDouglas() {
     type: function (title, text, save) { openKeyboard(title, save, text); },
   });
   did = didView($('dgl-did'), { get: getJSON, rows: 40 });
+  approval = approvalView($('dgl-apv'), { post: post, via: 'deck' });
+  switches = switchesView($('dgl-sw'), { post: post });
   notices = noticesView($('dgl-ntc'), { get: getJSON, post: post, count: $('dgl-ntc-count'),
                                         countClass: 'ntc-n', over: 8 });
   [].forEach.call($('dgl-tabs').children, function (b) {

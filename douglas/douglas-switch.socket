@@ -1,0 +1,17 @@
+[Unit]
+Description=douglas-switch - the door the owner's screens switch Douglas's tools on and off at
+
+[Socket]
+ListenStream=/run/douglas-switch/switch.sock
+SocketUser=douglas-switch
+# A group of its own, which only douglas-agent's unit is given: the owner's
+# screens reach it through the agent. The voice pipeline cannot open it.
+SocketGroup=douglas-switch-owner
+SocketMode=0660
+DirectoryMode=0755
+Service=douglas-switch.service
+Accept=no
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

@@ -29,6 +29,12 @@
 #     douglas-memory      what he remembers from one conversation to the next,
 #                         with a door for him and one for Mission Control
 #                         (./memory-setup.sh)
+#     douglas-switch      the owner's off-switches for his tools, set from
+#                         Mission Control (./switch-setup.sh)
+#   and Douglas is added to Open WebUI as a second model beside the bare
+#   one (./webui-setup.sh). Not installed here, since it answers on the
+#   network to whoever holds its token: douglas-mcp, his memory and his view
+#   of the machines for the owner's other programs to read (./mcp-setup.sh).
 #
 # Idempotent: every config file under /etc/douglas is written only if it is
 # missing, so re-running upgrades code and units and keeps your settings.
@@ -525,6 +531,12 @@ if "$here/memory-setup.sh"; then
 else
     warn "the memory was not set up - he remembers nothing past a conversation (./memory-setup.sh says why)"
 fi
+
+# ── the owner's switches ─────────────────────────────────────────────────
+# What he may use, switched on and off from Mission Control. After the
+# agent: it is the agent that is given the key to their door.
+step "douglas-switch"
+"$here/switch-setup.sh" || warn "the switches were not set up - his tools cannot be switched off from a screen (./switch-setup.sh says why)"
 
 # ── Douglas as a model in Open WebUI ─────────────────────────────────────
 # Beside the bare model. This makes the token for his line for other

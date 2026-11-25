@@ -7,11 +7,12 @@ do. The rule throughout: **broad visibility, narrow authority.** He gets to
 see and to remember; he does not get to act on anything he could not act on
 before.
 
-Phases 1, 2, 3 and 5 are built and running (the README's "A memory", "What
-he can see of the machines, and of himself", "What is noticed without anyone
-asking" and "The same Douglas wherever he is asked" say how they work and
-what was measured). Phases 4 and 6 are designed here; the owner has said in
-which order, and that the house waits to be asked for by name.
+Phases 1 to 5 are built and running (the README's "A memory", "What he can
+see of the machines, and of himself", "What is noticed without anyone
+asking", "The same Douglas wherever he is asked" and "A yes, and an
+off-switch, on the owner's screens" say how they work and what was
+measured). Phase 6, the house, is designed here and waits to be asked for by
+name.
 
 ## 1. What was found
 
@@ -271,37 +272,49 @@ after it was stopped. Flickering, quiet hours and the preferences hold in
 the tests, with stand-ins; 81 of 81 safeguards broken on purpose were
 caught. No plug was pulled, and the week has not passed.
 
-### Phase 4: tasks, approvals, capability switches (designed)
+### Phase 4: approvals and capability switches (built), tasks (partly)
 
-Three things that today live inside a conversation and belong on a screen.
-
-*Approvals.* What is read back and answered with a yes (a push, a change
-to the owner's records, forgetting) becomes a row as well: what it would
-do, in the words that were read back; who asked, from where; and until
-when it can be answered. Mission Control shows the open ones, and a hold on
-APPROVE or a tap on REFUSE answers one, from the owner's door. The yes in
-the conversation still works, and is the same row answered another way.
+*Approvals.* What is read back and waits for a yes (a push, a change to the
+owner's records, forgetting, a job made of somebody else's words) is shown
+on the owner's screens while it waits: what it would do, in the words that
+were read back; where it was asked for; and until when. A hold on APPROVE
+or a touch on REFUSE answers it, over the owner's path, by the number of
+exactly what was read back. The yes in the conversation still works, on the
+line it was asked on, and is the same thing answered another way; from the
+chat page a typed yes does not count, and the screen is where it is given.
 The rule that does not change: the program acts on a yes to exactly the
 text that was read back, and nothing the model says can stand in for one.
 
-*Tasks.* The jobs he has under way in the workshop and the tasks in his
-memory, in one list: what, since when, where it stands, what it is waiting
-for.
+*Capability switches.* One file, a line a tool, on or off. The pipeline
+reads it at the start of every turn and offers only what is on; it cannot
+write it, so no conversation can turn anything on. Mission Control changes
+it through a helper that does that one thing, `douglas-switch`: a
+socket-activated unit with a user of its own that takes "tool, on or off"
+from the agent and nothing else, with a hold to turn something on and a
+touch to turn it off.
 
-*Capability switches.* One file, `/etc/douglas/capabilities`, a line a
-tool: on or off. The pipeline reads it at the start of every turn and
-offers only what is on; it is root's to write and the pipeline's unit
-cannot write it, so no conversation can turn anything on. Mission Control
-changes it through a helper that does that one thing (a socket-activated
-unit that takes "tool, on or off" from the owner's door and nothing else),
-with a hold to turn something on and a tap to turn it off. Until then a
-capability is revoked by taking its line out of `voice.env` and restarting
-the pipeline, which the README says for each.
+What differs from the design:
+
+- The file is `/var/lib/douglas-switch/capabilities`, the helper's own, and
+  not `/etc/douglas/capabilities` written by root: the helper needs no
+  root, only a file nobody else can write.
+- An approval is not a row kept in a database: it lives for three minutes,
+  in the pipeline, and what became of it is in the record of what he did.
+- *Tasks* are not one list. The tasks in his memory are in the MEMORY view,
+  with a count of those still to do; what the workshop is doing is still
+  told in the conversation only. A list of jobs needs a way for the screens
+  to read the workshop that cannot also start a job, which is not built.
 
 *Accepted when:* an approval can be given or refused from the panel and is
 void after its time; a tool switched off is not offered within one turn and
 cannot be switched on from a conversation; the record of what he did shows
-who approved what, and from where.
+who approved what, and from where. *Seen:* a change asked for on the chat
+page was approved through Mission Control's route by its number and done,
+a yes to another number and a second yes were refused, and the record has
+the yes and its screen; a tool switched off from Mission Control was gone
+at his next turn, he could not switch it on when told to, and had it back
+the turn after it was switched on. Void after its time, and refusing, hold
+in the tests; the hold on the button itself was not pressed by a finger.
 
 ### Phase 5: one Douglas on every interface (built)
 
@@ -323,8 +336,8 @@ What differs from the design, and why:
 
 - No yes is taken from the chat page's line. The design had every line
   alike. But a chat page is a large program that faces the network, and
-  what needs a yes is what reaches outside his own notes: he says so, and
-  where the yes can be given. Phase 4 makes that Mission Control.
+  what needs a yes is what reaches outside his own notes: he reads it back
+  there, and the yes is given in Mission Control (phase 4).
 - The MCP server has a door of its own on the memory, not Douglas's. His
   door also notes, forgets and marks things as told; a program that reads
   for somebody else should not be able to, and should not count as him
@@ -392,6 +405,8 @@ Decided by the owner on 2026-11-24, and done or kept accordingly:
 - Phase 5 is built and running (2026-11-24): Open WebUI lists Douglas beside
   the bare model, and `douglas-mcp` is up with a token nobody has been
   given.
+- Phase 4 is built and running (2026-11-24), but for a list of his jobs:
+  approvals and the switches for his tools are in Mission Control.
 
 Still the owner's to say:
 
@@ -427,7 +442,9 @@ Mission Control stop Douglas mentioning notices without touching the watch.
 his line's token out of `voice.env` (`back` also returns Open WebUI to the
 user it ran as; its database from before is kept beside it), and
 `douglas/mcp-setup.sh off` stops the MCP server and takes its door on the
-memory and its token away.
+memory and its token away. `douglas/switch-setup.sh off` takes the switches
+away, and with them whatever was switched off; approvals on a screen need
+nothing taken away, since a yes said to him still works as it did.
 The programs
 and settings from before each phase are kept in the home directory of the
 account that installed them, on Douglas and on the Pi.

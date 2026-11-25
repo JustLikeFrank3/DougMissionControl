@@ -4671,9 +4671,22 @@ check("and only on this machine, whatever token comes with it",
       [voice.Handler._api_allowed(Caller(a, "Bearer chat-page-token")) for a in ("127.0.0.1", "::1", "192.0.2.7", "100.64.0.9")]
       + [voice.Handler._api_allowed(Caller("127.0.0.1", h)) for h in ("chat-page-token", "bearer chat-page-token", "")],
       [True, True, False, False, False, False, False])
-check("its token does not open the pipeline's own routes",
-      (post(b'{"action":"cancel"}', "?token=chat-page-token"), post(b'{"action":"cancel"}', "?token=the-pipelines-own")),
-      (403, 200))
+def with_header(path, body):          # the chat page's token, where the chat page's line takes it
+    req = urllib.request.Request(api_base.replace("/v1", path), data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer chat-page-token"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+check("its token does not open the pipeline's own routes, in the address or in the header: not the button, not a "
+      "typed turn, not an answer to what is waiting",
+      (post(b'{"action":"cancel"}', "?token=chat-page-token"), post(b'{"action":"cancel"}', "?token=the-pipelines-own"),
+       [with_header(p, b) for p, b in (("/ptt", {"action": "cancel"}), ("/say", {"text": "Hello"}),
+                                       ("/approve", {"id": "a1b2c3d4", "yes": True}))]),
+      (403, 200, [403, 403, 403]))
 MEM["calls"].clear()
 MEM["route"] = None
 MEM["answers"]["recall"] = {"ok": True, "memories": []}
@@ -4787,15 +4800,103 @@ MEM["answers"]["forget"] = {"ok": True, "forgotten": [21, 22]}
 MEM["route"] = {"do": "forget", "words": "the dentist"}
 mp.forget()
 ok, got = mp.ask("Forget what I said about the dentist.")
-check("told to forget something from the chat page, nothing is read back or left waiting for a yes: he says a yes "
-      "cannot be given there, and where it can",
-      (ok, got, voice.CONVO["pending"], [c[0] for c in MEM["calls"] if c[0] == "forget"]),
-      (True, voice.NO_YES_SAID["forget"], None, []))
+held = voice.CONVO["pending"] or {}
+check("told to forget something from the chat page, it is read back as anywhere, with where the yes can be given: "
+      "not there",
+      (ok, got, held.get("via"), held.get("kind"), len(held.get("id") or ""), [c[0] for c in MEM["calls"] if c[0] == "forget"]),
+      (True, FORGET + "\n" + voice.NO_YES_SAID, "webui", "forget", 8, []))
+shown = voice.pending_shown()
+check("what is waiting is shown to the owner's screens: its number, what it is, the words that were read back, "
+      "where it was asked for and until when",
+      (shown["id"] == held["id"], shown["kind"], shown["text"], shown["via"], round(shown["until"] - shown["asked"])),
+      (True, "forget", FORGET, "webui", round(voice.JOBCONTEXT_CONFIRM_S)))
 MEM["route"] = None
-SHOP["script"] = lambda msgs: {"content": "Yes to what?"}
-check("so a yes typed there afterwards is a word like any other, and forgets nothing",
-      (mp.ask("Yes.")[1], [c[0] for c in MEM["calls"] if c[0] == "forget"]), ("Yes to what?", []))
+check("a yes typed on the chat page does not count, however it is put: nothing is forgotten and it goes on waiting",
+      ([mp.ask(y)[1] for y in ("Yes.", "yes please, go ahead")], [c[0] for c in MEM["calls"] if c[0] == "forget"],
+       (voice.CONVO["pending"] or {}).get("id") == held["id"]), ([voice.NO_YES_AGAIN] * 2, [], True))
+before = len(mem_lines())
+check("a yes to something else, or to nothing, does nothing",
+      ([mp.approve(i, True, "phone") for i in ("", "00000000", held["id"][:4], None)],
+       [c[0] for c in MEM["calls"] if c[0] == "forget"], (voice.CONVO["pending"] or {}).get("id") == held["id"]),
+      ([(False, "That is no longer waiting for an answer.")] * 4, [], True))
+mp.st.update(state="thinking")
+check("nor one given while he is in the middle of a turn: it is still waiting afterwards",
+      (mp.approve(held["id"], True, "phone"), voice.CONVO["pending"] is not None),
+      ((False, "Douglas is busy (thinking): try again in a moment"), True))
+mp.st.update(state="idle")
+MEM["calls"].clear()
+check("approved on one of the owner's screens, by its number, it is done: forgotten, by the program, with what "
+      "became of it said on the screens and the yes on the record as given in Mission Control",
+      (mp.approve(held["id"], True, "phone"), until(lambda: mp.state == "idle" and len(mem_lines()) >= before + 2),
+       [(x["who"], x["text"], x["via"]) for x in mem_lines()[before:]],
+       [c for c in MEM["calls"] if c[0] == "forget"],
+       [c[1].get("action") for c in MEM["calls"] if c[0] == "log" and c[1].get("kind") == "change"],
+       voice.CONVO["pending"], voice.pending_shown()),
+      ((True, "approved"), True,
+       [("user", "[Approved in Mission Control]", "phone"),
+        ("douglas", "Forgotten. It can still be brought back in Mission Control until it is purged there.", "phone")],
+       [("forget", {"ids": [21, 22]})], ["forget on a yes (phone)"], None, None))
+check("and a second yes to the same thing finds nothing waiting",
+      (mp.approve(held["id"], True, "phone"), [c[0] for c in MEM["calls"]].count("forget")),
+      ((False, "That is no longer waiting for an answer."), 1))
 MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+mp.ask("Forget what I said about the dentist.")
+MEM["route"], held = None, voice.CONVO["pending"]
+MEM["calls"].clear()
+before = len(mem_lines())
+check("refused on a screen, it is dropped and said to be",
+      (mp.approve(held["id"], False, "deck"), until(lambda: mp.state == "idle" and len(mem_lines()) >= before + 2),
+       [(x["who"], x["text"], x["via"]) for x in mem_lines()[before:]], [c[0] for c in MEM["calls"] if c[0] == "forget"],
+       voice.CONVO["pending"]),
+      ((True, "refused"), True, [("user", "[Refused in Mission Control]", "deck"),
+                                 ("douglas", "Kept. Nothing was forgotten.", "deck")], [], None))
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+mp.ask("Forget what I said about the dentist.")
+MEM["route"] = None
+check("a no typed on the chat page drops it too: a no is taken from anywhere",
+      (mp.ask("No.")[1], voice.CONVO["pending"], [c[0] for c in MEM["calls"] if c[0] == "forget"]),
+      ("Kept. Nothing was forgotten.", None, []))
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+mp.ask("Forget what I said about the dentist.")
+MEM["route"], held = None, voice.CONVO["pending"]
+held["ts"] -= voice.JOBCONTEXT_CONFIRM_S + 1
+check("left too long, it is void: it is not shown as waiting, a yes on a screen is told so, and nothing is done",
+      (voice.pending_shown(), mp.approve(held["id"], True, "phone"), voice.CONVO["pending"],
+       [c[0] for c in MEM["calls"] if c[0] == "forget"]),
+      (None, (False, "That waited too long for a yes: nothing was done."), None, []))
+
+
+def approve(body, q="?token=the-pipelines-own"):
+    req = urllib.request.Request(api_base.replace("/v1", "/approve") + q, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read())["message"]
+    except urllib.error.HTTPError as e:
+        return e.code, (json.loads(e.read() or b"{}").get("message"))
+
+
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+mp.ask("Forget what I said about the dentist.")
+MEM["route"], held = None, voice.CONVO["pending"]
+MEM["calls"].clear()
+check("over the wire it takes the pipeline's own token, a true or a false and nothing that looks like one, and the "
+      "number of what is waiting; the chat page's token does not open it",
+      (approve({"id": held["id"], "yes": True}, "")[0], approve({"id": held["id"], "yes": True}, "?token=chat-page-token")[0],
+       approve({"id": held["id"], "yes": "true"}), approve({"id": held["id"], "yes": 1}), approve({"id": held["id"]}),
+       approve({"id": "nope", "yes": True}), [c[0] for c in MEM["calls"] if c[0] == "forget"],
+       approve({"id": held["id"], "yes": True, "via": "phone"}),
+       until(lambda: ("forget", {"ids": [21, 22]}) in MEM["calls"] and mp.state == "idle")),
+      (403, 403, (400, "yes must be true or false"), (400, "yes must be true or false"), (400, "yes must be true or false"),
+       (409, "That is no longer waiting for an answer."), [], (200, "approved"), True))
+MEM["route"] = {"do": "forget", "words": "the dentist"}
+mp.forget()
+MEM["calls"].clear()
+SHOP["script"] = lambda msgs: {"content": "Yes to what?"}
 mem_says("Forget what I said about the dentist.")            # on the phone: read back, and waiting
 MEM["route"] = None
 waiting = voice.CONVO["pending"] is not None
@@ -4803,15 +4904,75 @@ ok, got = mp.ask("Yes.")
 check("and a yes from the chat page does not answer a change that was read back somewhere else",
       (waiting, [c[0] for c in MEM["calls"] if c[0] == "forget"], voice.CONVO["pending"], "Nothing was forgotten." in got),
       (True, [], None, True))
-check("every line a yes cannot come from is a line, and has words for each thing that needs one",
-      ([v in voice.VIAS for v in voice.NO_YES], sorted(voice.NO_YES_SAID) == sorted(["", "push", "job", "forget"])),
-      ([True], True))
+check("every line a yes cannot come from is a line he can be reached on", [v in voice.VIAS for v in voice.NO_YES], [True])
 check("the journal has that a message from the chat page was answered and how long it took, not a word of it",
       ("a message from webui answered in " in sys.stderr.getvalue(), "two plus two" in sys.stderr.getvalue(),
-       "forget not put forward: no yes can be given from webui" in sys.stderr.getvalue()), (True, False, True))
+       "memory forget dropped: refused in Mission Control" in sys.stderr.getvalue()), (True, False, True))
 voice.API_TOKEN, voice.PTT_TOKEN, voice.PIPE = "", "", was_pipe
 MEM["answers"]["matching"] = {"ok": True, "memories": []}
 MEM["route"] = None
+SHOP["script"] = lambda msgs: {"content": "Fine."}
+
+# -- the owner's switches --
+print("-- what the owner has switched off in Mission Control --")
+sw = os.path.join(ddir, "capabilities")
+was_file, voice.SWITCHES_FILE = voice.SWITCHES_FILE, sw
+voice.SWITCHED.update(stamp="never", off=frozenset(), offered=frozenset())
+names = lambda: [t["function"]["name"] for t in voice.TOOL_SPECS]      # noqa: E731
+voice.switches_seen()
+check("with no file there is nothing switched off: what he is offered is what is set up, as before there were switches",
+      (voice.switched_off(), "weather" in names(), "memory" in names(), voice.tools_shown()["weather"],
+       voice.tools_shown()["memory"], set(voice.tools_shown()) == set(voice.TOOL_FACTS)),
+      (frozenset(), True, True, "on", "on", True))
+with open(sw, "w") as f:
+    f.write("weather=off\nmemory = off\n# a note\nwikipedia=on\nDRAW=off\nrm -rf /=off\nnews\n")
+CALLED = []
+kept_weather = voice.TOOLS["weather"]
+voice.TOOLS["weather"] = (lambda **a: (CALLED.append(a), "Sunny.")[1],) + kept_weather[1:]
+check("a line a tool: what is off is off, and a line that is not one is nothing",
+      voice.switched_off(), frozenset({"weather", "memory"}))
+check("until a turn begins he is offered what he was", ("weather" in names(), voice.SWITCHED["offered"]), (True, frozenset()))
+MEM["calls"].clear()
+MEM["answers"]["recall"] = {"ok": True, "memories": [SISTER]}
+SHOP["script"] = lambda msgs: {"content": "I cannot look that up."}
+got = mem_says("What is the weather like where my sister lives?")
+check("from the next turn a switched-off tool is not offered, and with his memory switched off nothing is recalled "
+      "for him either",
+      ("weather" in names(), "memory" in names(), "wikipedia" in names(), [c[0] for c in MEM["calls"] if c[0] == "recall"],
+       voice.MEMORY_NOTE in shop_told() if hasattr(voice, "MEMORY_NOTE") else False),
+      (False, False, True, [], False))
+check("asked for all the same, by him or by the program, it is not run: he is told the owner switched it off",
+      (voice.run_tool("weather", {"place": "York"}, quiet=True), CALLED),
+      (voice.SWITCHED_OFF.format(name="weather"), []))
+said = voice.tools_said()
+check("what he is told he has leaves it out, and says whose it is to switch on again",
+      ("- weather:" in said, "Switched off by the owner in Mission Control, and theirs alone to switch on again: weather, memory."
+       in said or "again: memory, weather." in said, voice.tools_shown()["weather"], voice.tools_shown()["memory"]),
+      (False, True, "off", "off"))
+os.remove(sw)
+os.mkdir(sw)                                  # there, and not to be read
+check("a file that cannot be read switches nothing back on", voice.switched_off(), frozenset({"weather", "memory"}))
+os.rmdir(sw)
+voice.switches_seen()
+check("switched on again by the owner, it is his again from the next turn",
+      (voice.switched_off(), "weather" in names(), voice.run_tool("weather", {"place": "York"}, quiet=True).endswith("Sunny."),
+       len(CALLED)), (frozenset(), True, True, 1))
+check("the file is not his to write: nothing in the pipeline opens it for writing, and no tool of his names it",
+      ([l for l in open(os.path.join(here, "douglas-voice.py"), encoding="utf-8").read().split("\n")
+        if "SWITCHES_FILE" in l and ("\"w\"" in l or "'w'" in l or "os.replace" in l or "os.remove" in l)],
+       [n for n in voice.TOOLS if "switch" in n or "capabil" in n]), ([], []))
+more = voice.StateFile(os.path.join(ddir, "more.json"))
+more.more = lambda: {"pending": voice.pending_shown(), "tools": voice.tools_shown(), "state": "made up"}
+check("the screens are shown the switches and what is waiting with his state, and nothing put there can pass for the "
+      "state itself", (more.snapshot()["tools"]["weather"], more.snapshot()["pending"], more.snapshot()["state"]),
+      ("on", None, "idle"))
+more.more = lambda: 1 / 0
+check("and a slip in working that out does not stop his heartbeat", more.snapshot()["state"], "idle")
+voice.TOOLS["weather"] = kept_weather
+voice.SWITCHES_FILE = was_file
+voice.SWITCHED.update(stamp="never", off=frozenset(), offered=frozenset())
+voice.offer_tools()
+MEM["answers"]["recall"] = {"ok": True, "memories": []}
 SHOP["script"] = lambda msgs: {"content": "Fine."}
 
 # -- what an independent review found in the pipeline, each put right --

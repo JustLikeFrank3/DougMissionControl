@@ -292,21 +292,26 @@ API_VIA = "webui"
 API_WAIT_S = float(E("DOUGLAS_API_WAIT_S", "30"))       # how long a message waits for him to finish another turn
 API_BEAT_S = 10.0                                       # while he thinks, a line that says so, this often
 API_BODY_MAX = 32 * 1024 * 1024                         # a caller sends its whole conversation, pictures and all
-# A yes cannot be given from this line: whatever needs one is said to need
-# one, and is asked for where the owner is known to be (the phone, the
-# panel, his voice). A chat page is a big program with the network on one
-# side, and it is given his answers, not his say-so.
+# A yes cannot be given from this line. Whatever needs one is read back
+# there as anywhere, and then waits to be approved on one of the owner's own
+# screens, in Mission Control: a chat page is a big program with the network
+# on one side, and it is given his answers, not his say-so. A no is taken
+# from anywhere.
 NO_YES = (API_VIA,)
-NO_YES_SAID = {
-    "": "That would change something, which needs your yes, and a yes cannot be given from this page. "
-        "Ask me on the phone, on the panel or by voice.",
-    "push": "A push needs your yes, and a yes cannot be given from this page. Ask me on the phone, on the "
-            "panel or by voice.",
-    "job": "That job needs your yes first, and a yes cannot be given from this page. Ask me on the phone, on "
-           "the panel or by voice.",
-    "forget": "Forgetting something needs your yes, and a yes cannot be given from this page. Ask me on the "
-              "phone, on the panel or by voice, or delete it in Mission Control.",
-}
+NO_YES_SAID = ("A yes typed here does not count for this: approve it in Mission Control, on the phone or the "
+               "panel. A no here drops it.")
+NO_YES_AGAIN = ("A yes from this page does not count. It is waiting in Mission Control: approve it there, or "
+                "say no here to drop it.")
+# What the owner has switched off in Mission Control: a file with a line a
+# tool, "search=off". It is written by a small program of its own
+# (douglas-switch), which the owner's screens reach through douglas-agent.
+# This program reads it and cannot write it, so nothing that is said to him
+# or read by him can switch anything on. Looked at when a turn begins. No
+# file: nothing is switched off, as before there were switches.
+SWITCHES_FILE = E("DOUGLAS_SWITCHES", "/var/lib/douglas-switch/capabilities")
+SWITCHED: dict = {"stamp": None, "off": frozenset(), "offered": frozenset()}
+SWITCHED_OFF = ("The owner has switched {name} off in Mission Control, so it was not done. Say that it is "
+                "switched off, and that it is theirs to switch on again there.")
 # What he can see of the machines around him, and of his own. Readings, and
 # nothing else: neither of these can be asked to do anything.
 # FLEET_URL is Mission Control's view of the fleet on the Pi
@@ -389,10 +394,17 @@ class StateFile:
         self.eyes = False               # a vision model is configured
         self.shot = 0                   # the long side of a photo he can use, if more than a screen sends
         self.heard: dict | None = None  # the last time it listened: how long, how loud, how many words
+        self.more = None                # what else the screens are shown, worked out afresh at every write
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict:
-        return {"state": self.state, "satellite": self.satellite, "eyes": self.eyes,
+        more = {}
+        if self.more is not None:
+            try:
+                more = dict(self.more())
+            except Exception as e:      # noqa: BLE001 - the heartbeat outlives whatever that was
+                log(f"what the screens are shown could not be worked out: {type(e).__name__}")
+        return {**more, "state": self.state, "satellite": self.satellite, "eyes": self.eyes,
                 "shot": self.shot,
                 "ts": time.time(), "last_turn": self.last_turn, "heard": self.heard}
 
@@ -3356,7 +3368,7 @@ def recalled(asked: str) -> str:
     """What he remembers that may bear on a message, as a note to put with
     it, or nothing. Each memory once a conversation: said again on every
     turn it would crowd out what is being talked about."""
-    if not MEMORY_SOCKET or len(asked.split()) < 2:
+    if not MEMORY_SOCKET or len(asked.split()) < 2 or "memory" in switched_off():
         return ""
     got = memory("recall", wait=1.0, text=asked[:1500], limit=6, budget=MEMORY_BUDGET)
     new = [m for m in got.get("memories") or [] if isinstance(m, dict)
@@ -3803,7 +3815,8 @@ def memory_loop(pipe) -> None:
     while True:
         time.sleep(MEMORY_EVERY_S)
         try:
-            memory_pass(pipe)
+            if "memory" not in switched_off():   # switched off, nothing is noted from what was said either
+                memory_pass(pipe)
         except Exception as e:      # noqa: BLE001 - this thread outlives a bad line
             log(f"going through finished conversations tripped: {type(e).__name__}: {e}")
 
@@ -4209,9 +4222,15 @@ def vitals_read() -> dict:
 
 def tools_said() -> str:
     """What he has been given to work with, and what each may change."""
-    have = [f"- {name}: {TOOL_FACTS.get(name) or clip(TOOLS[name][1], 160)}" for name in TOOLS] if TOOLS_ON else []
+    gone = switched_off()
+    have = [f"- {name}: {TOOL_FACTS.get(name) or clip(TOOLS[name][1], 160)}" for name in TOOLS
+            if name not in gone] if TOOLS_ON else []
     lines = ["Your tools, as they are switched on now:" if have else
              "You have no tools switched on: you can only talk."] + have
+    theirs = [n for n in TOOL_FACTS if n in gone and n in TOOLS]
+    if theirs and TOOLS_ON:
+        lines.append("Switched off by the owner in Mission Control, and theirs alone to switch on again: "
+                     + ", ".join(theirs) + ".")
     off = [n for n in TOOL_FACTS if n not in TOOLS or not TOOLS_ON]
     if off and have:
         lines.append("Not set up on this machine: " + ", ".join(off) + ".")
@@ -4900,10 +4919,68 @@ def offer_tools() -> None:
                          "come back."}}, ["area", "action"])
     else:
         TOOLS.pop("jobcontext", None)
+    off = switched_off()
+    SWITCHED["offered"] = off
     TOOL_SPECS = [{"type": "function", "function": {
         "name": name, "description": desc,
         "parameters": {"type": "object", "properties": props, "required": need}}}
-        for name, (_fn, desc, props, need) in list(TOOLS.items())]
+        for name, (_fn, desc, props, need) in list(TOOLS.items()) if name not in off]
+
+
+def switched_off() -> frozenset:
+    """The tools the owner has switched off, as the file has them now. A
+    file that is there and cannot be read leaves things as they were: an
+    error must not switch anything back on."""
+    try:
+        st = os.stat(SWITCHES_FILE)
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if stamp != SWITCHED["stamp"]:
+        off = set()
+        try:
+            if stamp is not None:
+                with open(SWITCHES_FILE, encoding="utf-8") as f:
+                    for line in f.read(8192).splitlines():
+                        name, _, state = line.strip().partition("=")
+                        if state.strip() == "off" and re.fullmatch(r"[a-z_]{1,24}", name.strip()):
+                            off.add(name.strip())
+            SWITCHED.update(stamp=stamp, off=frozenset(off))
+        except (OSError, ValueError) as e:
+            log(f"the owner's switches could not be read ({type(e).__name__}): left as they were")
+    return SWITCHED["off"]
+
+
+def switches_seen() -> None:
+    """When a turn begins: if the owner has changed a switch, what he is
+    offered is put together again."""
+    if switched_off() != SWITCHED["offered"]:
+        offer_tools()
+        log("the owner's switches changed: " + (", ".join(sorted(SWITCHED["off"])) + " off"
+                                                 if SWITCHED["off"] else "nothing is switched off"))
+
+
+def tools_shown() -> dict:
+    """For the owner's screens: each thing he could be given, and whether he
+    has it, has had it switched off, or it is not set up on this machine."""
+    off = switched_off()
+    return {name: "off" if name in off else "on" if name in TOOLS and TOOLS_ON else "absent" for name in TOOL_FACTS}
+
+
+def pending_shown() -> dict | None:
+    """For the owner's screens: the change that is waiting for a yes, in the
+    words that were read back, with where it was asked for and until when."""
+    w = CONVO["pending"]
+    if not w or not w.get("id") or time.time() - w["ts"] > JOBCONTEXT_CONFIRM_S:
+        return None
+    return {"id": w["id"], "kind": w.get("kind") or "records", "text": str(w.get("readback") or "")[:1500],
+            "via": w.get("via"), "asked": w["ts"], "until": w["ts"] + JOBCONTEXT_CONFIRM_S}
+
+
+def held_name(waiting: dict) -> str:
+    """What a change that waits for a yes is called in the journal and the record."""
+    return ({"push": "repo push", "job": "repo job", "forget": "memory forget"}.get(waiting.get("kind") or "")
+            or f"jobcontext {waiting['area']}.{waiting['action']}")
 
 
 offer_tools()
@@ -4971,6 +5048,9 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
             args = {}
     if name not in TOOLS or not isinstance(args, dict):
         return f"There is no tool called {name!r}."
+    if name in switched_off():
+        log(f"tool {name} not run: the owner has switched it off")
+        return SWITCHED_OFF.format(name=name)
     fn, _desc, props, _need = TOOLS[name]
     ctx = getattr(TURN, "ctx", None)
     if ctx is not None:
@@ -5384,6 +5464,64 @@ class Pipeline:
                          speak and self.linked(), image), daemon=True).start()
         return True, "thinking"
 
+    def _made(self, waiting: dict, via: str, where: str = "") -> str:
+        """Do what was read back and has now been agreed to, and say
+        truthfully what became of it. What was done on a yes is a change of
+        state: it goes in the record, with where the yes was given and
+        whether it was in fact done."""
+        kind = waiting.get("kind") or ""
+        TURN.made = True
+        made = (push_made(waiting) if kind == "push" else self.job_made(waiting, via)
+                if kind == "job" else forget_made(waiting) if kind == "forget"
+                else jc_commit(waiting))
+        name = held_name(waiting)
+        audit("change", name.split()[0], f"{name.split()[-1]} on a yes{where}", bool(getattr(TURN, "made", True)))
+        return made
+
+    def approve(self, pid: str, yes: bool, via: str = "deck") -> tuple[bool, str]:
+        """The owner's answer, given on one of their own screens, to the
+        change that is waiting: a yes to exactly that one, by its number, or
+        a no. Whatever took its place, or nothing waiting, or too late: it
+        is said, and nothing is done. What became of it goes to the screens
+        as a line of his, like any reply."""
+        via = via if via in ("deck", "phone") else "deck"
+        with self._lock:
+            waiting = CONVO["pending"]
+            if not waiting or not pid or waiting.get("id") != str(pid):
+                return False, "That is no longer waiting for an answer."
+            if time.time() - waiting["ts"] > JOBCONTEXT_CONFIRM_S:
+                CONVO["pending"] = None
+                return False, "That waited too long for a yes: nothing was done."
+            if self.state in ("listening", "thinking"):
+                return False, f"Douglas is busy ({self.state}): try again in a moment"
+            CONVO["pending"] = None
+            self._turn += 1
+            self._played.set()
+            self._hush()
+            turn = self._turn
+            self.st.update(state="thinking")
+        threading.Thread(target=self._approved, args=(waiting, bool(yes), via, turn), daemon=True).start()
+        return True, "approved" if yes else "refused"
+
+    def _approved(self, waiting: dict, yes: bool, via: str, turn: int) -> None:
+        said = "[Approved in Mission Control]" if yes else "[Refused in Mission Control]"
+        try:
+            self.tr.append("user", said, via)
+            if yes:
+                # Which screen, in the few characters a line of the record has room for.
+                reply = readable(self._made(waiting, via, " (phone)" if via == "phone" else " (panel)"))
+            else:
+                log(f"{held_name(waiting)} dropped: refused in Mission Control")
+                reply = (HELD.get(waiting.get("kind") or "") or HELD[""])["no"]
+            self._answered(said, reply, via, turn, always=True)
+        except Exception as e:                   # noqa: BLE001 - never wedge
+            log(f"an answer given in Mission Control could not be acted on: {e}")
+            self.tr.append("douglas", f"(I could not do that: {str(e)[:120]})", via)
+        finally:
+            with self._lock:
+                if self._current(turn) and self.state != "listening":
+                    self.st.update(state="idle")
+
     def ask(self, text: str, via: str = API_VIA, image: bytes = b"",
             wait: float | None = None) -> tuple[bool, str]:
         """A typed turn answered to whoever sent it: his reply itself, once
@@ -5626,6 +5764,7 @@ class Pipeline:
         # A change that was read back is settled by this message, before the
         # model sees a word of it, and by this program alone.
         lead = note = ""
+        switches_seen()                 # what the owner has switched off since the last turn
         waiting, CONVO["pending"] = CONVO["pending"], None
         if waiting:
             answer = "other" if image or via != waiting["via"] else verdict(said, heard)
@@ -5633,20 +5772,15 @@ class Pipeline:
                 answer = "unclear"      # a yes nobody said out loud: the recogniser's own
             kind = waiting.get("kind") or ""
             words = HELD.get(kind) or HELD[""]
-            name = {"push": "repo push", "job": "repo job", "forget": "memory forget"}.get(kind) \
-                or f"jobcontext {waiting['area']}.{waiting['action']}"
+            name = held_name(waiting)
             if time.time() - waiting["ts"] > JOBCONTEXT_CONFIRM_S:
                 log(f"{name} dropped: no answer in time")
                 lead, note = words["late"], words["late_note"]
+            elif answer == "yes" and via in NO_YES:
+                CONVO["pending"] = waiting              # still waiting: for a yes on one of the owner's screens
+                return self._answered(said, NO_YES_AGAIN, via, turn)
             elif answer == "yes":
-                TURN.made = True
-                made = (push_made(waiting) if kind == "push" else self.job_made(waiting, via)
-                        if kind == "job" else forget_made(waiting) if kind == "forget"
-                        else jc_commit(waiting))
-                # What was done on a yes is a change of state: it goes in the
-                # record, with whether it was in fact done.
-                audit("change", name.split()[0], f"{name.split()[-1]} on a yes", bool(getattr(TURN, "made", True)))
-                return self._answered(said, clean(made), via, turn, always=True)
+                return self._answered(said, clean(self._made(waiting, via)), via, turn, always=True)
             elif answer == "no":
                 log(f"{name} dropped: the answer was no")
                 return self._answered(said, words["no"], via, turn)
@@ -5959,17 +6093,15 @@ class Pipeline:
         if not self._current(turn):
             return None         # and a change this turn put forward is never read back
         change = ctx["held"]
-        if change and via in NO_YES:
-            # Not read back and not left waiting: said plainly, with where to ask.
-            log(f"{change.get('kind') or 'a change'} not put forward: no yes can be given from {via}")
-            reply = NO_YES_SAID.get(change.get("kind") or "", NO_YES_SAID[""])
-        elif change:
+        if change:
             # The reply is the read-back, whatever the model went on to say,
             # and only now, with it on its way to the person, can a yes count.
             # It is not tidied for speech the way the model's words are: that
             # drops markup, and nothing that would be saved may go unsaid.
-            reply = no_dashes(change["readback"])
-            CONVO["pending"] = dict(change, ts=time.time(), via=via)
+            # It has a number of its own: a yes given on a screen is a yes to
+            # this, and to nothing that took its place.
+            reply = no_dashes(change["readback"]) + ("\n" + NO_YES_SAID if via in NO_YES else "")
+            CONVO["pending"] = dict(change, ts=time.time(), via=via, id=os.urandom(4).hex())
         elif lead:
             reply = f"{lead} {reply}".strip()
         return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn,
@@ -6372,7 +6504,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/v1/chat/completions":
             return self._api_chat()
-        if u.path not in ("/ptt", "/say", "/hear"):
+        if u.path not in ("/ptt", "/say", "/hear", "/approve"):
             return self._send(404, {"error": "not found"})
         if not self._allowed(u):
             return self._send(403, {"error": "forbidden"})
@@ -6385,6 +6517,13 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             return self._send(400, {"ok": False, "message": "JSON object expected"})
         assert PIPE is not None
+        if u.path == "/approve":
+            # An answer from one of the owner's screens to the change that is
+            # waiting: true or false, and nothing that only looks like one.
+            if not isinstance(body.get("yes"), bool):
+                return self._send(400, {"ok": False, "message": "yes must be true or false"})
+            ok, msg = PIPE.approve(str(body.get("id") or "")[:32], body["yes"], str(body.get("via") or "deck"))
+            return self._send(200 if ok else 409, {"ok": ok, "message": msg, "state": PIPE.state})
         if u.path == "/hear":
             try:
                 audio = base64.b64decode(str(body.get("audio") or ""), validate=True)
@@ -6427,6 +6566,7 @@ def main() -> None:
                     linked=lambda: bool(sat and sat.connected),
                     speaker=Speaker(SPEAKER_URL) if SPEAKER_URL else None)
     sat = Satellite(SAT_HOST, SAT_PORT, PIPE.satellite_event, PIPE.link)
+    state.more = lambda: {"pending": pending_shown(), "tools": tools_shown()}
     state.eyes = bool(EYES_URL)
     state.shot = EYES_SHOT if EYES_URL and PILImage is not None and EYES_SHOT > EYES_EDGE else 0
     state.heartbeat()
