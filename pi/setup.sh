@@ -180,7 +180,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; iface=$(ip -o route get "$WS_LAN" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" dev "$iface" nud permanent'
+ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; iface=$$(ip -o route get "$$WS_LAN" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$$iface" ] && ip neigh replace "$$WS_LAN" lladdr "$$WS_MAC" dev "$$iface" nud permanent'
+ExecStart=/bin/bash -c '. /etc/flightsim/boot.env; [ -n "$${WS_DIRECT_MAC:-}" ] || exit 0; ip=$${LINUX_SSH#*@}; iface=$$(ip -o route get "$$ip" | sed -n "s/.* dev \([^ ]*\).*/\1/p"); [ -n "$$iface" ] && ip neigh replace "$$ip" lladdr "$$WS_DIRECT_MAC" dev "$$iface" nud permanent'
 
 [Install]
 WantedBy=multi-user.target

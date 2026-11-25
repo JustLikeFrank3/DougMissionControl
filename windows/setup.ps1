@@ -2,7 +2,10 @@
 # Run from an elevated PowerShell in the repo root:
 #
 #   powershell -ExecutionPolicy Bypass -File windows\setup.ps1 `
-#       -PiHost user@192.168.1.51 -AdapterName Ethernet
+#       -PiHost user@192.168.1.51 -AdapterName Ethernet,'Ethernet 2'
+#
+# -AdapterName takes several names: every port listed is armed for wake
+# (the LAN port and the one cabled straight to the Pi).
 #
 # Does:
 #   * arms Wake-on-Magic-Packet on the wired NIC (driver + OS wake grant)
@@ -16,11 +19,10 @@
 # repoints it; omitting it keeps whatever the installed copy already has.
 param(
     [string]$PiHost = '',
-    [string]$AdapterName = 'Ethernet'
+    [string[]]$AdapterName = @('Ethernet')
 )
 
 $ErrorActionPreference = 'Stop'
-$adapterName = $AdapterName
 $dest = 'C:\ProgramData\dualboot'
 # Pre-extraction home; the token is migrated from here so the Pi's copy
 # stays valid across the move.
@@ -32,33 +34,35 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 # --- Wake-on-LAN -----------------------------------------------------------
-foreach ($prop in 'Wake on Magic Packet', 'Wake from S0ix on Magic Packet') {
-    try {
-        Set-NetAdapterAdvancedProperty -Name $adapterName -DisplayName $prop `
-            -DisplayValue 'Enabled' -NoRestart
-        Write-Host "NIC: '$prop' enabled"
-    } catch { Write-Host "NIC: '$prop' not offered by this driver - skipped" }
-}
-# OS-level wake grant (Device Manager > Power Management checkbox), but only
-# when Windows actually lists this NIC as wake-programmable. On a box that
-# only offers Modern Standby (S0 low power idle, no firmware S3) the wired
-# NIC can be absent from that list entirely, and powercfg then answers
-#   "You do not have permission to enable or disable device wake."
-# even from an elevated shell. That message is a capability refusal wearing
-# a privilege refusal's clothes: no amount of elevation, driver setting, or
-# Device Manager checkbox will make the grant stick. Say so plainly here
-# rather than let a re-run print an error that sends the next debugging
-# session after the wrong problem.
-$pnpId = (Get-NetAdapter -Name $adapterName).PnPDeviceID
-$nicName = (Get-PnpDevice -InstanceId $pnpId).FriendlyName
-if ((powercfg -devicequery wake_programmable) -contains $nicName) {
-    powercfg /deviceenablewake $nicName
-    Write-Host "NIC: OS wake grant enabled for '$nicName'"
-} else {
-    Write-Host "NIC: '$nicName' is NOT wake-programmable on this system -"
-    Write-Host '     skipping the OS wake grant (powercfg would only fail).'
-    Write-Host '     Wake-on-LAN from FULL POWER OFF (S5) is unaffected and'
-    Write-Host '     still works; it is wake from SLEEP that cannot be armed.'
+foreach ($adapter in $AdapterName) {
+    foreach ($prop in 'Wake on Magic Packet', 'Wake from S0ix on Magic Packet') {
+        try {
+            Set-NetAdapterAdvancedProperty -Name $adapter -DisplayName $prop `
+                -DisplayValue 'Enabled' -NoRestart
+            Write-Host "NIC ${adapter}: '$prop' enabled"
+        } catch { Write-Host "NIC: '$prop' not offered by this driver - skipped" }
+    }
+    # OS-level wake grant (Device Manager > Power Management checkbox), but only
+    # when Windows actually lists this NIC as wake-programmable. On a box that
+    # only offers Modern Standby (S0 low power idle, no firmware S3) the wired
+    # NIC can be absent from that list entirely, and powercfg then answers
+    #   "You do not have permission to enable or disable device wake."
+    # even from an elevated shell. That message is a capability refusal wearing
+    # a privilege refusal's clothes: no amount of elevation, driver setting, or
+    # Device Manager checkbox will make the grant stick. Say so plainly here
+    # rather than let a re-run print an error that sends the next debugging
+    # session after the wrong problem.
+    $pnpId = (Get-NetAdapter -Name $adapter).PnPDeviceID
+    $nicName = (Get-PnpDevice -InstanceId $pnpId).FriendlyName
+    if ((powercfg -devicequery wake_programmable) -contains $nicName) {
+        powercfg /deviceenablewake $nicName
+        Write-Host "NIC: OS wake grant enabled for '$nicName'"
+    } else {
+        Write-Host "NIC: '$nicName' is NOT wake-programmable on this system -"
+        Write-Host '     skipping the OS wake grant (powercfg would only fail).'
+        Write-Host '     Wake-on-LAN from FULL POWER OFF (S5) is unaffected and'
+        Write-Host '     still works; it is wake from SLEEP that cannot be armed.'
+    }
 }
 
 # Modern Standby is the usual reason for the above, and it also decides

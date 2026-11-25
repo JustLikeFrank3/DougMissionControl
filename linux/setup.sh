@@ -112,26 +112,24 @@ chown "$REAL_USER:$REAL_USER" "$AK" 2>/dev/null || true
 add_restricted_authorized_key "$AK" "$PUBKEY" "/usr/local/bin/boot-to-windows"
 
 # Keep WOL armed after a Linux shutdown (driver default often disarms it).
+# Every physical wired port is armed, not only the WS_MAC one: the port
+# cabled straight to the Pi carries a wake too (WS_DIRECT_MAC on the Pi),
+# and it is the only one that can while the LAN port has no cable.
 # `|| true`: no match must not kill the script under set -e/pipefail.
-IFACE="$(ip -o link | grep -i "$WS_MAC" | awk -F': ' '{print $2}' | head -1 || true)"
-if [ -n "$IFACE" ]; then
-    cat > /etc/systemd/system/flightsim-wol.service <<EOF
-[Unit]
-Description=Arm Wake-on-LAN on $IFACE (flight sim bootup)
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=$(command -v ethtool) -s $IFACE wol g
-
-[Install]
-WantedBy=multi-user.target
-EOF
+WIRED="$(for d in /sys/class/net/*; do [ -e "$d/device" ] && [ ! -d "$d/wireless" ] \
+    && [ "$(cat "$d/type")" = 1 ] && basename "$d"; done | tr '\n' ' ' || true)"
+if [ -n "${WIRED// /}" ]; then
+    {
+        printf '[Unit]\nDescription=Arm Wake-on-LAN on the wired ports (flight sim bootup)\n'
+        printf 'After=network.target\n\n[Service]\nType=oneshot\n'
+        for n in $WIRED; do echo "ExecStart=-$(command -v ethtool) -s $n wol g"; done
+        printf '\n[Install]\nWantedBy=multi-user.target\n'
+    } > /etc/systemd/system/flightsim-wol.service
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable --now flightsim-wol.service >/dev/null 2>&1 || true
-    echo "WOL armed on $IFACE (persisted via flightsim-wol.service)"
+    echo "WOL armed on ${WIRED% } (persisted via flightsim-wol.service)"
 else
-    echo "WARN: no interface with MAC $WS_MAC found — arm WOL manually (ethtool -s <iface> wol g)"
+    echo "WARN: no wired port found — arm WOL manually (ethtool -s <iface> wol g)"
 fi
 
 # --- Logon greeting + VS Code (mirror of the Windows JarvisGreeting) -------

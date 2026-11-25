@@ -39,6 +39,10 @@ CONF=/etc/flightsim/boot.env
 WS_LAN="${WS_LAN:-192.168.1.50}"          # wired NIC, DHCP-by-MAC — same IP either OS
 WS_MAC="${WS_MAC:-AA:BB:CC:DD:EE:FF}"      # that NIC's MAC (WOL target)
 WS_BROADCAST="${WS_BROADCAST:-192.168.1.255}"
+# The workstation port cabled straight to this Pi (the LINUX_SSH link).
+# Waking through it needs no router port: from full off the NIC keeps
+# link on that cable. Empty = LAN wake only.
+WS_DIRECT_MAC="${WS_DIRECT_MAC:-}"
 WIN_PORT="${WIN_PORT:-9106}"
 LINUX_PORT="${LINUX_PORT:-9105}"
 # The point-to-point link only exists under the workstation's Linux boot,
@@ -123,13 +127,29 @@ send_wol() {
         [ -n "$wol_iface" ] && ip neigh replace "$WS_LAN" lladdr "$WS_MAC" \
             dev "$wol_iface" nud permanent 2>/dev/null || true
     fi
-    python3 - "$WS_MAC" "$WS_BROADCAST" "$WS_LAN" <<'PY'
+    #   4. the direct cable - with WS_DIRECT_MAC set, a packet for that port
+    #      goes to the link's own broadcast and to LINUX_PROBE_IP (whose
+    #      neighbour entry flightsim-neigh.service pins at Pi boot).
+    direct_brd=""
+    if [ -n "$WS_DIRECT_MAC" ]; then
+        direct_iface=$(ip -o route get "$LINUX_PROBE_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+        [ -n "$direct_iface" ] && direct_brd=$(ip -o -4 addr show dev "$direct_iface" 2>/dev/null \
+            | sed -n 's/.* brd \([^ ]*\).*/\1/p' | head -1)
+        if [ "$(id -u)" = 0 ] && [ -n "$direct_iface" ]; then
+            ip neigh replace "$LINUX_PROBE_IP" lladdr "$WS_DIRECT_MAC" \
+                dev "$direct_iface" nud permanent 2>/dev/null || true
+        fi
+    fi
+    python3 - "$WS_MAC" "$WS_BROADCAST" "$WS_LAN" "$WS_DIRECT_MAC" "$direct_brd" "$LINUX_PROBE_IP" <<'PY'
 import socket, sys
-mac = bytes.fromhex(sys.argv[1].replace(":", "").replace("-", ""))
-pkt = b"\xff" * 6 + mac * 16
+def magic(m):
+    return b"\xff" * 6 + bytes.fromhex(m.replace(":", "").replace("-", "")) * 16
+sends = [(magic(sys.argv[1]), d) for d in (sys.argv[2], "255.255.255.255", sys.argv[3])]
+if sys.argv[4]:
+    sends += [(magic(sys.argv[4]), d) for d in (sys.argv[5], sys.argv[6]) if d]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-for dst in (sys.argv[2], "255.255.255.255", sys.argv[3]):
+for pkt, dst in sends:
     for port in (9, 7):
         try:
             s.sendto(pkt, (dst, port))
