@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """douglas-chatgpt - lets ChatGPT talk to Douglas, and nothing more.
 
+With DOUGLAS_LINE_URL and DOUGLAS_LINE_TOKEN set (chatgpt-line.sh sets them)
+what ChatGPT talks to is Douglas himself: each message is handed to the voice
+pipeline on its line for other programs, as ChatGPT's, and answered there
+with his own instructions and what he remembers. The pipeline's rules for
+that line are what keep it a conversation and nothing more: no tool is run
+but a look in his memory, nothing is noted down or forgotten, no yes is
+taken, and the conversation is this session's own, apart from the house's.
+This program then sends the session's conversation along with each message
+and keeps none of the words in its journal: they are in Douglas's own
+record, on the owner's screens. Without those two settings it is as it was,
+and as the rest of this describes: the bare model with a persona.
+
 Runs ON DOUGLAS as the douglas-chatgpt systemd unit. Stdlib only.
 
 A minimal MCP server (Streamable HTTP, JSON responses, no SSE) with one
@@ -63,6 +75,13 @@ BODY_MAX = 64 * 1024
 WAIT_S = 60                    # how long a question waits for the one before it
 VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
+# The pipeline's line for other programs, and this program's token for it,
+# which marks what it sends as ChatGPT's. With both, ChatGPT talks to
+# Douglas himself; with either missing, to the bare model with the persona.
+LINE_URL = E("DOUGLAS_LINE_URL", "").rstrip("/")
+LINE_TOKEN = E("DOUGLAS_LINE_TOKEN", "")
+LINE_MAX = 2000                # the longest message the pipeline takes as one
+
 PERSONA = E("CHATGPT_PERSONA", (
     "You are Douglas, an AI assistant that runs on a computer in a private home. "
     "You are quick, warm and wry: good company, not a help desk. "
@@ -102,8 +121,49 @@ TOOL = {
 }
 
 
+HIMSELF = ("Say something to Douglas, an AI assistant that runs on a home server, and get his reply. "
+           "He answers as himself, with what he knows and remembers about his owner and their household. "
+           "He remembers earlier messages in this session. On this line he cannot look anything up, do "
+           "anything or note anything down. Replies can take up to a minute.")
+
+
+def on_the_line() -> bool:
+    return bool(LINE_URL and LINE_TOKEN)
+
+
+def tool() -> dict:
+    """The one tool, described as what it is now."""
+    return dict(TOOL, description=HIMSELF) if on_the_line() else TOOL
+
+
 def log(msg: str) -> None:
     print(msg, flush=True)
+
+
+class Said(Exception):
+    """What Douglas's own program answered instead of a reply: that he is
+    busy, or that the message is not one he takes."""
+
+
+def through_douglas(messages: list[dict]) -> str:
+    """One message to Douglas himself, over the pipeline's line. The
+    conversation so far goes with it: on this line he keeps none of his own."""
+    req = urllib.request.Request(f"{LINE_URL}/chat/completions",
+                                 data=json.dumps({"model": "douglas", "messages": messages, "stream": False}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + LINE_TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as r:
+            msg = json.loads(r.read(2_000_000))["choices"][0]["message"]
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 503):                 # his own program's words for it: too long, or busy
+            try:
+                why = str(json.loads(e.read(4096))["error"]["message"])[:300]
+            except (ValueError, KeyError, TypeError):
+                why = ""
+            if why:
+                raise Said(why[0].upper() + why[1:] + ("" if why.endswith(".") else ".")) from None
+        raise
+    return str(msg.get("content") or "")
 
 
 def unthought(text: str) -> str:
@@ -179,8 +239,10 @@ def ask(sid: str | None, args: dict, llm=complete) -> tuple[str, bool]:
     if not isinstance(message, str) or not message.strip():
         return "message is required.", True
     message = message.strip()
-    if len(message) > MESSAGE_MAX:
-        return f"That message is too long: keep it under {MESSAGE_MAX} characters.", True
+    himself = on_the_line()
+    most = min(MESSAGE_MAX, LINE_MAX) if himself else MESSAGE_MAX
+    if len(message) > most:
+        return f"That message is too long: keep it under {most} characters.", True
     turns = SESSIONS.turns(sid)
     if turns is None:              # a client that skipped initialize still gets one turn
         turns = []
@@ -190,20 +252,34 @@ def ask(sid: str | None, args: dict, llm=complete) -> tuple[str, bool]:
         return "Douglas has had enough questions for this hour. Try again later.", True
     if not ONE_AT_A_TIME.acquire(timeout=WAIT_S):
         return "Douglas is busy with another question. Try again in a minute.", True
+    began = time.time()
     try:
-        msgs = [{"role": "system", "content": PERSONA}, *turns,
-                {"role": "user", "content": message}]
-        reply = unthought(llm(msgs))
+        if himself:
+            # His own instructions and memory are the pipeline's to add: what
+            # goes is this session's conversation and the message.
+            reply = unthought((through_douglas if llm is complete else llm)(
+                [*turns, {"role": "user", "content": message}]))
+        else:
+            reply = unthought(llm([{"role": "system", "content": PERSONA}, *turns,
+                                   {"role": "user", "content": message}]))
+    except Said as e:
+        return str(e), True
     except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError) as e:
-        log(f"model call failed: {type(e).__name__}: {e}")
-        return "Douglas's model is not answering right now.", True
+        log(f"{'Douglas' if himself else 'model'} call failed: {type(e).__name__}: {e}")
+        return ("Douglas is not answering right now." if himself
+                else "Douglas's model is not answering right now."), True
     finally:
         ONE_AT_A_TIME.release()
     if not reply:
         return "Douglas had nothing to say to that.", True
     turns += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
     del turns[:-2 * HISTORY_TURNS]
-    log(f"chatgpt: {message}\ndouglas: {reply}")
+    if himself:
+        # What was said is in his own record, where the owner reads it. Here: that there was an exchange.
+        log(f"chatgpt and douglas: {len(message)} characters asked, {len(reply)} answered, "
+            f"{time.time() - began:.1f} s")
+    else:
+        log(f"chatgpt: {message}\ndouglas: {reply}")
     return reply, False
 
 
@@ -228,11 +304,11 @@ def rpc(msg, sid: str | None) -> tuple[dict | None, str | None]:
                    "capabilities": {"tools": {"listChanged": False}},
                    "serverInfo": {"name": "douglas", "title": "Douglas", "version": "1.0"},
                    "instructions": "One tool, ask_douglas: a conversation with Douglas, "
-                                   "a local AI on a home server."}), new
+                                   "an AI assistant on a home server."}), new
     if method == "ping":
         return ok({}), None
     if method == "tools/list":
-        return ok({"tools": [TOOL]}), None
+        return ok({"tools": [tool()]}), None
     if method == "tools/call":
         if not isinstance(params, dict) or params.get("name") != TOOL["name"]:
             return {"jsonrpc": "2.0", "id": mid,
@@ -316,7 +392,8 @@ def main() -> None:
         sys.exit("CHATGPT_SECRET must be at least 24 URL-safe characters")
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
-    log(f"douglas-chatgpt on 127.0.0.1:{PORT}")
+    log(f"douglas-chatgpt on 127.0.0.1:{PORT}, talking to "
+        + ("Douglas himself, over the pipeline's line" if on_the_line() else "the bare model, with a persona"))
     srv.serve_forever()
 
 

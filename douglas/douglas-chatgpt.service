@@ -1,6 +1,6 @@
 [Unit]
 Description=douglas-chatgpt - ChatGPT's chat-only line to Douglas (MCP, behind Tailscale Funnel :443)
-After=network-online.target llama-server.service
+After=network-online.target llama-server.service douglas-voice.service
 Wants=network-online.target
 
 [Service]

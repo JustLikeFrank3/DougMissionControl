@@ -344,7 +344,10 @@ What differs from the design, and why:
   door also notes, forgets and marks things as told; a program that reads
   for somebody else should not be able to, and should not count as him
   having used a memory.
-- ChatGPT's connector was left as it is, on the owner's word: see section 4.
+- ChatGPT's connector talks to Douglas himself since the owner asked for it
+  (2026-11-24), on a line with less on it than any other: his instructions
+  and his memory to read, no tool, nothing noted, no yes, and a conversation
+  apart from the house's.
 - Nothing was handed the MCP server's token. Which program reads what
   Douglas remembers is the owner's to say.
 
@@ -353,8 +356,10 @@ phone, the panel, the voice satellite, Open WebUI and the connector, and a
 note made on one is recalled on the others. *Seen:* a note made on the Open
 WebUI line was recalled on the chat line and the other way round, with the
 pipeline restarted in between; the lines of the phone, the panel and the
-satellite are the same code with another name on the turn, and the
-connector is deliberately not among them. A conversation in Open WebUI's
+satellite are the same code with another name on the turn. ChatGPT's
+connector reaches him too, on a line of its own that reads his memory and
+writes nothing: a note made as the owner was recalled there, through the
+published address. A conversation in Open WebUI's
 own page was not seen, since that takes the owner's sign-in: what was sent
 to the line was what Open WebUI sends. The MCP server answered the official
 client library from the workstation, over the tailnet.
@@ -410,6 +415,12 @@ Decided by the owner on 2026-11-24, and done or kept accordingly:
 - Phase 4 is built and running (2026-11-24): approvals, the switches for
   his tools and the job in hand are in Mission Control.
 
+- ChatGPT talks to Douglas himself (2026-11-24, `douglas/chatgpt-line.sh`):
+  the owner's decision, knowing that what he remembers is then told to
+  ChatGPT when it asks. The Pi stays where anything is approved.
+
+What is left to do, and what was put off, is in `docs/DOUGLAS-BACKLOG.md`.
+
 Still the owner's to say:
 
 - Which program, if any, is given `douglas-mcp`'s token
@@ -418,10 +429,6 @@ Still the owner's to say:
 - Phase 6, by name, when its turn comes.
 - Whether a notice should reach a phone whose page is closed. That means
   another company's push service, or one more thing to run at home.
-- Whether ChatGPT's connector should become Douglas (phase 5). It is
-  reachable from the internet and answers to another company's service: as
-  Douglas it would hand what he remembers to both. It stays the bare model
-  until asked for.
 
 ## 5. Rolling back
 
