@@ -33,6 +33,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# `powershell -File setup.ps1 -AdapterName Ethernet,'Ethernet 2'` hands the
+# list over as ONE string, "Ethernet,Ethernet 2" - -File does not parse
+# arrays. Split it here so the documented command works as written.
+$AdapterName = @($AdapterName -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $dest = 'C:\ProgramData\dualboot'
 # Pre-extraction home; the token is migrated from here so the Pi's copy
 # stays valid across the move.
