@@ -680,6 +680,40 @@ doors["owner"].shutdown()
 doors["owner"].server_close()
 check("the memory gone quiet is said, and is no error of the agent's",
       call("/memory?token=t&op=stats"), (200, {"ok": False, "text": "Douglas's memory did not answer."}))
+
+print("-- older lines of the conversation, for a screen scrolled up --")
+with open(transcript_file, "w") as f:
+    for i in range(250):
+        f.write(json.dumps({"ts": 1000 + i, "who": "user" if i % 2 == 0 else "douglas",
+                            "text": f"line {i} " + "x" * (i % 37), "via": "phone"}) + "\n")
+        if i == 120:
+            f.write("not json at all\n")
+    f.write('{"ts": 2000, "who": "douglas", "text": "a torn wri')
+real_chunk = agent.TRANSCRIPT_CHUNK
+agent.TRANSCRIPT_CHUNK = 97          # small chunks, so lines are cut between them
+check("without the token, no older lines", call("/transcript?before=1100")[0], 403)
+code, got = call("/transcript?token=t&before=1100&limit=5")
+check("the five lines just before, oldest first, in the shape /status gives them",
+      (code, got["ok"], [x["ts"] for x in got["lines"]], got["more"], sorted(got["lines"][0])),
+      (200, True, [1095, 1096, 1097, 1098, 1099], True, ["text", "ts", "via", "who"]))
+check("a line is given exactly as /status gives it",
+      agent.transcript_before(1250, 1)["lines"], agent.transcript()[-1:])
+got = agent.transcript_before(1125, 10)
+check("a line that is not JSON is skipped, and no line is cut in two by a chunk",
+      [x["text"].split()[1] for x in got["lines"]], [str(i) for i in range(115, 125)])
+got = agent.transcript_before(1003, 30)
+check("at the start of the record, what is left and no more", ([x["ts"] for x in got["lines"]], got["more"]),
+      ([1000, 1001, 1002], False))
+check("exactly enough left says there is no more", agent.transcript_before(1003, 3)["more"], False)
+check("no `before` is the newest, the limit kept to a hundred, a strange one to the default",
+      ([x["ts"] for x in agent.transcript_before(None, 2)["lines"]], len(agent.transcript_before("", 500)["lines"]),
+       len(agent.transcript_before("nan", "lots")["lines"])), ([1248, 1249], 100, 30))
+agent.TRANSCRIPT_CHUNK = real_chunk
+real_cap = agent.TRANSCRIPT_READ_MAX
+agent.TRANSCRIPT_READ_MAX = 2000     # a record far longer than one request may read
+got = agent.transcript_before(1100, 30)
+check("a request reads no more than its cap, and says older lines remain", (got["lines"], got["more"]), ([], True))
+agent.TRANSCRIPT_READ_MAX = real_cap
 web.shutdown()
 doors["assistant"].shutdown()
 

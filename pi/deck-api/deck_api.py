@@ -27,6 +27,8 @@ following its journald output. flightsim-boot.sh is unmodified.
     GET  /api/douglas/picture    ?id=<a transcript line's "image">: a picture he drew
     GET  /api/douglas/speech     ?id=<the turn's id>: his reply as a WAV, for
                                  the phone to play
+    GET  /api/douglas/transcript ?before=<ts>&limit=<n>: older lines of his
+                                 conversation, for a screen scrolled up
     GET  /api/douglas/memory     ?op=list|get|events|stats: what he remembers,
                                  and the record of what he did
     POST /api/douglas/memory     {"op":"correct|add|delete|restore|purge", ...}
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import re
 import shlex
@@ -1915,6 +1918,35 @@ def douglas_memory(op: object, fields: dict, change: bool) -> tuple[int, dict]:
     return 200, got
 
 
+def douglas_transcript(before: object, limit: object) -> tuple[int, dict]:
+    """Older lines of his conversation, for a screen scrolled up past what
+    /api/douglas carries. Only numbers are passed on to the agent."""
+    if not DOUGLAS_AGENT_TOKEN:
+        return 502, {"ok": False, "text": "DOUGLAS_AGENT_TOKEN unset in boot.env"}
+    ask = {}
+    try:
+        b = float(before)
+        if math.isfinite(b):
+            ask["before"] = repr(b)
+    except (TypeError, ValueError):
+        pass
+    try:
+        ask["limit"] = str(max(1, min(100, int(limit))))
+    except (TypeError, ValueError):
+        pass
+    url = f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/transcript?token={DOUGLAS_AGENT_TOKEN}"
+    # Read here rather than through _ws_json: a hundred long lines can be
+    # more than the quarter megabyte it stops at.
+    try:
+        with urllib.request.urlopen(url + ("&" + urlencode(ask) if ask else ""), timeout=8) as r:
+            got = json.loads(r.read(4_000_000).decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        got = None
+    if not isinstance(got, dict):
+        return 502, {"ok": False, "text": "douglas-agent did not answer"}
+    return 200, got
+
+
 # ── the fleet, as a reading ───────────────────────────────────────────────
 #
 # What this Pi knows about the machines in the house, put together for a
@@ -2271,6 +2303,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             fields = {k: v[0] for k, v in query.items()}
             code, out = douglas_memory(fields.get("op"), fields, change=False)
+            return self._json(code, out)
+
+        # Older lines of his conversation, for a screen scrolled up. The
+        # owner's token, never the read token: his words are not fleet state.
+        if path == "/api/douglas/transcript":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            code, out = douglas_transcript((query.get("before") or [""])[0],
+                                           (query.get("limit") or [""])[0])
             return self._json(code, out)
 
         # A picture he drew, for the line of his it came with.

@@ -25,6 +25,7 @@ const mem = await import(pathToFileURL(path.join(UI, 'memory.js')));
 const fleet = await import(pathToFileURL(path.join(UI, 'fleet.js')));
 const ntc = await import(pathToFileURL(path.join(UI, 'notices.js')));
 const own = await import(pathToFileURL(path.join(UI, 'owner.js')));
+const convo = await import(pathToFileURL(path.join(UI, 'convo.js')));
 
 let passed = 0;
 const failures = [];
@@ -579,6 +580,44 @@ test('a notice says since when, and what has become of it', () => {
   assert.equal(ntc.meta({ raised: now - 600, cleared: now - 300, acked: now - 400 }, now),
                'over since ' + fmt.fmtClock(now - 300) + ' · lasted 5 m',
                'one that is over says how long it lasted, not how long ago it began');
+});
+
+/* ── the conversation log, scrolled back ─────────────────────────────────── */
+
+test('earlier lines and the newest merge oldest first, each line once', () => {
+  const a = { ts: 10, who: 'user', text: 'Is the kettle on?', via: 'phone' };
+  const b = { ts: 11, who: 'douglas', text: 'It is.', via: 'phone' };
+  const c = { ts: 12, who: 'user', text: 'Thank you.', via: 'voice' };
+  const d = { ts: 13, who: 'douglas', text: 'You are welcome.', via: 'voice' };
+  assert.deepEqual(convo.mergeTurns([a, b, c], [c, d]), [a, b, c, d], 'the overlap is kept once');
+  assert.deepEqual(convo.mergeTurns([c, d], [a, b]), [a, b, c, d], 'whichever way round they come');
+  assert.deepEqual(convo.mergeTurns([], [b, a]), [a, b]);
+  assert.deepEqual(convo.mergeTurns(null, undefined), []);
+  const same = { ts: 11, who: 'user', text: 'It is.', via: 'phone' };
+  assert.deepEqual(convo.mergeTurns([b], [same]), [b, same], 'two speakers in the same second are two lines');
+  const untimed = { who: 'douglas', text: 'no clock' };
+  assert.deepEqual(convo.mergeTurns([untimed, a], []), [a, untimed], 'a line without a time goes last');
+  assert.equal(convo.oldestTs([untimed, b, a]), 11);
+  assert.equal(convo.oldestTs([]), null);
+});
+
+test('only a log already at its newest line follows a new one down', () => {
+  assert.equal(convo.atBottom(600, 1000, 400), true);
+  assert.equal(convo.atBottom(590, 1000, 400), true, 'a finger short of the end is still the end');
+  assert.equal(convo.atBottom(300, 1000, 400), false, 'scrolled up to read stays where it is');
+  assert.equal(convo.atBottom(0, 300, 400), true, 'a log shorter than its box is at its end');
+});
+
+test('the earlier lines are asked for by a number only', () => {
+  assert.equal(convo.earlierPath(1795566756.75), '/api/douglas/transcript?before=1795566756.75&limit=30');
+  assert.equal(convo.earlierPath(5, 10), '/api/douglas/transcript?before=5&limit=10');
+});
+
+test('a line ChatGPT said is named CHATGPT, not YOU', () => {
+  assert.equal(convo.whoLabel({ who: 'user', via: 'chatgpt' }), 'CHATGPT');
+  assert.equal(convo.whoLabel({ who: 'user', via: 'phone' }), 'YOU');
+  assert.equal(convo.whoLabel({ who: 'douglas', via: 'chatgpt' }), 'DOUGLAS', 'his reply to it is still his');
+  assert.equal(convo.whoLabel(null), 'DOUGLAS');
 });
 
 if (failures.length) {

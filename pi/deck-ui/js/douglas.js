@@ -22,9 +22,10 @@ import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
 import { noticesView, navNotices } from './notices.js';
 import { approvalView, switchesView, jobView } from './owner.js';
+import { convoLog, whoLabel } from './convo.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
-var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
+var timer = null, timerMs = 0, last = null, pressed = false, convo = null;
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
 var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
 var approval = null, switches = null, job = null;
@@ -96,7 +97,7 @@ function showTab(name) {
   $('dgl-ntc').hidden = name !== 'ntc';
   $('dgl-sw').hidden = name !== 'sw';
   $('dgl-did').hidden = name !== 'did';
-  if (name === 'convo') { var log = $('dgl-log'); log.scrollTop = log.scrollHeight; }
+  if (name === 'convo' && convo) convo.toBottom();
   tickMemory();
 }
 
@@ -163,47 +164,33 @@ function paint(d) {
 }
 
 function paintLog(turns) {
-  var el = $('dgl-log');
-  var key = turns === null ? 'none'
-    : turns.length + ':' + (turns.length ? turns[turns.length - 1].ts : 0);
-  if (key === lastLogKey) return;           // nothing new: leave the scroll alone
-  lastLogKey = key;
-  el.innerHTML = '';
-  if (turns === null || !turns.length) {
-    var e = document.createElement('div');
-    e.className = 'dgl-empty';
-    e.textContent = turns === null
-      ? 'No transcript: douglas-agent is not answering.'
-      : 'Nothing said yet. Hold to talk, or speak to DougVoice.';
-    el.appendChild(e);
-    return;
-  }
-  turns.forEach(function (t) {
-    var me = t.who === 'user';
-    var div = document.createElement('div');
-    div.className = 'dgl-turn ' + (me ? 'user' : 'douglas');
-    div.innerHTML = '<span class="who"><b></b> <span class="via"></span></span>' +
-                    '<span class="txt"></span>';
-    div.querySelector('b').textContent = me ? 'YOU' : 'DOUGLAS';
-    div.querySelector('.via').textContent =
-      '· ' + (t.via || 'voice') + ' · ' + clock(t.ts);
-    div.querySelector('.txt').textContent = t.text || '';
-    if (!me && t.image) div.appendChild(picture(t.image, el));
-    el.appendChild(div);
-  });
-  el.scrollTop = el.scrollHeight;
+  if (convo) convo.paint(turns);
+}
+
+function turnEl(t) {
+  var me = t.who === 'user';
+  var div = document.createElement('div');
+  div.className = 'dgl-turn ' + (me ? 'user' : 'douglas');
+  div.innerHTML = '<span class="who"><b></b> <span class="via"></span></span>' +
+                  '<span class="txt"></span>';
+  div.querySelector('b').textContent = whoLabel(t);
+  div.querySelector('.via').textContent =
+    '· ' + (t.via || 'voice') + ' · ' + clock(t.ts);
+  div.querySelector('.txt').textContent = t.text || '';
+  if (!me && t.image) div.appendChild(picture(t.image));
+  return div;
 }
 
 // A picture he drew comes as an id on his line. The element is kept from one
 // repaint to the next, so a new turn does not fetch every picture in the log
 // again. A touch fills the panel with it; another puts it back.
 var pics = {};
-function picture(id, log) {
+function picture(id) {
   if (pics[id]) return pics[id];
   var img = pics[id] = new Image();
   img.className = 'dgl-pic';
   img.alt = 'a picture Douglas drew';
-  img.onload = function () { log.scrollTop = log.scrollHeight; };
+  img.onload = function () { if (convo) convo.follow(); };
   img.onerror = function () { delete pics[id]; img.alt = 'his picture did not load'; };
   img.onclick = function () { img.classList.toggle('big'); };
   img.src = '/api/douglas/picture?id=' + encodeURIComponent(id);
@@ -311,6 +298,13 @@ export function wireDouglas() {
   job = jobView($('dgl-job'));
   notices = noticesView($('dgl-ntc'), { get: getJSON, post: post, count: $('dgl-ntc-count'),
                                         countClass: 'ntc-n', over: 8 });
+  convo = convoLog($('dgl-log'), {
+    get: getJSON, line: turnEl, rowClass: 'dgl-earlier', emptyClass: 'dgl-empty',
+    empty: function (none) {
+      return none ? 'No transcript: douglas-agent is not answering.'
+        : 'Nothing said yet. Hold to talk, or speak to DougVoice.';
+    },
+  });
   [].forEach.call($('dgl-tabs').children, function (b) {
     b.addEventListener('click', function () { showTab(b.dataset.tab); });
   });

@@ -107,8 +107,14 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .m .v small { font-size: 11px; color: var(--mut); margin-left: 3px; }
 .m .v.stale { color: var(--mut); }
 
-.log { display: flex; flex-direction: column; gap: 8px; }
+/* The log scrolls in its own box, so the page around it stays put while
+   the conversation is read back; at its top, earlier lines are fetched. */
+.log { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto;
+       overscroll-behavior: contain; }
 .log:empty { display: none; }
+.log .earlier { flex: none; align-self: center; padding: 6px 12px; font-size: 10px;
+                letter-spacing: .14em; color: var(--cy); cursor: pointer; }
+.log .earlier.end { color: var(--mut); cursor: default; }
 .turn { max-width: 88%; display: flex; flex-direction: column; gap: 2px; }
 .turn.user { align-self: flex-end; text-align: right; }
 .turn .who { font-size: 10px; letter-spacing: .14em; color: var(--mut); }

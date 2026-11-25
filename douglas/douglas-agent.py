@@ -22,6 +22,9 @@ douglas/setup.sh as the douglas-agent systemd unit. Stdlib only.
     GET  /speech?token=<t>&id=<id>
                              the reply to that turn as a WAV, for the phone
                              to play; JSON saying where it stands until then
+    GET  /transcript?token=<t>&before=<ts>&limit=<n>
+                             older lines of the conversation, for a screen
+                             scrolled up past what /status carries
     GET  /memory?token=<t>&op=list|get|events|stats[&kind=&status=&q=&limit=&offset=&id=]
                              what Douglas remembers and the record of what
                              he did, for the owner to read
@@ -563,19 +566,87 @@ def transcript() -> list[dict]:
     # Parse the whole tail and keep the last N good turns: slicing lines
     # first would let one torn write cost the panel a real turn.
     for line in tail:
-        try:
-            t = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(t, dict) and t.get("text"):
-            turn = {"ts": t.get("ts"),
-                    "who": "user" if t.get("who") == "user" else "douglas",
-                    "text": str(t["text"])[:2000],
-                    "via": str(t.get("via") or "voice")}
-            if PICTURE_ID.fullmatch(str(t.get("image") or "")):
-                turn["image"] = t["image"]       # he drew one: GET /picture?id= has it
+        turn = _turn(line)
+        if turn is not None:
             turns.append(turn)
     return turns[-TRANSCRIPT_TURNS:]
+
+
+def _turn(line) -> dict | None:
+    """One transcript line as a screen is given it, or None for a line that
+    is not a turn (a torn write, a blank)."""
+    try:
+        t = json.loads(line)
+    except ValueError:
+        return None
+    if not (isinstance(t, dict) and t.get("text")):
+        return None
+    turn = {"ts": t.get("ts"),
+            "who": "user" if t.get("who") == "user" else "douglas",
+            "text": str(t["text"])[:2000],
+            "via": str(t.get("via") or "voice")}
+    if PICTURE_ID.fullmatch(str(t.get("image") or "")):
+        turn["image"] = t["image"]       # he drew one: GET /picture?id= has it
+    return turn
+
+
+TRANSCRIPT_PAGE = 30
+TRANSCRIPT_PAGE_MAX = 100
+TRANSCRIPT_CHUNK = 64 * 1024
+TRANSCRIPT_READ_MAX = 4 * 1024 * 1024
+
+
+def transcript_before(before: object, limit: object) -> dict:
+    """The newest `limit` turns older than `before`, oldest first, for a
+    screen scrolled up past what /status carries. The file is read backwards
+    from its end a chunk at a time, and never more than TRANSCRIPT_READ_MAX
+    in one request, because the record grows for years."""
+    try:
+        before = float(before) if before not in (None, "") else float("inf")
+    except (TypeError, ValueError):
+        before = float("inf")
+    if before != before:                   # NaN would match nothing, forever
+        before = float("inf")
+    try:
+        limit = int(limit) if limit not in (None, "") else TRANSCRIPT_PAGE
+    except (TypeError, ValueError):
+        limit = TRANSCRIPT_PAGE
+    limit = max(1, min(TRANSCRIPT_PAGE_MAX, limit))
+    found: list[dict] = []                 # newest first while reading
+    try:
+        with open(TRANSCRIPT_FILE, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            pos = f.tell()
+            rest = b""                     # the start of a line cut by a chunk
+            read = 0
+            # One more than asked for is what tells "more" from "that was all".
+            while pos > 0 and len(found) <= limit and read < TRANSCRIPT_READ_MAX:
+                step = min(TRANSCRIPT_CHUNK, pos, TRANSCRIPT_READ_MAX - read)
+                pos -= step
+                f.seek(pos)
+                rest = f.read(step) + rest
+                read += step
+                lines = rest.split(b"\n")
+                # Unless this is the start of the file, the first piece may be
+                # the end of a line whose beginning is in the next chunk back.
+                rest = lines.pop(0) if pos > 0 else b""
+                for line in reversed(lines):
+                    _older(line, before, found)
+                    if len(found) > limit:
+                        break
+    except OSError:
+        return {"ok": True, "lines": [], "more": False}
+    # Stopping short of the file's start, for either reason, leaves lines older
+    # than these that a screen can still ask for.
+    more = len(found) > limit or pos > 0
+    return {"ok": True, "lines": list(reversed(found[:limit])), "more": more}
+
+
+def _older(line: bytes, before: float, found: list) -> None:
+    turn = _turn(line.decode("utf-8", "replace")) if line.strip() else None
+    ts = turn.get("ts") if turn else None
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts < before:
+        found.append(turn)
 
 
 def relay_ptt(body: dict) -> tuple[int, dict]:
@@ -1060,6 +1131,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "forbidden"})
             code, out, kind = picture((parse_qs(urlparse(self.path).query).get("id") or [""])[0])
             return self._send(code, out, kind)
+        if path == "/transcript":
+            if not self._authorised():
+                return self._send(403, {"error": "forbidden"})
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            return self._send(200, transcript_before(q.get("before"), q.get("limit")))
         if path == "/memory":
             if not self._authorised():
                 return self._send(403, {"error": "forbidden"})

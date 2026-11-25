@@ -17,6 +17,7 @@ import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
 import { noticesView } from '../js/notices.js';
 import { approvalView, switchesView, jobView } from '../js/owner.js';
+import { convoLog, whoLabel } from '../js/convo.js';
 
 var $ = function (id) { return document.getElementById(id); };
 var KEY = 'dmc-deck-token';
@@ -500,26 +501,34 @@ function paintDouglas(d) {
     box.appendChild(m);
   });
 
-  // The last few turns only: the full conversation is Douglas's chat page.
-  var log = $('dgl-log'), shown = {};
-  log.innerHTML = '';
-  (agent ? (d.transcript || []).slice(-6) : []).forEach(function (t) {
-    var me = t.who === 'user';
-    var div = document.createElement('div');
-    div.className = 'turn ' + (me ? 'user' : 'douglas');
-    div.innerHTML = '<span class="who"><b></b> <span></span></span><span class="txt"></span>';
-    div.querySelector('b').textContent = me ? 'YOU' : 'DOUGLAS';
-    div.querySelector('.who span').textContent = '· ' + (t.via || 'voice') +
-      (t.ts ? ' · ' + fmtClock(t.ts) : '');
-    div.querySelector('.txt').textContent = t.text || '';
-    if (!me && t.image) {
-      shown[t.image] = true;
-      div.appendChild(picture(t.image));
-    }
-    log.appendChild(div);
-  });
-  Object.keys(pics).forEach(function (id) { if (!shown[id]) delete pics[id]; });
+  // The last few turns, and the earlier ones scrolled up to. A log drawn
+  // again is the moment to let go of pictures no longer in it.
+  shown = {};
+  if (convo.paint(agent ? (d.transcript || []) : null)) {
+    Object.keys(pics).forEach(function (id) { if (!shown[id]) delete pics[id]; });
+  }
 }
+
+var shown = {};
+function turnEl(t) {
+  var me = t.who === 'user';
+  var div = document.createElement('div');
+  div.className = 'turn ' + (me ? 'user' : 'douglas');
+  div.innerHTML = '<span class="who"><b></b> <span></span></span><span class="txt"></span>';
+  div.querySelector('b').textContent = whoLabel(t);
+  div.querySelector('.who span').textContent = '· ' + (t.via || 'voice') +
+    (t.ts ? ' · ' + fmtClock(t.ts) : '');
+  div.querySelector('.txt').textContent = t.text || '';
+  if (!me && t.image) {
+    shown[t.image] = true;
+    div.appendChild(picture(t.image));
+  }
+  return div;
+}
+var convo = convoLog($('dgl-log'), {
+  get: getJSON, line: turnEl, rowClass: 'earlier',
+  empty: function () { return ''; },
+});
 
 // A picture Douglas drew comes as an id on his line. The log is rebuilt on
 // every poll, so the element is kept and moved into the new log, not made
@@ -535,6 +544,7 @@ function picture(id) {
   p = pics[id] = { el: img, failed: 0 };
   img.className = 'pic';
   img.alt = 'a picture Douglas drew';
+  img.onload = function () { convo.follow(); };
   img.onerror = function () { p.failed = Date.now(); img.alt = 'his picture did not load'; };
   img.onclick = function () { img.classList.toggle('big'); };
   img.src = api('/api/douglas/picture?id=' + encodeURIComponent(id));

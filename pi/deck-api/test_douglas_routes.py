@@ -458,6 +458,55 @@ token, d.DOUGLAS_AGENT_TOKEN = d.DOUGLAS_AGENT_TOKEN, ""
 check("no agent token set up", look("op=stats")[1]["text"], "DOUGLAS_AGENT_TOKEN unset in boot.env")
 d.DOUGLAS_AGENT_TOKEN = token
 
+print("-- older lines of his conversation, for a screen scrolled up --")
+TOLD = []
+class Record(d.BaseHTTPRequestHandler):
+    """Douglas's agent, as far as its /transcript goes."""
+    def log_message(self, *a): pass
+    def do_GET(self):
+        u = d.urlparse(self.path); q = {k: v[0] for k, v in d.parse_qs(u.query).items()}
+        TOLD.append((u.path, q.pop("token", ""), q))
+        out = {"ok": True, "more": True, "lines": [{"ts": 1700000000.5, "who": "user", "text": "What is on the shelf?",
+                                                   "via": "phone"}]}
+        body = json.dumps(out).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+rec = d.ThreadingHTTPServer(("127.0.0.1", 0), Record)
+threading.Thread(target=rec.serve_forever, daemon=True).start()
+d.DOUGLAS_AGENT_PORT = rec.server_address[1]
+def earlier(query, headers=None):
+    """(status, reply, what the journal got) for one GET."""
+    journal, real = io.StringIO(), (sys.stdout, sys.stderr)
+    sys.stdout = sys.stderr = journal
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/douglas/transcript?{query}", headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                code, out = r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            code, out = e.code, json.loads(e.read())
+    finally:
+        sys.stdout, sys.stderr = real
+    return code, out, journal.getvalue()
+code, out, log = earlier("before=1700000100.25&limit=30")
+check("the agent's older lines come back as it gave them", (code, out["more"], out["lines"][0]["text"]),
+      (200, True, "What is on the shelf?"))
+check("asked of the agent with the agent's token and the two numbers",
+      TOLD[-1], ("/transcript", d.DOUGLAS_AGENT_TOKEN, {"before": "1700000100.25", "limit": "30"}))
+check("and none of his words reach the journal", "shelf" in log, False)
+earlier("before=1%26token%3Dx&limit=9999&junk=1")
+check("only numbers are passed on, the limit kept to a hundred", TOLD[-1][2], {"limit": "100"})
+earlier("before=inf&limit=x")
+check("a number that is not a time is dropped", TOLD[-1][2], {})
+d.DECK_TOKEN, d.DECK_READ_TOKEN = "deck-token", "read-token"
+n = len(TOLD)
+check("from anywhere but the panel itself, it wants the deck token, and the read token does not open it",
+      ([earlier(f"before=5{t}", away)[0] for t in ("", "&token=read-token", "&token=wrong", "&token=deck-token")],
+       len(TOLD) - n), ([403, 403, 403, 200], 1))
+d.DECK_TOKEN, d.DECK_READ_TOKEN = "", ""
+rec.shutdown()
+d.DOUGLAS_AGENT_PORT = 1
+check("Douglas not answering", earlier("before=5")[:2], (502, {"ok": False, "text": "douglas-agent did not answer"}))
+
 server.shutdown()
 print()
 if fails:
