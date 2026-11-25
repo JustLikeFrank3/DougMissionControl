@@ -899,6 +899,17 @@ device, how the reply will be delivered) closes the person's own message in
 square brackets. The same pair of questions a minute apart went from 6.8
 seconds each to 2.6.
 
+**A look outside (DougRing).** Douglas can look through the household's
+Ring cameras when asked ("is there a parcel on the porch?"), through Ring's
+official developer platform as a private app. `dougring` on node1 holds the
+Ring link and keeps every rule: a switch for all cameras, one for each
+(off until switched on), a journal of every access. Mission Control relays
+for the owner's screens (CAMERAS on the phone page and the panel's Douglas
+page) and, on a token of its own, for Douglas's `camera` tool, which looks
+at a picture taken now with his own eyes and says how old it is. Nothing is
+kept: no picture on disk, none in his memory, none sent elsewhere. The
+ChatGPT line has no camera. See [docs/DOUGRING.md](docs/DOUGRING.md).
+
 **A line for ChatGPT.** `douglas-chatgpt` lets ChatGPT talk to Douglas, and
 nothing more. It is a small MCP server with one tool, `ask_douglas`, added to
 ChatGPT as a custom connector. ChatGPT's servers are on the public internet,

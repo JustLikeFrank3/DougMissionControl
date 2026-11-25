@@ -33,6 +33,13 @@ following its journald output. flightsim-boot.sh is unmodified.
                                  and the record of what he did
     POST /api/douglas/memory     {"op":"correct|add|delete|restore|purge", ...}
                                  the owner puts a memory right or takes it away
+    GET  /api/cameras            DougRing: switches, cameras, health, journal (owner)
+    POST /api/cameras            {"op":"switch|enable|disable|name|forget|refresh", ...}
+    POST /api/cameras/image      {"camera":"<id or name>"}: a picture, now (owner)
+    GET  /api/eyes/cameras       Douglas's switched-on cameras (DECK_CAMERA_TOKEN)
+    POST /api/eyes/image         {"camera":"<id or name>"}: a picture for him to
+                                 look at (DECK_CAMERA_TOKEN); X-Observation says
+                                 which camera, when, and how old
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -229,6 +236,16 @@ if DECK_READ_TOKEN and DECK_READ_TOKEN == DECK_TOKEN:
     print("deck-api: DECK_READ_TOKEN is the same as DECK_TOKEN - ignored, nothing "
           "opens to it until it is a token of its own", file=sys.stderr, flush=True)
     DECK_READ_TOKEN = ""
+# DougRing's door on this Pi, and a third token, for Douglas's camera tool:
+# it opens the two /api/eyes routes (his switched-on cameras, and a picture
+# from one) and nothing else. Shared with the deck's or the fleet's token it
+# would be theirs, so then it counts as unset.
+DOUGRING_SOCKET = cfg("DOUGRING_SOCKET", "/run/dougring/api.sock")
+DECK_CAMERA_TOKEN = cfg("DECK_CAMERA_TOKEN", "")
+if DECK_CAMERA_TOKEN and DECK_CAMERA_TOKEN in (DECK_TOKEN, DECK_READ_TOKEN):
+    print("deck-api: DECK_CAMERA_TOKEN is the same as another token - ignored",
+          file=sys.stderr, flush=True)
+    DECK_CAMERA_TOKEN = ""
 # This Pi's own services worth knowing the health of, by unit name.
 FLEET_UNITS = tuple(cfg("FLEET_UNITS", "deck-api fauxmo k3s tailscaled").split())
 # Where the phone page is on HTTPS, if pi/mobile-https.sh has put it there:
@@ -2122,6 +2139,93 @@ def _fleet_made() -> dict:
     return view
 
 
+# ── DougRing: the Ring cameras, through the service that holds them ──────
+# dougring (dougring/dougring.py) runs on this Pi with the Ring tokens and
+# keeps every camera rule itself. deck-api only carries requests to its
+# socket and says who is asking: the owner (the panel and the phone, on the
+# deck's own token) or Douglas (on DECK_CAMERA_TOKEN, which opens the two
+# /api/eyes routes and nothing else). No picture is written down here.
+
+def dougring_call(method: str, path: str, role: str, body: dict | None = None,
+                  timeout: float = 15) -> tuple[int, dict, bytes]:
+    """(status, headers, body) from dougring's socket; 503 if it is not there."""
+    data = json.dumps(body).encode() if body is not None else b""
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(timeout)
+    try:
+        s.connect(DOUGRING_SOCKET)
+        s.sendall((f"{method} {path} HTTP/1.0\r\nX-DougRing-Role: {role}\r\n"
+                   f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n\r\n").encode() + data)
+        raw = b""
+        while len(raw) < 20_000_000:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            raw += chunk
+    except OSError as e:
+        return 503, {}, json.dumps({"error": "dougring did not answer", "why": type(e).__name__}).encode()
+    finally:
+        s.close()
+    head, _, payload = raw.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    try:
+        code = int(lines[0].split()[1])
+    except (IndexError, ValueError):
+        return 502, {}, b'{"error": "dougring answered nonsense"}'
+    headers = {}
+    for line in lines[1:]:
+        k, _, v = line.partition(":")
+        headers[k.strip().lower()] = v.strip()
+    return code, headers, payload
+
+
+def dougring_json(method: str, path: str, role: str, body: dict | None = None) -> tuple[int, dict]:
+    code, _, payload = dougring_call(method, path, role, body)
+    try:
+        out = json.loads(payload or b"{}")
+    except ValueError:
+        out = {"error": "not JSON"}
+    return code, out if isinstance(out, dict) else {"value": out}
+
+
+def cameras_view() -> dict:
+    """Everything the owner's camera panel shows, in one reading."""
+    code, st = dougring_json("GET", "/status", "owner")
+    if code != 200:
+        return {"installed": code != 503, "up": False, "error": st.get("error", f"HTTP {code}")}
+    out = {"installed": True, "up": True, "status": st, "cameras": [], "journal": []}
+    code, cams = dougring_json("GET", "/cameras", "owner")
+    if code == 200:
+        out["cameras"] = cams.get("cameras", [])
+    else:
+        out["cameras_error"] = cams.get("code") or cams.get("error") or f"HTTP {code}"
+    code, j = dougring_json("GET", "/journal", "owner")
+    if code == 200:
+        out["journal"] = j.get("journal", [])[:50]
+    return out
+
+
+CAMERA_OPS = {"switch", "enable", "disable", "name", "forget", "refresh"}
+
+
+def cameras_change(body: dict) -> tuple[int, dict]:
+    """One of the owner's changes, passed on as it is; dougring checks it."""
+    op = body.get("op")
+    if op not in CAMERA_OPS:
+        return 400, {"ok": False, "message": "op is one of " + ", ".join(sorted(CAMERA_OPS))}
+    if op == "switch":
+        return dougring_json("POST", "/switch", "owner", {"on": body.get("on") is True})
+    if op == "forget":
+        return dougring_json("POST", "/forget", "owner", {})
+    if op == "refresh":
+        return dougring_json("POST", "/devices/refresh", "owner", {})
+    cid = str(body.get("id") or "")
+    if not cid or len(cid) > 200:
+        return 400, {"ok": False, "message": "which camera (id)"}
+    return dougring_json("POST", f"/cameras/{quote(cid, safe='')}/{op}", "owner",
+                         {"name": str(body.get("name") or "")[:40]} if op == "name" else {})
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "deck-api/0.1"
@@ -2172,6 +2276,36 @@ class Handler(BaseHTTPRequestHandler):
             return True
         given = (query.get("token") or [""])[0]
         return bool(DECK_READ_TOKEN) and hmac.compare_digest(given.encode(), DECK_READ_TOKEN.encode())
+
+    def _may_see(self, query: dict) -> bool:
+        """Douglas's camera token, looked at here and nowhere else."""
+        given = (query.get("token") or [""])[0]
+        return bool(DECK_CAMERA_TOKEN) and hmac.compare_digest(given.encode(), DECK_CAMERA_TOKEN.encode())
+
+    def _picture(self, role: str, body: dict) -> None:
+        """A picture from dougring, passed through with what it says of it."""
+        cam = str(body.get("camera") or "")[:200]
+        t0 = time.time()
+        code, headers, payload = dougring_call("POST", "/image", role,
+                                               {"camera": cam, "fresh": body.get("fresh", True) is not False},
+                                               timeout=150)
+        self._note(f"camera picture for {role}: HTTP {code}, {len(payload) // 1024} KB in {time.time() - t0:.1f} s")
+        if code != 200 or not headers.get("content-type", "").startswith("image/"):
+            try:
+                out = json.loads(payload or b"{}")
+            except ValueError:
+                out = {}
+            return self._json(code if code != 200 else 502, out if isinstance(out, dict) else {})
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", headers["content-type"])
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Observation", headers.get("x-observation", "{}"))
+            self.end_headers()
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         try:
@@ -2321,6 +2455,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(403, {"error": "forbidden"})
             return self._json(200, fleet())
 
+        if path == "/api/eyes/cameras":
+            if not self._may_see(query):
+                return self._json(403, {"error": "forbidden"})
+            code, out = dougring_json("GET", "/cameras", "douglas")
+            return self._json(code, out)
+
+        if path == "/api/cameras":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            return self._json(200, cameras_view())
+
         # What he remembers and what he did, for the owner to read.
         if path == "/api/douglas/memory":
             if not self._authorised(query):
@@ -2385,6 +2530,17 @@ class Handler(BaseHTTPRequestHandler):
             code, out = greeting_phase(body)
             return self._json(code, out)
 
+        # Douglas's camera tool holds its own token, not the deck's: routed
+        # before the gate below, and to nothing but a picture.
+        if url.path == "/api/eyes/image":
+            if not self._may_see(query):
+                self._drop_body()
+                return self._json(403, {"error": "forbidden"})
+            body = self._body()
+            if body is None:
+                return self._json(400, cut_short)
+            return self._picture("douglas", body)
+
         if not self._authorised(query):
             # Refused, and its body has to go somewhere first. Left unread on
             # a connection that is kept open - and a proxy in front keeps its
@@ -2399,6 +2555,13 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return self._json(400, cut_short)
         path = url.path
+
+        if path == "/api/cameras/image":
+            return self._picture("owner", body)
+        if path == "/api/cameras":
+            code, out = cameras_change(body)
+            self._note(f"cameras {body.get('op')}: HTTP {code}")
+            return self._json(code, out)
 
         if path == "/api/boot":
             intent = str(body.get("intent") or "plain")

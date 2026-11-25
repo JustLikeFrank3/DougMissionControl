@@ -55,6 +55,12 @@ esac
 getent group dougring-api >/dev/null || groupadd --system dougring-api
 getent passwd dougring >/dev/null \
     || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin dougring
+# Mission Control (deck-api) is the one thing that opens the private door.
+deck_user="$(systemctl show -p User --value deck-api 2>/dev/null || true)"
+if [ -n "$deck_user" ] && ! id -nG "$deck_user" | grep -qw dougring-api; then
+    usermod -a -G dougring-api "$deck_user"
+    systemctl try-restart deck-api || true
+fi
 install -d -m 755 /opt/dougring
 install -m 644 "$here/dougring.py" /opt/dougring/dougring.py
 install -m 644 "$here/dougring.service" /etc/systemd/system/dougring.service

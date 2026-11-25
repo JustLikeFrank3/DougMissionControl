@@ -345,3 +345,19 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
               border: 1px solid var(--ln); font: inherit; font-size: 16px; }
 .gate button { padding: 12px 16px; background: var(--pan); border: 1px solid var(--acc);
                color: var(--acc); font-size: 14px; letter-spacing: .1em; }
+
+/* DougRing: the cameras */
+.camv .cam-head .sw { border-top: 0; }
+.cam-name { cursor: pointer; text-decoration: underline dotted; }
+.sw-w small.bad, .cam-row .v.bad, .cam-j.bad { color: var(--rd); }
+.cam-look { margin-right: 6px; }
+.cam-shot { display: flex; flex-direction: column; gap: 6px; }
+.cam-img { width: 100%; height: auto; border: 1px solid var(--ln); }
+.cam-cap { font-size: 12px; color: var(--gr); }
+.cam-cap.stale { color: var(--am, #e0a030); }
+.cam-health { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px solid var(--ln); }
+.cam-row { display: flex; gap: 10px; font-size: 12px; }
+.cam-row .k { color: var(--mut); width: 92px; flex: none; }
+.cam-row .v { overflow-wrap: anywhere; }
+.cam-jh { font-size: 12px; font-weight: 400; color: var(--mut); margin: 8px 0 2px; letter-spacing: .08em; }
+.cam-j { font-size: 12px; padding: 2px 0; }

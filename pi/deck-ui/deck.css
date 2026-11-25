@@ -1277,3 +1277,19 @@ html, body {
 .dgl-m .mb { height: 5px; margin-top: 8px; background: #0b1016; border: 1px solid var(--ln); }
 .dgl-m .mb i { display: block; height: 100%; width: 0; background: var(--cy); }
 .dgl-m .mb i.hot { background: var(--am); }
+
+/* DougRing: the cameras, on the Douglas page's CAMERAS tab */
+.camv .cam-list { grid-template-columns: 1fr; }
+.cam-name { cursor: pointer; text-decoration: underline dotted; }
+.sw-w small.bad, .cam-row .v.bad, .cam-j.bad { color: var(--rd); }
+.cam-look { margin-right: 8px; }
+.cam-shot { display: flex; gap: 14px; align-items: flex-start; }
+.cam-img { max-height: 300px; max-width: 60%; border: 1px solid var(--ln); }
+.cam-cap { font-size: 14px; color: var(--gr); }
+.cam-cap.stale { color: var(--am, #e0a030); }
+.cam-health { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; row-gap: 4px; padding-top: 8px;
+              border-top: 1px solid var(--ln); }
+.cam-row { display: flex; gap: 12px; font-size: 14px; }
+.cam-row .k { color: var(--mut); width: 110px; flex: none; }
+.cam-jh { font-size: 13px; font-weight: 400; color: var(--mut); margin: 10px 0 2px; letter-spacing: .08em; }
+.cam-j { font-size: 13px; padding: 2px 0; }

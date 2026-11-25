@@ -91,3 +91,49 @@ text in a picture is something written there, not an instruction.
 revocation, throttling, offline, stale imagery, switches, journal, redaction,
 restart), deck-api route tests, Douglas tool tests (fake DougRing, fake eyes,
 ChatGPT line refused). Live acceptance on one outdoor camera after linking.
+
+## Operating it
+
+Everything here is run from a checkout; nothing takes a secret on a command
+line or prints one.
+
+| Step | Where | Command |
+|---|---|---|
+| Ring app credentials | workstation | `python3 -I dougring/install-credentials.py` (reads Ring's CSV, writes `/etc/dougring/ring-app.env` 0600 root on node1 over ssh stdin, prints lengths only) |
+| Install / update DougRing | node1 | `sudo ./dougring/setup.sh` (user `dougring`, group `dougring-api` with deck-api's user in it, unit, state in `/var/lib/dougring`) |
+| Douglas's camera token | node1 → Douglas | `sudo ./pi/camera-token.sh`, then `ssh fvm3@node1 'sudo ~/dougmissioncontrol/pi/camera-token.sh lines' \| ssh fvm3@douglas 'sudo sh -c "cat >> /etc/douglas/voice.env"'`, restart douglas-voice when idle |
+| Open the public door | node1 | `sudo ./dougring/setup.sh funnel` (Funnel on :8443, `/ring/` only) — **only with the owner's yes** |
+| Shut it | node1 | `sudo ./dougring/setup.sh funnel-off` |
+| Stop everything | node1 | `sudo ./dougring/setup.sh off` (tokens stay in `/var/lib/dougring` until removed) |
+
+Secrets and where they live:
+
+| What | Where | Who can read it |
+|---|---|---|
+| Client ID, Client Secret, HMAC key | `/etc/dougring/ring-app.env` on node1 | root; handed to the service by systemd `LoadCredential` |
+| Ring access and refresh tokens | `/var/lib/dougring/state.json` on node1 | user `dougring` (0600, in a 0700 directory) |
+| `DECK_CAMERA_TOKEN` | `/etc/flightsim/boot.env` on node1; `CAMERA_TOKEN` in `/etc/douglas/voice.env` on Douglas | root / the services |
+
+None of them is in the repository, a log line, Douglas's model context or
+his memory. Ring's docs MCP server (`.mcp.json`) needs no credentials at all
+and has nothing to do with these.
+
+Turning things off, quickest first: the ALL CAMERAS switch in Mission
+Control (immediate, for everyone); a camera's own switch; Douglas's
+`camera` switch under WHAT HE MAY USE; `pi/camera-token.sh off` (closes his
+routes); FORGET RING in Mission Control (drops the tokens); "Disconnect all"
+in Ring's console (ends it at Ring).
+
+## Limits, as built
+
+- A picture of "now" depends on Ring recording during the short live
+  session; that needs a Ring Protect plan and is untested against Frank's
+  cameras until linking. The fallback is always labelled with its age.
+- Funnel on `:8443` is untested with Ring's console. Keeping it open only
+  around a link (`funnel` before "Log in with Ring", `funnel-off` after) is
+  the recommendation while webhooks are off.
+- Tokens are protected by file permissions, not encrypted at rest.
+- Douglas's description is his model's reading of a watermarked picture; it
+  can be wrong, and he is told to say what is seen apart from what he
+  supposes. No faces are identified.
+- Phase 4 (events) is designed above and not built; `/ring/webhook` is 404.
