@@ -130,8 +130,10 @@ SYSTEM_PROMPT = E("DOUGLAS_SYSTEM_PROMPT", (
     "Real questions: general knowledge (science, history, geography, "
     "language, code, how things work) you answer from what you know, as "
     "any well-read person would. What you lack is anything about this "
-    "home. You have no cameras or sensors in it, you cannot check on or "
-    "control any device, and you remember nothing from before this "
+    "home. You have no sensors in it and cannot control any device; where "
+    "a camera tool is among your tools you may look through the cameras it "
+    "names, and without a look in this turn you do not know what is outside "
+    "now. You remember nothing from before this "
     "conversation. So about this home, whoever is in it and what is going "
     "on here, you know only what this message states and what has been "
     "said in this conversation. Never invent facts about the house, the people "
@@ -486,7 +488,7 @@ class Transcript:
     def __init__(self, path: str) -> None:
         self.path = path
 
-    def append(self, who: str, text: str, via: str, image: str = "") -> dict | None:
+    def append(self, who: str, text: str, via: str, image: str = "", camera: bool = False) -> dict | None:
         if who == "user":
             text = " ".join(str(text).split())   # what was said: one line
         else:
@@ -500,6 +502,8 @@ class Transcript:
                "text": text, "via": via if via in VIAS else "voice"}
         if image and PICTURE_ID.fullmatch(image):
             rec["image"] = image                 # a picture he made goes with the line
+        if camera:
+            rec["camera"] = True                 # what a camera showed: never gone through for memories
         line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -2122,6 +2126,9 @@ def camera_call(method: str, path: str, body=None, timeout: float = 15):
             return r.status, {k.lower(): v for k, v in r.headers.items()}, r.read(12_000_000)
     except urllib.error.HTTPError as e:
         return e.code, {}, e.read(65536)
+    except (urllib.error.URLError, OSError) as e:     # no answer at all: said as such, never a guess
+        log(f"camera: Mission Control did not answer ({type(e).__name__})")
+        return 0, {}, b""
 
 
 def camera_list() -> tuple[bool, list]:
@@ -2145,6 +2152,7 @@ CAMERA_REFUSED = {
     429: "Ring has asked DougRing to slow down. No picture was taken: say so, and that it can be tried again in a minute.",
     401: "DougRing has lost its link to Ring (the owner has to link the Ring account again). No picture was taken.",
     503: "That camera is offline, or DougRing on the Pi is not running. No picture was taken: say so.",
+    0: "Mission Control on the Pi did not answer, so no picture was taken. Say so, and do not guess what is outside.",
 }
 
 
@@ -2187,6 +2195,7 @@ def tool_camera(do: str = "look", camera: str = "", question: str = "") -> str:
     except ValueError:
         obs = {}
     q = " ".join(str(question or "").split()) or CAMERA_ASK
+    CONVO["camera"] = True                          # a picture of the house is in the conversation now
     try:
         seen = looked_at(fitted(img), q, (), full=img, first=True)
     except Exception as e:      # noqa: BLE001 - the picture came, the eyes did not
@@ -2195,12 +2204,29 @@ def tool_camera(do: str = "look", camera: str = "", question: str = "") -> str:
                 "shows. Say so, and do not guess what is outside.")
     finally:
         img = b""                                   # not kept
+    if not str(seen or "").strip():
+        return ("A picture came from the camera, but your eyes said nothing about it, so you do not know what "
+                "it shows. Say so, and do not guess what is outside.")
     name = as_data(obs.get("camera_name") or cam.get("name"), 40)
-    taken = moment((obs.get("captured_ms") or 0) / 1000)
+    try:
+        taken = float(obs.get("captured_ms") or 0) / 1000
+    except (TypeError, ValueError):
+        taken = 0.0
+    taken = taken if math.isfinite(taken) and taken > 0 else None
     age = (time.time() - taken) if taken else None
+    if age is not None and age < -5:
+        taken = age = None                          # a clock out of step: unknown, never "now"
+    age = max(0.0, age) if age is not None else None
     when = (f"taken at {time.strftime('%H:%M:%S', time.localtime(taken))}, {span(age)} ago" if taken
             else "taken at a time Ring did not say")
-    if obs.get("source") == "live-triggered" and age is not None and age < 120:
+    live = obs.get("source") == "live-triggered" and age is not None and age < 120
+    ctx = getattr(TURN, "ctx", None)
+    if ctx is not None:
+        ctx["camera_obs"] = (f"{name} camera, picture {when}" + ("" if live else "; not live"))
+        ctx["camera_note"] = (f"[You looked through the {name} camera; the picture was {when}. What it showed "
+                              "was for that turn only and is not kept: it is not what is there now. Look again "
+                              "to know.]")
+    if live:
         fresh = "This is a picture of now: Ring recorded it because you asked."
     else:
         fresh = ("This is NOT live. It is the latest picture Ring already had"
@@ -2474,7 +2500,7 @@ def tool_draw(prompt: str = "", shape: str = "square") -> str:
 # counts conversations, so that work begun in one does not land in the next;
 # "repo" is the repository it has been about, for a question that names none.
 CONVO = {"private": False, "pending": None, "news": "", "epoch": 0, "repo": "", "recalled": set(),
-         "links": set()}
+         "links": set(), "camera": False}
 # An address as it was given, for telling whether one he wants to fetch is
 # one that was already in the conversation. See run_tool.
 AN_ADDRESS = re.compile(r"https?://[^\s<>\"'\]\)\}\\]+", re.I)
@@ -3877,6 +3903,13 @@ def finished_conversations(path: str, offset: int, now: float, idle: float) -> l
             if cur is not None:
                 out.append(cur)
             cur = {"started": ts, "ended": ts, "lines": [], "end": at}
+        if line.get("camera") and line.get("who") != "user":
+            # A turn that looked through a camera: neither his answer nor the
+            # question it answered is gone through for memories.
+            if cur["lines"] and cur["lines"][-1]["who"] == "user":
+                cur["lines"].pop()
+            cur.update(ended=ts, end=at)
+            continue
         cur["lines"].append({"who": "user" if line.get("who") == "user" else "douglas",
                              "text": str(line["text"]), "via": str(line.get("via") or "")})
         cur.update(ended=ts, end=at)
@@ -5296,6 +5329,17 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
                     "and while it is you can fetch only an address exactly as the person gave it or "
                     "as a lookup returned it: not one you have put together or changed. If the "
                     "person wants that page, ask them for its address.")
+    # A camera picture is the house's too, and words in it (a sign, a label,
+    # a note on the door) are somebody else's. After a look, his own
+    # searches and fetches stay off for the rest of the conversation, and no
+    # address seen in a picture counts as one a lookup returned.
+    if name in ("search", "reddit", "read_page") and CONVO.get("camera") and not theirs:
+        said = (ctx or {}).get("said") or []
+        if name != "read_page" or address(args.get("url")) not in addresses_in(" ".join(map(str, said))):
+            log(f"tool {name} refused: a camera picture is in this conversation")
+            return ("Not done. A camera picture has been looked at in this conversation, and while it is "
+                    "part of it you cannot search or fetch pages in words of your own. If the person "
+                    "wants something looked up, ask them to say exactly what.")
     if name in ("search", "reddit") and CONVO["recalled"] and not theirs:
         log(f"tool {name} refused: what he remembers is in this conversation")
         return ("Not searched. What you remember about the person is part of this conversation, and "
@@ -5304,7 +5348,7 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
     if name == "jobcontext":             # it says what it did itself: names, never values
         keep = args
     else:
-        if name not in ("draw", "edit", "search", "reddit", "repo", "memory") and not quiet:    # those say what they did, never the words
+        if name not in ("draw", "edit", "search", "reddit", "repo", "memory", "camera") and not quiet:    # those say what they did, never the words
             log(f"tool {name} {json.dumps({k: str(v)[:80] for k, v in args.items()})}")
         keep = {k: v for k, v in args.items() if k in props}
     began = time.time()
@@ -5321,7 +5365,7 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
         audit("tool", name, what, False, (time.time() - began) * 1000, type(e).__name__)
         return f"The {name} lookup failed: {str(e)[:120] or type(e).__name__}"
     audit("tool", name, what, True, (time.time() - began) * 1000, "the person's asking" if theirs else "his own")
-    if len(CONVO["links"]) < 600:        # the addresses a lookup returned: ones he may go on to read
+    if len(CONVO["links"]) < 600 and name != "camera":   # the addresses a lookup returned (never one read off a picture)
         CONVO["links"] |= addresses_in(result)
     # What comes back is someone else's text. It is information, not orders.
     # (The records tool has cut its own answer to size, and said so in it.)
@@ -5371,6 +5415,11 @@ def remember(call: dict, found: str) -> None:
         except (ValueError, AttributeError):
             args = "{}"
     cid = call.get("id") or "call"
+    if f.get("name") == "camera":
+        # What a camera showed was for that turn: kept, it would stand in
+        # front of him as "a picture of now" for the next six exchanges.
+        found = ctx.get("camera_note") or ("[A look through a camera. What it showed was for that turn only and "
+                                           "is not kept; it is not what is there now. Look again to know.]")
     if len(found) > TRACE_RESULT_MAX:
         found = found[:TRACE_RESULT_MAX] + " [... the rest was for that turn and is not kept]"
     ctx["trace"] += [
@@ -5779,10 +5828,10 @@ class Pipeline:
         the records read in it) is put aside and put back as it was; what
         waits there for a yes is not touched at all. Nothing of the turn
         stays in front of him afterwards."""
-        kept = (self.history, self.last_exchange, {k: CONVO[k] for k in ("private", "news", "repo", "recalled", "links")},
+        kept = (self.history, self.last_exchange, {k: CONVO[k] for k in ("private", "news", "repo", "recalled", "links", "camera")},
                 dict(SEEN))
         self.history, self.last_exchange = list(turns), time.time()
-        CONVO.update(private=False, news="", repo="", recalled=set(), links=set())
+        CONVO.update(private=False, news="", repo="", recalled=set(), links=set(), camera=False)
         SEEN.update(image=b"", full=b"")
         try:
             yield
@@ -6423,7 +6472,13 @@ class Pipeline:
         if len(said_at) > HISTORY_TURNS:                 # whole exchanges, the newest few
             self.history = self.history[said_at[-HISTORY_TURNS]:]
         self.last_exchange = time.time()
-        self.tr.append("douglas", reply, via, image)
+        ctx = getattr(TURN, "ctx", None) or {}
+        looked = bool(ctx.get("camera_obs"))
+        if looked and ctx["camera_obs"] not in reply:
+            # Which camera, when, and how old: said by the program, not left
+            # to the model to remember to say.
+            reply = f"{reply}\n\n({ctx['camera_obs']})"
+        self.tr.append("douglas", reply, via, image, camera=looked or "camera" in (ctx.get("called") or ()))
         self.st.update(last_turn=time.time())
         return reply if self._current(turn) else None
 
@@ -6548,7 +6603,7 @@ class Pipeline:
         self.history = []
         SEEN.update(image=b"", full=b"")
         CONVO.update(private=False, pending=None, news="", epoch=CONVO["epoch"] + 1, repo="",
-                     recalled=set(), links=set())
+                     recalled=set(), links=set(), camera=False)
 
     def _hush(self) -> None:
         """Cut short an utterance playing on the remote speaker. Called with

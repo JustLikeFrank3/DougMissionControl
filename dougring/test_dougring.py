@@ -133,6 +133,7 @@ class FakeRing:
                             return self._send(425, {"errors": [{"code": "RECORDING_NOT_READY"}]})
                         fake.picture_ts = body["timestamp"]
                     else:
+                        fake.range_asked = body["start_timestamp"]
                         fake.picture_ts = int(time.time() * 1000) - 3 * 3600 * 1000
                     loc = f"http://127.0.0.1:{fake.port}/presigned?security_token=xyz"
                     return self._send(303, headers={"Location": loc})
@@ -223,21 +224,22 @@ class FakeRing:
                     if hdrs.get("x-auth-token") not in self.valid_access or self.revoked:
                         conn.sendall(f"RTSP/1.0 401 Unauthorized\r\nCSeq: {cseq}\r\n\r\n".encode())
                         continue
-                    sdp = b"v=0\r\nm=video 9 RTP/SAVP 127\r\n"
+                    # as Ring's bridge really answers: plain RTP, a control per track
+                    sdp = (b"v=0\r\na=control:*\r\nm=audio 9 RTP/AVP 111\r\na=control:trackID=0\r\n"
+                           b"m=video 9 RTP/AVP 100\r\na=control:trackID=1\r\na=rtpmap:100 H264/90000\r\n")
                     conn.sendall(f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nSession: sess-1;timeout=60\r\n"
                                  f"Content-Length: {len(sdp)}\r\n\r\n".encode() + sdp)
                 elif method == "SETUP":
-                    client_port = int(hdrs["transport"].split("client_port=")[1].split("-")[0])
+                    if "TCP" not in hdrs.get("transport", "") or not first.split()[1].endswith("/trackID=1"):
+                        conn.sendall(f"RTSP/1.0 461 Unsupported Transport\r\nCSeq: {cseq}\r\n\r\n".encode())
+                        continue
                     conn.sendall(f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nSession: sess-1\r\nTransport: "
-                                 f"RTP/SAVP;unicast;client_port={client_port}-{client_port+1};"
-                                 f"server_port=40000-40001;source=127.0.0.1\r\n\r\n".encode())
+                                 f"RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n".encode())
                 elif method == "PLAY":
                     self.live_started.append(time.time())
                     conn.sendall(f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nSession: sess-1\r\n\r\n".encode())
-                    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    for _ in range(5):
-                        u.sendto(b"\x80" + b"x" * 100, ("127.0.0.1", client_port))
-                    u.close()
+                    for _ in range(5):          # interleaved media on the same connection
+                        conn.sendall(b"$\x00\x00\x64" + b"\x80" + b"x" * 99)
                 elif method == "TEARDOWN":
                     conn.sendall(f"RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nSession: sess-1\r\n\r\n".encode())
                     return
@@ -438,7 +440,9 @@ class DougRingTest(unittest.TestCase):
         self.assertLessEqual(abs(obs["age_s"]), 10)
         self.assertTrue(obs["captured_ms"] and obs["retrieved_ms"])
         methods = [m for m, _, _ in self.fake.rtsp_seen]
-        self.assertEqual(methods, ["DESCRIBE", "SETUP", "PLAY", "TEARDOWN"])
+        self.assertEqual(methods[:3], ["DESCRIBE", "SETUP", "PLAY"])
+        self.assertTrue(self.fake.rtsp_seen[1][2].endswith("/trackID=1"))
+        self.assertIn("TCP", self.fake.rtsp_seen[1][1]["transport"])
         desc = self.fake.rtsp_seen[0]
         self.assertIn("x-auth-token", desc[1])
         self.assertNotIn("access-", desc[2])            # the token is never in the URL
@@ -456,6 +460,14 @@ class DougRingTest(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(obs["source"], "latest existing")
         self.assertGreater(obs["age_s"], 3 * 3600 - 60)
+        linked = next(iter(self.store.data["accounts"].values()))["linked_at"]
+        self.assertGreaterEqual(self.fake.range_asked, linked * 1000)   # never before the link
+
+    def test_live_sessions_are_rationed(self):
+        self.ready()
+        self.assertEqual(self.image()[1]["source"], "live-triggered")
+        st, obs, _ = self.image()                        # again at once: the camera is not woken twice
+        self.assertEqual((st, obs["source"], len(self.fake.live_started)), (200, "latest existing", 1))
 
     def test_global_switch_is_enforced(self):
         self.ready()

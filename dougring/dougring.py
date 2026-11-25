@@ -78,6 +78,8 @@ CAPTURE_WAIT_S = 90           # how long a second request for the same camera wa
 LIVE_HOLD_S = 6               # a live session held this long makes the camera record
 FRESH_WAIT_S = 60             # how long Ring may take to have that recording's picture ready
 FRESH_POLL_S = 3
+LIVE_MIN_GAP_S = 30           # a camera is woken for a live session at most this often
+LIVE_PER_HOUR = 20            # and at most this many times an hour; inside that, the latest picture
 MAX_ACCOUNTS = 5              # Ring's limit for a private app
 SNAPSHOT_WINDOW_MS = 24 * 3600 * 1000
 
@@ -243,22 +245,22 @@ class Ring:
     def live_session(self, device_id, access_token, hold_s, host=None, port=None):
         """Start a live session on Ring's RTSP bridge so the camera records,
         hold it hold_s seconds, end it. Returns when it started (epoch ms).
-        The media (H.265 in AES-GCM SRTP) is received and thrown away: it is
-        only the session that is wanted. The token goes in X-Auth-Token, as
-        Ring prefers, never in a URL."""
+
+        As the bridge answered on 2026-11-25 (not as its docs show): the SDP
+        lists plain RTP/AVP tracks with their own controls (trackID=0 audio,
+        trackID=1 video, H.264), UDP SETUP is refused (461), and SETUP of the
+        video track with RTP/AVP/TCP interleaved works. The media arrives on
+        the same TLS connection and is read and thrown away: only the session
+        is wanted. The token goes in X-Auth-Token, never in a URL."""
         host, port = host or self.rtsp_host, port or self.rtsp_port
-        url = f"rtsps://{RTSP_HOST}:{RTSP_PORT}/v1/devices/{urllib.parse.quote(device_id, safe='')}/stream"
+        base = f"rtsps://{RTSP_HOST}:{RTSP_PORT}/v1/devices/{urllib.parse.quote(device_id, safe='')}/stream"
         raw = socket.create_connection((host, port), timeout=self.timeout)
         sock = (raw if self.rtsp_plain else
                 ssl.create_default_context().wrap_socket(raw, server_hostname=host))
-        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp.bind(("0.0.0.0", 0))
-        udp.settimeout(0.5)
-        rtp = udp.getsockname()[1]
         state = {"cseq": 0, "session": None}
         buf = sock.makefile("rb")
 
-        def call(method, headers):
+        def call(method, url, headers):
             state["cseq"] += 1
             lines = [f"{method} {url} RTSP/1.0", f"CSeq: {state['cseq']}", f"User-Agent: {USER_AGENT}"]
             if state["session"]:
@@ -267,47 +269,59 @@ class Ring:
             sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
             status_line = buf.readline(1024).decode("latin-1").split()
             hdrs = {}
-            while True:
+            for _ in range(64):
                 line = buf.readline(4096).decode("latin-1").strip()
                 if not line:
                     break
                 k, _, v = line.partition(":")
                 hdrs[k.strip().lower()] = v.strip()
             n = int(hdrs.get("content-length") or 0)
-            if 0 < n <= 65536:
-                buf.read(n)
+            body = buf.read(n) if 0 < n <= 65536 else b""
             code = int(status_line[1]) if len(status_line) > 1 and status_line[1].isdigit() else 0
             if code != 200:
                 raise RingError(code or 502, f"RTSP {method}")
-            return hdrs
+            return hdrs, body
+
+        def video_control(sdp):
+            """The video track's control, from the SDP: trackID=1 if it says nothing."""
+            in_video, control = False, ""
+            for line in sdp.decode("latin-1", "replace").splitlines():
+                if line.startswith("m="):
+                    in_video = line.startswith("m=video")
+                elif in_video and line.startswith("a=control:"):
+                    control = line.split(":", 1)[1].strip()
+            if control.startswith("rtsp"):
+                return control
+            return f"{base}/{control or 'trackID=1'}"
         try:
-            got = call("DESCRIBE", {"Accept": "application/sdp", "X-Auth-Token": access_token})
+            got, sdp = call("DESCRIBE", base, {"Accept": "application/sdp", "X-Auth-Token": access_token})
             state["session"] = (got.get("session") or "").split(";")[0] or None
-            got = call("SETUP", {"Transport": f"RTP/SAVP;unicast;client_port={rtp}-{rtp + 1}"})
-            parts = dict(p.split("=", 1) for p in got.get("transport", "").split(";") if "=" in p)
-            src = parts.get("source", "").strip()
-            sport = int((parts.get("server_port") or "0").split("-")[0] or 0)
-            if src and sport:
-                udp.sendto(b"\x00", (src, sport))        # NAT hole punch, as Ring's docs say
-            call("PLAY", {})
+            got, _ = call("SETUP", video_control(sdp), {"Transport": "RTP/AVP/TCP;unicast;interleaved=0-1"})
+            state["session"] = (got.get("session") or state["session"] or "").split(";")[0] or None
+            call("PLAY", base, {})
             started = int(time.time() * 1000)
             end = time.time() + hold_s
-            packets = 0
+            sock.settimeout(1)
+            received = 0
             while time.time() < end:
                 try:
-                    udp.recvfrom(2048)
-                    packets += 1
-                except socket.timeout:
-                    pass
-            log(f"live session: {packets} packets in {hold_s} s")
+                    chunk = buf.read1(65536)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                except (socket.timeout, ssl.SSLError, OSError):
+                    continue
+            log(f"live session: {received // 1024} KB in {hold_s} s, thrown away")
+            if received == 0:
+                raise RingError(504, "the live session sent nothing")
             return started
         finally:
-            try:
-                if state["session"]:
-                    call("TEARDOWN", {})
+            try:                      # interleaved media is still coming: send and go
+                state["cseq"] += 1
+                sock.sendall((f"TEARDOWN {base} RTSP/1.0\r\nCSeq: {state['cseq']}\r\n"
+                              f"Session: {state['session']}\r\n\r\n").encode())
             except Exception:
                 pass
-            udp.close()
             sock.close()
 
     def fetch_presigned(self, url):
@@ -370,6 +384,7 @@ class DougRing:
         self.cooldown_until = 0.0              # Ring said 429: nothing is asked until then
         self._dev_cache = None
         self._cam_locks = {}
+        self._live = {}                        # camera -> when its live sessions started (seconds)
 
     # ── token exchange (Ring's servers → us) ─────────────────────────────
     def token_exchange(self, form):
@@ -748,7 +763,15 @@ class DougRing:
         try:
             img = meta = None
             source = "latest existing"
+            now_s = self.now()
+            recent = [t for t in self._live.get(cam["id"], []) if now_s - t < 3600]
+            self._live[cam["id"]] = recent
+            if fresh and recent and (now_s - recent[-1] < LIVE_MIN_GAP_S or len(recent) >= LIVE_PER_HOUR):
+                log(f"image: {cam['id'][-6:]} was woken {int(now_s - recent[-1])} s ago "
+                    f"({len(recent)} this hour): the latest picture instead")
+                fresh = False
             if fresh:
+                recent.append(now_s)
                 try:
                     started = self._live_trigger(aid, cam)
                     img, meta = self._download_after(aid, cam["id"], started)
@@ -756,18 +779,30 @@ class DougRing:
                 except (RingError, OSError) as e:
                     log(f"image: live picture failed ({e}); taking the latest existing one")
             if img is None:
+                # Ring has nothing from before the link (TIME_RANGE_NOT_AUTHORIZED).
+                linked = int(self.store.data["accounts"].get(aid, {}).get("linked_at", 0) * 1000) + 1000
                 img, meta = self._download(aid, cam["id"],
                                            {"type": "latest_in_range",
-                                            "start_timestamp": int(self.now() * 1000) - SNAPSHOT_WINDOW_MS + 60_000})
+                                            "start_timestamp": max(int(self.now() * 1000) - SNAPSHOT_WINDOW_MS + 60_000,
+                                                                   linked)})
         except Exception as e:
             self._journal(role, "image", cam["id"], f"failed: {getattr(e, 'detail', '') or type(e).__name__}")
             raise
         finally:
             lock.release()
-        captured = int(meta.get("media_timestamp") or 0) or None
-        age = round((retrieved_at - captured) / 1000) if captured else None
+        # The age is counted from when the picture is in hand: a live-triggered
+        # picture is of a moment a few seconds after the request began.
+        delivered = int(self.now() * 1000)
+        try:
+            captured = int(meta.get("media_timestamp") or 0) or None
+        except ValueError:
+            captured = None
+        age = round((delivered - captured) / 1000) if captured else None
+        if age is not None and age < -5:
+            age = None                         # a clock out of step: unknown, never "now"
         info = {"camera_id": cam["id"], "camera_name": cam["name"], "captured_ms": captured,
-                "retrieved_ms": retrieved_at, "source": source, "age_s": age,
+                "requested_ms": retrieved_at, "retrieved_ms": delivered, "source": source,
+                "age_s": max(0, age) if age is not None else None,
                 "media_origin": meta.get("media_origin", ""), "status": "ok",
                 "content_type": meta.get("content_type", "image/jpeg")}
         self._journal(role, "image", cam["id"], "ok", source=source, age_s=age)
