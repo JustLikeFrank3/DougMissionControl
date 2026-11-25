@@ -915,9 +915,11 @@ class Desk:
     def assistant(self, op: str, r: dict):
         s = self.store
         if op == "recall":
+            # Asked for somebody who is not the owner, it is not marked as used.
             return {"memories": s.recall(str(r.get("text") or "")[:2000], whole(r.get("limit") or 6, 12, 1),
                                          whole(r.get("budget") or 900, 3000, 100),
-                                         r.get("kinds") if isinstance(r.get("kinds"), list) else None)}
+                                         r.get("kinds") if isinstance(r.get("kinds"), list) else None,
+                                         mark=r.get("mark") is not False)}
         if op == "remember":
             source = r.get("source") if r.get("source") in ("said", "observed", "inferred") else "inferred"
             i, what = s.add(r.get("kind"), r.get("subject"), r.get("text"), source, "douglas",

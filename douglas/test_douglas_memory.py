@@ -293,6 +293,13 @@ check("and nothing else: it cannot note, forget, hand in a conversation, write t
       ([rd(**q)["ok"] for q in EVERYTHING_ELSE], o(op="export")["memories"] == before,
        len(o(op="events", limit=500)["events"]) == events_before), ([False] * len(EVERYTHING_ELSE), True, True))
 check("what a reader looked up is not marked as used by him", uses(), used_by_him)
+a(op="recall", text="kettle display", mark=False)
+store.flush()
+unmarked = uses()
+a(op="recall", text="kettle display")
+store.flush()
+check("nor what is looked up at Douglas's own door for somebody who is not the owner; for the owner it is",
+      (unmarked == used_by_him, uses() != used_by_him), (True, True))
 check("a door this does not know of is no door, and not Douglas's by default",
       [desk.call(role, {"op": "recall", "text": "kettle"})["ok"] for role in ("visitor", "", None, "Assistant")],
       [False] * 4)

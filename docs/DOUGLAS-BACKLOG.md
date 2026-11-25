@@ -7,10 +7,8 @@ be under "Blocking" below.
 
 ## Blocking
 
-Nothing known. The independent review of the work from the notices onwards
-is listed under "From the review" as it comes in; anything it shows that lets
-somebody without the owner's own credentials write, approve, run a tool or
-read his memory is fixed before it is listed anywhere else.
+Nothing known. The independent review found three things in ChatGPT's line
+that blocked, and they are fixed: see "From the review" at the end.
 
 ## Waiting for the owner to say
 
@@ -104,5 +102,64 @@ read his memory is fixed before it is listed anywhere else.
 
 ## From the review
 
-(Filled in when the review reports. Blocking findings are fixed first and
-named here with the commit that fixed them; the rest are listed as they are.)
+An independent review of everything from the notices onwards, ChatGPT's line
+first. (The first reviewer stopped on a model limit without a report; this
+is the second, on another model.) It was asked to separate what blocks from
+what is advice.
+
+Blocking, and fixed before this was written (the commit "what a review
+found in ChatGPT's line"):
+
+- A turn of the house's that began while ChatGPT's was under way (cancel,
+  then talk) ran with ChatGPT's conversation in front of him and the house's
+  tools; and a turn of the house's that had been cut short and was still
+  unwinding could pick ChatGPT's conversation up the other way. Shown with a
+  small program. Now ChatGPT's turn has the conversation alone: it waits
+  until none of the house's is under way, the house's wait for it, and what
+  a job, an edit or an answer on a screen adds to the conversation waits too.
+  The house comes first: its turn is taken at once and ChatGPT's is cut
+  short. The reviewer's program no longer does what it did.
+- ChatGPT's turn could begin while he was speaking to the house and cut him
+  short. It begins only when he is doing nothing, and cuts nothing short.
+- What was looked up in his memory for ChatGPT was marked as used, which
+  decides what is kept longest. It is not marked for a line that is not the
+  owner's.
+- With those, two of its smaller points: what ChatGPT says its conversation
+  was has its square brackets taken out, so it cannot pass for a note of the
+  program's own; and the pipeline's own token is compared in constant time.
+
+Advice, not done:
+
+- Whoever holds the secret address can still take his time: sixty messages
+  an hour, each a few seconds of his thinking. The house is no longer kept
+  waiting by it, and no notice is hidden by it; lowering `CHATGPT_PER_HOUR`
+  or a gap between messages would cut it further. The cap is counted before
+  a message has waited its turn, and several messages can come in one
+  request.
+- The secret address is now as good as reading what he remembers and what
+  his instruction files say of the owner, and it is kept in a URL. See
+  ChatGPT's line, above.
+- `announce()` says a notice was said aloud even if it was cut short. (Said
+  aloud is off.)
+- The pipeline's own routes would be open to the tailnet if
+  `VOICE_PTT_TOKEN` were ever empty: it should refuse to start without one.
+- `chatgpt-line.sh off` and `webui-setup.sh off` take a token out of the
+  settings, but it works until `douglas-voice` is next restarted. Both say so.
+- `mcp-setup.sh` stops the memory to hand it its third door and has no trap:
+  a failure in between would leave it stopped. `webui-setup.sh` has one.
+- `chatgpt-line.sh` writes its two settings files one after the other, not
+  both or neither.
+
+What it tried to break and could not: who a message is from is set by the
+token alone; a chat page's errands reach the bare model only from the chat
+page; no tool runs on ChatGPT's line but his memory, read; nothing is noted
+or forgotten there; no yes is taken, and what waits for one is neither
+answered nor dropped; "new conversation" from there ends only its own; the
+owner's notices are not handed over; what ChatGPT said is not gone through
+afterwards; the connector's journal has no words; the line answers on
+Douglas only; an approval is a yes to one number, runs out, and travels the
+owner's path; the pipeline can neither write the switches nor reach their
+door; only the watch raises and clears a notice; nothing is said aloud
+unless switched on; the memory's door for readers and `douglas-mcp` write
+nothing; the setup scripts show no secret but the one `mcp-setup.sh show`
+is for.

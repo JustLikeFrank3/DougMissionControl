@@ -950,6 +950,15 @@ run. Four to seven seconds a message. *Not seen:* a message typed in ChatGPT
 itself, which takes the owner's ChatGPT account; what was sent is what its
 connector client sends.
 
+*What a second pair of eyes found.* That a turn of the house's begun while
+ChatGPT's was under way (cancel, then talk) was answered with ChatGPT's
+conversation in front of him, and the house's tools. ChatGPT's turn now has
+the conversation alone, waits until none of the house's is under way, and
+gives way at once to one that begins; it starts only when he is doing
+nothing, so it never talks over him; and what is looked up in his memory for
+it is not marked as used. The program the reviewer wrote to show it no longer
+shows it. What was advice and is not done is in `docs/DOUGLAS-BACKLOG.md`.
+
 **A workshop.** Douglas can clone a repository from GitHub onto his own
 machine, answer questions from its code, read its issue tracker, and have a
 job done on it: "clone my kettle repo", "how does the boil timer work?",
