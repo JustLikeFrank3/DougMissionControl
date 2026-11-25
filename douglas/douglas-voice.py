@@ -6485,7 +6485,10 @@ class Pipeline:
             # Which camera, when, and how old: said by the program, not left
             # to the model to remember to say.
             reply = f"{reply}\n\n({ctx['camera_obs']})"
-        self.tr.append("douglas", reply, via, image, camera=looked or "camera" in (ctx.get("called") or ()))
+        # Marked for the whole conversation once it has had a look: a follow-up
+        # answered from what was seen carries the scene as much as the look did.
+        self.tr.append("douglas", reply, via, image,
+                       camera=looked or "camera" in (ctx.get("called") or ()) or bool(CONVO.get("camera")))
         self.st.update(last_turn=time.time())
         return reply if self._current(turn) else None
 
