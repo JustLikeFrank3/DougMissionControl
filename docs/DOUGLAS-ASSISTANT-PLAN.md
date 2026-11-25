@@ -324,6 +324,15 @@ own criteria when they are asked for. No device control is part of phases
   the correction stands and he says where to change it. That is the safe
   reading of "the owner's word", and it is a one-line change if it proves a
   nuisance.
+- Whether to fence in Douglas's other services. The model server, Open
+  WebUI and the speech and picture services run as the same user as the
+  pipeline. They cannot open his memory's door, but they can write to the
+  record of what was said, which is what memories are made from, and they
+  can read the pipeline's settings, the push-to-talk token among them.
+  Closing that means changing those units (the record read-only to them,
+  the settings out of their sight) and restarting each, the model server
+  included. An independent review raised it; it was left because those
+  units are no part of this work and a mistake there stops him talking.
 
 ## 5. Rolling back
 
