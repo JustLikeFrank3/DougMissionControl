@@ -143,15 +143,20 @@ WAITING = {"id": "a1b2c3d4", "kind": "push", "text": "This would push 2 commits 
            "asked": 1_800_000_000.0, "until": 1_800_000_180.0}
 with open(voice_file, "w") as f:
     json.dump({"state": "idle", "ts": time.time(), "pending": dict(WAITING, extra="x" * 5000),
-               "tools": {"search": "on", "repo": "off", "draw": "absent", "shell": "enabled", "memory": 1}}, f)
+               "tools": {"search": "on", "repo": "off", "draw": "absent", "shell": "enabled", "memory": 1},
+               "job": {"running": True, "what": "Fix the kettle timer. " * 40, "began": 1_800_000_000.0, "ended": None,
+                       "log": "x" * 5000}}, f)
 got = agent.voice_state()
+check("the job in his workshop is passed on as that there is one, what it was asked to do, cut short, and since when",
+      (got["job"]["running"], len(got["job"]["what"]), got["job"]["began"], got["job"]["ended"], sorted(got["job"])),
+      (True, 300, 1_800_000_000.0, None, ["began", "ended", "running", "what"]))
 check("the change that is waiting is passed to the owner's screens in the shape it is known to have, and each tool "
       "as on, off or not set up and nothing else", (got["pending"], got["tools"]),
       (WAITING, {"search": "on", "repo": "off", "draw": "absent"}))
 with open(voice_file, "w") as f:
     json.dump({"state": "idle", "ts": time.time(), "pending": {"text": "No number."}, "tools": ["search"]}, f)
 check("what is not in that shape is not passed on at all",
-      (agent.voice_state()["pending"], agent.voice_state()["tools"]), (None, None))
+      (agent.voice_state()["pending"], agent.voice_state()["tools"], agent.voice_state()["job"]), (None, None, None))
 check("an answer needs the number of what it answers and a true or a false: nothing else is passed to the pipeline",
       [agent.relay_approval(b)[0] for b in ({}, {"id": "a1b2c3d4"}, {"id": "a1b2c3d4", "yes": "true"},
                                              {"id": "a1b2c3d4", "yes": 1}, {"id": 7, "yes": True}, {"id": "", "yes": True})],
@@ -192,9 +197,11 @@ check("a yes given on the phone goes to the pipeline with its number, as a yes f
 pipe.shutdown()
 agent.VOICE_PTT_URL = ""
 check("a switch is a tool and a true or a false; without the switches installed it says so",
-      ([agent.relay_switch(b)[0] for b in ({}, {"tool": "search"}, {"tool": "search", "on": "off"}, {"tool": 3, "on": True})],
+      ([agent.relay_switch(b)[0] for b in ({}, {"tool": "search"}, {"tool": "search", "on": "off"}, {"tool": 3, "on": True},
+                                           {"tool": "search\ndouglas-agent: all is well", "on": True},
+                                           {"tool": "Search Engine", "on": True})],
        agent.relay_switch({"tool": "search", "on": False})),
-      ([400] * 4, (200, {"ok": False, "message": "the switches are not installed on Douglas"})))
+      ([400] * 6, (200, {"ok": False, "message": "the switches are not installed on Douglas"})))
 import socket as _socket      # noqa: E402
 sdir = tempfile.mkdtemp(dir=os.environ.get("XDG_RUNTIME_DIR") or None)
 spath, SWITCHED = os.path.join(sdir, "switch.sock"), []

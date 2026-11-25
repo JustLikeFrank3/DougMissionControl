@@ -4379,7 +4379,8 @@ def sight_wanted(said: str, ask=None, before: str = "") -> str:
 # "No, I can't clone a repo" is what this is here to end.
 
 # The job under way, when the last one ended, and what the last one was asked to do.
-WORKING = {"job": "", "ended": 0.0, "what": ""}
+WORKING = {"job": "", "began": 0.0, "ended": 0.0, "what": ""}
+JOB_SHOWN_S = 3600.0             # how long after it ended the last job is still on the owner's screens
 REPO_DO = {"list": "repos", "clone": "clone", "update": "update", "about": "about",
            "files": "files", "read": "read", "find": "find", "search": "search",
            "history": "log", "work": "work", "status": "status", "changes": "changes",
@@ -4975,6 +4976,19 @@ def pending_shown() -> dict | None:
         return None
     return {"id": w["id"], "kind": w.get("kind") or "records", "text": str(w.get("readback") or "")[:1500],
             "via": w.get("via"), "asked": w["ts"], "until": w["ts"] + JOBCONTEXT_CONFIRM_S}
+
+
+def job_shown() -> dict | None:
+    """For the owner's screens: the job that is under way in the workshop,
+    or the last one for an hour after it ended, with what it was asked to
+    do and since when. How it went is said in the conversation, by this
+    program, when it ends; this is only that there is one."""
+    if WORKING["job"]:
+        return {"running": True, "what": WORKING["what"][:300], "began": WORKING["began"] or None, "ended": None}
+    if WORKING["what"] and WORKING["ended"] and time.time() - WORKING["ended"] < JOB_SHOWN_S:
+        return {"running": False, "what": WORKING["what"][:300], "began": WORKING["began"] or None,
+                "ended": WORKING["ended"]}
+    return None
 
 
 def held_name(waiting: dict) -> str:
@@ -6178,7 +6192,7 @@ class Pipeline:
         is asked until it says the job is over, and then the person is told,
         in a line of his on their screens. The line is this program's, made
         from what the workshop reports: he does not get to say how it went."""
-        WORKING["job"] = job
+        WORKING.update(job=job, began=time.time())
         until, got, misses = time.time() + WORK_WATCH_S, {}, 0
         while time.time() < until:
             got = workshop("wait", wait=45, job=job, seconds=25)
@@ -6566,7 +6580,7 @@ def main() -> None:
                     linked=lambda: bool(sat and sat.connected),
                     speaker=Speaker(SPEAKER_URL) if SPEAKER_URL else None)
     sat = Satellite(SAT_HOST, SAT_PORT, PIPE.satellite_event, PIPE.link)
-    state.more = lambda: {"pending": pending_shown(), "tools": tools_shown()}
+    state.more = lambda: {"pending": pending_shown(), "tools": tools_shown(), "job": job_shown()}
     state.eyes = bool(EYES_URL)
     state.shot = EYES_SHOT if EYES_URL and PILImage is not None and EYES_SHOT > EYES_EDGE else 0
     state.heartbeat()

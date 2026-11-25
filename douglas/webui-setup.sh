@@ -93,7 +93,7 @@ if [ "$mode" = back ]; then
     [ -d "$kept" ] || { echo "nothing was kept from before ($kept is not there): nothing to put back"; exit 1; }
     install -m 644 "$kept/open-webui.service" "$unit"
     was="$(sed -n 's/^User=//p' "$unit" | tail -n1)"; was="${was:-douglas}"
-    chown -R "$was:$(id -gn "$was")" "$data"
+    chown -hR "$was:$(id -gn "$was")" "$data"
     chmod 755 "$data"
     chown "root:$(id -gn "$was")" "$env" && chmod 640 "$env"
 elif [ "$mode" = on ]; then
@@ -105,7 +105,7 @@ elif [ "$mode" = on ]; then
     fi
     install -m 644 "$here/open-webui.service" "$unit"
     install -d -m 700 -o open-webui -g open-webui "$data"
-    chown -R open-webui:open-webui "$data"
+    chown -hR open-webui:open-webui "$data"      # -h: never what a link in there points at
     chmod 700 "$data"
     find "$data" -maxdepth 1 -type f -exec chmod 600 {} +
     chown root:root "$env" && chmod 600 "$env"
@@ -124,7 +124,7 @@ fi
 
 who="$(sed -n 's/^User=//p' "$unit" | tail -n1)"
 if [ "$mode" != back ] && [ "$who" = open-webui ] && [ -e "$data" ]; then
-    chown -R open-webui:open-webui "$data"       # what the steps above wrote there as root
+    chown -hR open-webui:open-webui "$data"      # what the steps above wrote there as root
     find "$data" -maxdepth 1 -type f -exec chmod 600 {} +
 fi
 systemctl start open-webui

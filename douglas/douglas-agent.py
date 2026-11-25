@@ -485,6 +485,7 @@ def voice_state() -> dict:
             # were read back, and which of his tools are on, off or not set
             # up. Passed on only in the shape they are known to have.
             "pending": _pending(v.get("pending")),
+            "job": _job(v.get("job")),
             "tools": ({str(k)[:24]: s for k, s in list(v["tools"].items())[:40] if s in ("on", "off", "absent")}
                       if isinstance(v.get("tools"), dict) else None)}
 
@@ -495,6 +496,16 @@ def _pending(p) -> dict | None:
     num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
     return {"id": p["id"][:32], "kind": str(p.get("kind") or "")[:24], "text": str(p.get("text") or "")[:1500],
             "via": str(p.get("via") or "")[:12], "asked": num(p.get("asked")), "until": num(p.get("until"))}
+
+
+def _job(j) -> dict | None:
+    """The job in his workshop, as the pipeline says there is one: passed on
+    only in the shape it is known to have."""
+    if not isinstance(j, dict) or not isinstance(j.get("running"), bool):
+        return None
+    num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
+    return {"running": j["running"], "what": str(j.get("what") or "")[:300], "began": num(j.get("began")),
+            "ended": num(j.get("ended"))}
 
 
 def relay_approval(body: dict) -> tuple[int, dict]:
@@ -514,7 +525,7 @@ def relay_switch(body: dict) -> tuple[int, dict]:
     douglas-switch, the one program that writes that down. This one has the
     key to its door (a group of this unit's); the pipeline does not."""
     tool, on = body.get("tool"), body.get("on")
-    if not isinstance(tool, str) or not isinstance(on, bool):
+    if not isinstance(tool, str) or not re.fullmatch(r"[a-z_]{1,24}", tool) or not isinstance(on, bool):
         return 400, {"ok": False, "message": "a switch is a tool, and on: true or false"}
     if not SWITCH_SOCKET:
         return 200, {"ok": False, "message": "the switches are not installed on Douglas"}

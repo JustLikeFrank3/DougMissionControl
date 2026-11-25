@@ -21,13 +21,13 @@ import { fmtAgo } from './format.js';
 import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
 import { noticesView, navNotices } from './notices.js';
-import { approvalView, switchesView } from './owner.js';
+import { approvalView, switchesView, jobView } from './owner.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
 var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
-var approval = null, switches = null;
+var approval = null, switches = null, job = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -128,6 +128,7 @@ function paint(d) {
   // A change of his that waits for a yes shows whichever tab is up; what he
   // may use has a tab of its own.
   if (approval) approval.paint(agent ? voice.pending : null);
+  if (job) job.paint(agent ? voice.job : null);
   if (switches) {
     var tools = agent ? voice.tools : null;
     switches.paint(tools);
@@ -307,6 +308,7 @@ export function wireDouglas() {
   did = didView($('dgl-did'), { get: getJSON, rows: 40 });
   approval = approvalView($('dgl-apv'), { post: post, via: 'deck' });
   switches = switchesView($('dgl-sw'), { post: post });
+  job = jobView($('dgl-job'));
   notices = noticesView($('dgl-ntc'), { get: getJSON, post: post, count: $('dgl-ntc-count'),
                                         countClass: 'ntc-n', over: 8 });
   [].forEach.call($('dgl-tabs').children, function (b) {

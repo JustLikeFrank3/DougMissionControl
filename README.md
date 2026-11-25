@@ -1691,8 +1691,10 @@ model has by heart, and it reads it afresh.
 told to forget it: he read it back, with "A yes typed here does not count
 for this: approve it in Mission Control". "Yes." typed there: "A yes from
 this page does not count. It is waiting in Mission Control". Mission Control
-showed it: forgetting, asked on the chat page, three minutes. A yes to
-another number: "That is no longer waiting for an answer." A yes to its own
+showed it: forgetting, asked on the chat page, three minutes. The answers
+were sent to Mission Control's route as its buttons send them; the buttons
+themselves were looked at, not pressed by a finger. A yes to another number:
+"That is no longer waiting for an answer." A yes to its own
 number: forgotten, with "[Approved in Mission Control]" and "Forgotten. It
 can still be brought back in Mission Control until it is purged there." on
 the screens three seconds later, and the yes in the record of what he did. A
@@ -1707,9 +1709,15 @@ took 39 seconds. Each safeguard here was broken on purpose in a copy, one at
 a time: 39 of 39 were caught by the tests, after the first run found two that no
 test would have noticed, which have tests now.
 
-*What is not there.* His jobs are not on a list: the tasks in his memory are
-in the MEMORY view with their TO DO count, and what the workshop is doing is
-still only in the conversation. Nothing in the panel's top bar says that
+What is open is in one place with that: above the conversation, the change
+that is waiting for a yes and the job in his workshop, while one is under way
+and for an hour after it ended, with what it was asked to do and since when
+(how it went he says in the conversation, when it ends); and the tasks in his
+memory are in the MEMORY view with their count still to do.
+
+*What is not there.* The job in the workshop is a line, not a history: one
+job, the latest, and no list of earlier ones. Nothing in the panel's top bar
+says that
 something is waiting for a yes: it is on his card and his surface, and he
 says where to give it. There is no switch for a whole line: taking him out
 of Open WebUI is `webui-setup.sh off`.

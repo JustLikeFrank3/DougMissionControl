@@ -523,6 +523,14 @@ test('what is waiting says what it is and where it was asked for', () => {
   assert.equal(own.waitingHead(null), 'A CHANGE · asked on another line');
 });
 
+test('the job in his workshop is a line: under way and for how long, or ended and how long ago', () => {
+  assert.equal(own.jobLine({ running: true, began: 1000 - 240 }, 1000), 'IN THE WORKSHOP · under way for 4 m');
+  assert.equal(own.jobLine({ running: true }, 1000), 'IN THE WORKSHOP · under way');
+  assert.equal(own.jobLine({ running: false, ended: 1000 - 720 }, 1000), 'IN THE WORKSHOP · ended 12 m ago');
+  assert.equal(own.jobLine({ running: false }, 1000), 'IN THE WORKSHOP · ended a while ago');
+  assert.equal(own.jobLine(null, 1000), '', 'no job is no line');
+});
+
 test('every tool he has is a row with its state, and one this page has no words for is not hidden', () => {
   const rows = own.switchRows({ search: 'off', memory: 'on', draw: 'absent', teleport: 'on' });
   assert.deepEqual(rows.map(r => [r.name, r.state]),

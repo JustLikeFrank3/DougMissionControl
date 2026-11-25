@@ -16,7 +16,7 @@ import { fmtAgo, fmtClock, fmtDur, fmtTime } from '../js/format.js';
 import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
 import { noticesView } from '../js/notices.js';
-import { approvalView, switchesView } from '../js/owner.js';
+import { approvalView, switchesView, jobView } from '../js/owner.js';
 
 var $ = function (id) { return document.getElementById(id); };
 var KEY = 'dmc-deck-token';
@@ -467,6 +467,7 @@ function paintDouglas(d) {
   // What is waiting for a yes, and what he may use: both from his own state.
   var tools = agent && d.voice ? d.voice.tools : null;
   approval.paint(agent && d.voice ? d.voice.pending : null);
+  job.paint(agent && d.voice ? d.voice.job : null);
   switches.paint(tools);
   var off = tools ? Object.keys(tools).filter(function (k) { return tools[k] === 'off'; }).length : -1;
   $('sw-count').textContent = off < 0 ? '—' : off ? off + ' OFF' : 'ALL ON';
@@ -1104,6 +1105,7 @@ function tickNotices() { notices.refresh(); }
 
 var approval = approvalView($('dgl-apv'), { post: post, via: 'phone' });
 var switches = switchesView($('sw'), { post: post });
+var job = jobView($('dgl-job'));
 $('sw-head').addEventListener('click', function () {
   var open = $('sw-body').hidden;
   $('sw-body').hidden = !open;

@@ -16,6 +16,7 @@
    One view of each for the phone page and the panel, like memory.js. */
 
 import { wireHold } from './ui.js';
+import { fmtAgo } from './format.js';
 
 var WHERE = { webui: 'the chat page', phone: 'the phone', deck: 'the panel', voice: 'by voice', chat: 'a chat window' };
 var WHAT = { push: 'A PUSH', job: 'A JOB', forget: 'FORGETTING', records: 'A CHANGE TO YOUR RECORDS' };
@@ -54,6 +55,34 @@ export function left(until, now) {
 /** The line over a change that is waiting: what it is and where it was asked for. */
 export function waitingHead(p) {
   return (WHAT[p && p.kind] || 'A CHANGE') + ' · asked on ' + (WHERE[p && p.via] || 'another line');
+}
+
+/** The job in his workshop, in a line: that it is under way and for how
+    long, or that it ended and how long ago. How it went he says himself, in
+    the conversation, when it ends. */
+export function jobLine(job, now) {
+  if (!job) return '';
+  return job.running ? 'IN THE WORKSHOP · under way' + (job.began ? ' for ' + fmtAgo(job.began, now) : '')
+    : 'IN THE WORKSHOP · ended ' + (job.ended ? fmtAgo(job.ended, now) + ' ago' : 'a while ago');
+}
+
+/** The job in his workshop, in `host` (hidden when there is none). Returns { paint(job) }. */
+export function jobView(host) {
+  var head = el('div', 'job-h'), what = el('div', 'job-t');
+  host.classList.add('jobl');
+  host.innerHTML = '';
+  host.appendChild(head);
+  host.appendChild(what);
+  host.hidden = true;
+  return {
+    paint: function (job) {
+      host.hidden = !job;
+      if (!job) return;
+      host.classList.toggle('on', !!job.running);
+      head.textContent = jobLine(job, Date.now() / 1000);
+      what.textContent = job.what || '';
+    }
+  };
 }
 
 /** The switches as rows: every tool there is a word for, then any the

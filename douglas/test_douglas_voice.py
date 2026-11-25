@@ -4961,6 +4961,20 @@ check("the file is not his to write: nothing in the pipeline opens it for writin
       ([l for l in open(os.path.join(here, "douglas-voice.py"), encoding="utf-8").read().split("\n")
         if "SWITCHES_FILE" in l and ("\"w\"" in l or "'w'" in l or "os.replace" in l or "os.remove" in l)],
        [n for n in voice.TOOLS if "switch" in n or "capabil" in n]), ([], []))
+was_working = dict(voice.WORKING)
+voice.WORKING.update(job="", began=0.0, ended=0.0, what="")
+none = voice.job_shown()
+voice.WORKING.update(job="j-17", began=NOW - 240, what="Fix the off-by-one in the kettle timer. " * 20)
+under_way = voice.job_shown()
+voice.WORKING.update(job="", ended=NOW - 600)
+ended = voice.job_shown()
+voice.WORKING.update(ended=time.time() - voice.JOB_SHOWN_S - 5)
+check("the job in the workshop is shown to the owner's screens while it is under way and for an hour after: what it "
+      "was asked to do, cut to a few lines, and since when; with none, nothing, and an old one not for ever",
+      (none, (under_way["running"], len(under_way["what"]), under_way["began"], under_way["ended"]),
+       (ended["running"], ended["ended"]), voice.job_shown()),
+      (None, (True, 300, NOW - 240, None), (False, NOW - 600), None))
+voice.WORKING.update(was_working)
 more = voice.StateFile(os.path.join(ddir, "more.json"))
 more.more = lambda: {"pending": voice.pending_shown(), "tools": voice.tools_shown(), "state": "made up"}
 check("the screens are shown the switches and what is waiting with his state, and nothing put there can pass for the "

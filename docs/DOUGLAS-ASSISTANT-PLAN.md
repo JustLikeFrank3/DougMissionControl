@@ -272,7 +272,7 @@ after it was stopped. Flickering, quiet hours and the preferences hold in
 the tests, with stand-ins; 81 of 81 safeguards broken on purpose were
 caught. No plug was pulled, and the week has not passed.
 
-### Phase 4: approvals and capability switches (built), tasks (partly)
+### Phase 4: approvals, capability switches, what is open (built)
 
 *Approvals.* What is read back and waits for a yes (a push, a change to the
 owner's records, forgetting, a job made of somebody else's words) is shown
@@ -300,10 +300,12 @@ What differs from the design:
   root, only a file nobody else can write.
 - An approval is not a row kept in a database: it lives for three minutes,
   in the pipeline, and what became of it is in the record of what he did.
-- *Tasks* are not one list. The tasks in his memory are in the MEMORY view,
-  with a count of those still to do; what the workshop is doing is still
-  told in the conversation only. A list of jobs needs a way for the screens
-  to read the workshop that cannot also start a job, which is not built.
+- *Tasks* are not one list with everything in it. Above the conversation
+  are the change that waits for a yes and the job in his workshop (the one
+  under way, or the last for an hour after it ended: what it was asked to
+  do, and since when); the tasks in his memory are in the MEMORY view, with
+  a count of those still to do. Earlier jobs are not listed: that needs a
+  way for the screens to read the workshop that cannot also start a job.
 
 *Accepted when:* an approval can be given or refused from the panel and is
 void after its time; a tool switched off is not offered within one turn and
@@ -405,8 +407,8 @@ Decided by the owner on 2026-11-24, and done or kept accordingly:
 - Phase 5 is built and running (2026-11-24): Open WebUI lists Douglas beside
   the bare model, and `douglas-mcp` is up with a token nobody has been
   given.
-- Phase 4 is built and running (2026-11-24), but for a list of his jobs:
-  approvals and the switches for his tools are in Mission Control.
+- Phase 4 is built and running (2026-11-24): approvals, the switches for
+  his tools and the job in hand are in Mission Control.
 
 Still the owner's to say:
 

@@ -225,6 +225,15 @@ h2 { margin: 0; font-size: 12px; font-weight: 400; letter-spacing: .18em; color:
 .apv-h { font-size: 11px; letter-spacing: .14em; color: var(--acc); }
 .apv-u { font-size: 11px; color: var(--mut); }
 .apv-t { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
+.apv .mem-acts .go { touch-action: none; }
+.apv .mem-acts .go .hold { opacity: .35; }
+.jobl { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; padding: 10px 12px;
+        border-left: 2px solid var(--ln); }
+.jobl[hidden] { display: none; }
+.jobl.on { border-left-color: var(--am); }
+.job-h { font-size: 11px; letter-spacing: .12em; color: var(--mut); }
+.jobl.on .job-h { color: var(--am); }
+.job-t { font-size: 13px; overflow-wrap: anywhere; max-height: 4.5em; overflow: hidden; }
 .swv { display: flex; flex-direction: column; gap: 8px; }
 .sw { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--ln); }
 .sw:first-child { border-top: 0; }
