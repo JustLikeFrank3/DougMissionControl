@@ -2114,6 +2114,34 @@ CAMERA_RULES = (
     "watermark: it is not part of the scene.")
 
 
+# Whether he looks is not left to him. Asked "what can you see out of the
+# front camera right now?" with one camera switched on, he answered that he
+# had not looked and asked which camera (2026-11-25, his first live
+# question). So a message that sounds like it is put to the model as a
+# yes-or-no question of its own, and on a yes the program looks before he
+# answers, as it does for a second look at a picture.
+CAMERA_WORDS = re.compile(
+    r"\b(cameras?|cam|outside|out front|out back|front (?:door|porch|yard|step|lawn)|porch|drive(?:way)?|"
+    r"garage|back ?yard|garden|gate|parcels?|packages?|deliver(?:y|ed|ies)|at the door|doorbell|street|"
+    r"rain(?:ing)?|snow(?:ing)?)\b", re.I)
+CAMERA_ASKED = ("Does this message ask what can be seen right now through a security camera at the "
+                "person's home, or what is happening outside the home right now (at the door, on the "
+                "porch, drive, yard or street, or what the weather looks like there)? Answer yes or "
+                "no.\n\nMessage: ")
+
+
+def camera_wanted(said: str, ask=None) -> bool:
+    """Is a message asking for a look through a camera? `ask` is the call to
+    the model server, replaceable in tests. No answer is a no."""
+    try:
+        m = (ask or complete)([{"role": "user", "content": CAMERA_ASKED + " ".join(str(said).split())[:600]}],
+                              None, 8, 0.0)
+    except Exception as e:      # noqa: BLE001 - his own choice of tool stands
+        log(f"could not ask whether a camera look was wanted: {type(e).__name__}")
+        return False
+    return bool(re.match(r"\W*yes\b", unthought(str(m.get("content") or "")), re.I))
+
+
 def camera_call(method: str, path: str, body=None, timeout: float = 15):
     """(status, headers, bytes) from Mission Control's camera routes. The
     token goes in the address, as the deck takes it; nothing here logs an
@@ -2179,8 +2207,10 @@ def tool_camera(do: str = "look", camera: str = "", question: str = "") -> str:
     want = " ".join(str(camera or "").split()).lower()
     cam = next((c for c in cams if want and want in (str(c.get("name", "")).lower(), str(c.get("id", "")).lower())),
                None)
-    if cam is None and not want and len(cams) == 1:
-        cam = cams[0]
+    if cam is None and not want:
+        q_words = " " + " ".join(re.findall(r"[a-z0-9]+", str(question or "").lower())) + " "
+        named = [c for c in cams if f" {' '.join(re.findall(r'[a-z0-9]+', str(c.get('name', '')).lower()))} " in q_words]
+        cam = named[0] if len(named) == 1 else cams[0] if len(cams) == 1 else None
     if cam is None:
         return ("Which camera? " + ("There is none called that. " if want else "")
                 + "Ask the person, or pick from these:\n" + "\n".join(camera_line(c) for c in cams))
@@ -6227,6 +6257,19 @@ class Pipeline:
                 looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
                           {"role": "tool", "tool_call_id": "look", "name": "look",
                            "content": found}]
+            if (TOOLS_ON and not ctx["sent"] and not looked and "camera" in TOOLS
+                    and via not in NO_TOOLS and "camera" not in switched_off()
+                    and CAMERA_WORDS.search(asked) and camera_wanted(asked)):
+                # A look outside: taken here, with the person's words for the
+                # question, and handed to him as a call he made.
+                began = time.time()
+                call = {"id": "camera", "type": "function", "function": {
+                    "name": "camera", "arguments": json.dumps({"do": "look", "question": asked})}}
+                found = run_tool("camera", {"do": "look", "question": asked}, quiet=True, theirs=True)
+                log(f"asked about outside: a camera look taken in {time.time() - began:.1f} s, before he answers")
+                remember(call, found)
+                looked = [{"role": "assistant", "content": "", "tool_calls": [call]},
+                          {"role": "tool", "tool_call_id": "camera", "name": "camera", "content": found}]
             if (TOOLS_ON and "memory" in TOOLS and not ctx["sent"] and not looked
                     and MEMORY_WORDS.search(asked)):
                 # His memory: what the message asks of it is asked as a
@@ -6462,10 +6505,10 @@ class Pipeline:
         elif lead:
             reply = f"{lead} {reply}".strip()
         return self._answered(said, reply or "Sorry, I lost my train of thought.", via, turn,
-                              image=ctx["picture"], trace=ctx["trace"])
+                              image=ctx["picture"], trace=ctx["trace"], ctx=ctx)
 
     def _answered(self, said: str, reply: str, via: str, turn: int, always: bool = False,
-                  image: str = "", trace: list | None = None) -> str | None:
+                  image: str = "", trace: list | None = None, ctx: dict | None = None) -> str | None:
         """One exchange into the shared memory and the transcript. None when
         a newer turn has superseded this one - unless `always`: what became
         of a change the person approved is on record even if nobody waits
@@ -6479,7 +6522,7 @@ class Pipeline:
         if len(said_at) > HISTORY_TURNS:                 # whole exchanges, the newest few
             self.history = self.history[said_at[-HISTORY_TURNS]:]
         self.last_exchange = time.time()
-        ctx = getattr(TURN, "ctx", None) or {}
+        ctx = ctx or getattr(TURN, "ctx", None) or {}      # the turn's own: TURN.ctx is gone by now
         looked = bool(ctx.get("camera_obs"))
         if looked and ctx["camera_obs"] not in reply:
             # Which camera, when, and how old: said by the program, not left

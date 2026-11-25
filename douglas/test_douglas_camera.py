@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -219,6 +220,56 @@ voice.TURN.ctx = {"via": "deck", "said": ["x"], "lookups": 0, "held": None, "tra
 voice.remember({"id": "c1", "function": {"name": "camera", "arguments": "{}"}}, "This is a picture of now. A parcel.")
 kept = voice.TURN.ctx["trace"][-1]["content"]
 check("the trace keeps only when and where", ("picture of now" in kept, "Driveway" in kept), (False, True))
+
+print("-- a whole turn: the program looks, he answers, the program says when (C3, C1, A2) --")
+DECK["obs"] = None
+EYES.clear()
+voice.CONVO.update(camera=False)
+voice.camera_wanted = lambda said, ask=None: "front" in said.lower()
+SHOWN = []
+
+
+def answering_llm(messages):
+    SHOWN.append(messages)
+    return "There is a grey car on the drive and a parcel by the step."
+
+
+turn_lines = os.path.join(tmp, "turns.jsonl")
+pipe = voice.Pipeline(voice.StateFile(os.path.join(tmp, "st.json")), voice.Transcript(turn_lines),
+                      send=lambda *a: True, stt=lambda a, f: "", llm=answering_llm,
+                      tts=lambda text: (b"\x00\x10" * 2205, (22050, 2, 1)))
+
+
+def lines_of(path):
+    try:
+        with open(path) as f:
+            return [json.loads(x) for x in f]
+    except OSError:
+        return []
+
+
+with redirect_stderr(io.StringIO()):
+    check("a camera question is taken", pipe.say("What can you see out of the front camera right now?", "deck")[0], True)
+    end = time.time() + 10
+    while time.time() < end and len(lines_of(turn_lines)) < 2:
+        time.sleep(0.05)
+got = lines_of(turn_lines)
+check("the program looked before he answered", len(EYES), 1)
+check("he was handed the look as a call he made",
+      any(m.get("role") == "tool" and m.get("name") == "camera" for m in SHOWN[-1]), True)
+check("his answer ends with which camera and when, said by the program",
+      bool(re.search(r"\(Driveway camera, picture taken at \d\d:\d\d:\d\d, \d+ seconds ago\)$", got[-1]["text"])), True)
+check("the answer is marked a camera turn", got[-1].get("camera"), True)
+with redirect_stderr(io.StringIO()):
+    pipe.say("Is it a nice car?", "deck")
+    end = time.time() + 10
+    while time.time() < end and len(lines_of(turn_lines)) < 4:
+        time.sleep(0.05)
+got = lines_of(turn_lines)
+check("a follow-up without a look is marked too (the whole conversation)", got[-1].get("camera"), True)
+check("and nothing of it is gone through for memories",
+      [l for c in voice.finished_conversations(turn_lines, 0, time.time() + 10_000, 60) for l in c["lines"]], [])
+check("a question about something else is not routed to a camera", voice.CAMERA_WORDS.search("what is two plus two"), None)
 
 print("-- memory keeps no camera --")
 check("consolidation is told to keep nothing a camera showed", "what a camera showed" in voice.CONSOLIDATE, True)
