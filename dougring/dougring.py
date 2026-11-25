@@ -18,9 +18,11 @@ in the house does. Two doors, never the same one:
                                  404 unless DOUGRING_WEBHOOKS=1 (owner's yes)
              GET  /ring/home     a plain page, for the optional homepage field
            A GET or HEAD on any open one answers 200, for the console.
-  private  a Unix socket (/run/dougring/api.sock), for Mission Control on this
-           machine only: status, the camera list, which cameras are switched
-           on, and a still picture from a switched-on camera.
+  private  a Unix socket (/run/dougring/api.sock), for deck-api (Mission
+           Control) on this machine only, which says who asks: the owner
+           (status, cameras, journal, the global and per-camera switches,
+           names, forget, a picture) or Douglas (his switched-on cameras and
+           a picture from one). The rules are kept here, not in a screen.
 
 Ring's facts it relies on (docs read 2026-11-25 from Ring's docs MCP server):
 amazon_vision_api/authentication/{account_linking,access_tokens,refresh_tokens}.md,
@@ -33,6 +35,7 @@ LoadCredential (the file is root's; this user never reads it), tokens live in
 /var/lib/dougring/state.json (0600, this service's own user).
 """
 import base64
+import ssl
 import hashlib
 import hmac
 import html
@@ -53,6 +56,8 @@ VERSION = "0.1"
 USER_AGENT = f"DougRing/{VERSION}"
 OAUTH_URL = "https://oauth.ring.com/oauth/token"
 API_URL = "https://api.amazonvision.com"
+RTSP_HOST = "video.rtsp.amazonvision.com"
+RTSP_PORT = 322
 
 NONCE_WINDOW_S = 600          # Ring: reject a link older than 10 minutes
 CLOCK_SKEW_S = 60             # a little room for a clock that runs ahead
@@ -61,11 +66,18 @@ LINK_WAIT_S = 15              # the browser may beat the token exchange by a mom
 REFRESH_MARGIN_S = 1800       # refresh when the access token has this little left
 REFRESH_EVERY_S = 6 * 3600    # and at least this often, so the 30-day token rotates
 MAX_BODY = 64 * 1024
+RECV_DEADLINE_S = 8           # a public request must have arrived whole by then
 MAX_IN_FLIGHT = 16            # public requests served at once; over it, closed at once
 EXCHANGES_PER_MIN = 6         # a real link needs one
 MAX_CODE_LEN = 512
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DONE_TTL_S = 600              # a finished link's page can be shown again this long
+JOURNAL_KEEP = 500            # camera journal entries kept (words only, never pictures)
+DEVICES_TTL_S = 60            # Ring asks for device information to be cached
+CAPTURE_WAIT_S = 90           # how long a second request for the same camera waits its turn
+LIVE_HOLD_S = 6               # a live session held this long makes the camera record
+FRESH_WAIT_S = 60             # how long Ring may take to have that recording's picture ready
+FRESH_POLL_S = 3
 MAX_ACCOUNTS = 5              # Ring's limit for a private app
 SNAPSHOT_WINDOW_MS = 24 * 3600 * 1000
 
@@ -149,6 +161,7 @@ class Ring:
 
     def __init__(self, creds, oauth_url=OAUTH_URL, api_url=API_URL, timeout=20, allow_http=False):
         self.allow_http = allow_http   # tests only: the stand-in for Ring is plain http
+        self.rtsp_host, self.rtsp_port, self.rtsp_plain = RTSP_HOST, RTSP_PORT, False
         self.creds = creds
         self.oauth_url = oauth_url
         self.api_url = api_url
@@ -204,7 +217,12 @@ class Ring:
                 if not redirect:          # the image download's 303 is expected
                     return e.code, dict(e.headers), b""
                 raise RingError(e.code, "unexpected redirect") from None
-            raise RingError(e.code, _error_code(e.read(MAX_BODY))) from None
+            err = RingError(e.code, _error_code(e.read(MAX_BODY)))
+            try:
+                err.retry_after = int(e.headers.get("Retry-After") or 0)
+            except ValueError:
+                pass
+            raise err from None
 
     def api_json(self, method, path, access_token, account_id, body=None):
         _, _, raw = self.api(method, path, access_token, account_id, body)
@@ -221,6 +239,76 @@ class Ring:
         except urllib.error.HTTPError as e:
             raise RingError(e.code, _error_code(e.read(MAX_BODY))) from None
         return {"id": str(data["id"]), "email": data.get("attributes", {}).get("email", "")}
+
+    def live_session(self, device_id, access_token, hold_s, host=None, port=None):
+        """Start a live session on Ring's RTSP bridge so the camera records,
+        hold it hold_s seconds, end it. Returns when it started (epoch ms).
+        The media (H.265 in AES-GCM SRTP) is received and thrown away: it is
+        only the session that is wanted. The token goes in X-Auth-Token, as
+        Ring prefers, never in a URL."""
+        host, port = host or self.rtsp_host, port or self.rtsp_port
+        url = f"rtsps://{RTSP_HOST}:{RTSP_PORT}/v1/devices/{urllib.parse.quote(device_id, safe='')}/stream"
+        raw = socket.create_connection((host, port), timeout=self.timeout)
+        sock = (raw if self.rtsp_plain else
+                ssl.create_default_context().wrap_socket(raw, server_hostname=host))
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp.bind(("0.0.0.0", 0))
+        udp.settimeout(0.5)
+        rtp = udp.getsockname()[1]
+        state = {"cseq": 0, "session": None}
+        buf = sock.makefile("rb")
+
+        def call(method, headers):
+            state["cseq"] += 1
+            lines = [f"{method} {url} RTSP/1.0", f"CSeq: {state['cseq']}", f"User-Agent: {USER_AGENT}"]
+            if state["session"]:
+                lines.append(f"Session: {state['session']}")
+            lines += [f"{k}: {v}" for k, v in headers.items()]
+            sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+            status_line = buf.readline(1024).decode("latin-1").split()
+            hdrs = {}
+            while True:
+                line = buf.readline(4096).decode("latin-1").strip()
+                if not line:
+                    break
+                k, _, v = line.partition(":")
+                hdrs[k.strip().lower()] = v.strip()
+            n = int(hdrs.get("content-length") or 0)
+            if 0 < n <= 65536:
+                buf.read(n)
+            code = int(status_line[1]) if len(status_line) > 1 and status_line[1].isdigit() else 0
+            if code != 200:
+                raise RingError(code or 502, f"RTSP {method}")
+            return hdrs
+        try:
+            got = call("DESCRIBE", {"Accept": "application/sdp", "X-Auth-Token": access_token})
+            state["session"] = (got.get("session") or "").split(";")[0] or None
+            got = call("SETUP", {"Transport": f"RTP/SAVP;unicast;client_port={rtp}-{rtp + 1}"})
+            parts = dict(p.split("=", 1) for p in got.get("transport", "").split(";") if "=" in p)
+            src = parts.get("source", "").strip()
+            sport = int((parts.get("server_port") or "0").split("-")[0] or 0)
+            if src and sport:
+                udp.sendto(b"\x00", (src, sport))        # NAT hole punch, as Ring's docs say
+            call("PLAY", {})
+            started = int(time.time() * 1000)
+            end = time.time() + hold_s
+            packets = 0
+            while time.time() < end:
+                try:
+                    udp.recvfrom(2048)
+                    packets += 1
+                except socket.timeout:
+                    pass
+            log(f"live session: {packets} packets in {hold_s} s")
+            return started
+        finally:
+            try:
+                if state["session"]:
+                    call("TEARDOWN", {})
+            except Exception:
+                pass
+            udp.close()
+            sock.close()
 
     def fetch_presigned(self, url):
         """The picture itself: a pre-signed URL, no Bearer token sent to it."""
@@ -248,7 +336,9 @@ class Store:
     def __init__(self, path):
         self.path = path
         self.lock = threading.RLock()
-        self.data = {"unclaimed": [], "accounts": {}, "enabled": [], "events": [], "seen": []}
+        self.data = {"unclaimed": [], "accounts": {}, "enabled": [], "events": [], "seen": [],
+                     "global_on": False, "names": {}, "owners": {}, "journal": [],
+                     "health": {}, "telemetry": {}}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
@@ -277,6 +367,9 @@ class DougRing:
         self.ex_inflight = 0
         self.ex_last_end = 0.0
         self.done = {}                         # nonce -> (expires, page) for a reload
+        self.cooldown_until = 0.0              # Ring said 429: nothing is asked until then
+        self._dev_cache = None
+        self._cam_locks = {}
 
     # ── token exchange (Ring's servers → us) ─────────────────────────────
     def token_exchange(self, form):
@@ -463,62 +556,142 @@ class DougRing:
             except Exception as e:  # never let the refresher die: the token lapses in 30 days
                 log(f"refresh: failed, {type(e).__name__}")
 
+    # ── what Mission Control and Douglas ask ─────────────────────────────
+    # Two roles reach the private door, both through deck-api: "owner" (the
+    # panel and the phone) and "douglas" (his camera tool). Only the owner
+    # changes anything. Every rule below is enforced here, not in a screen.
+
+    def _journal(self, role, what, camera="", result="ok", **extra):
+        entry = {"at": int(self.now() * 1000), "role": role, "what": what,
+                 "camera": camera, "result": str(result)[:80], **extra}
+        with self.store.lock:
+            self.store.data["journal"] = (self.store.data.get("journal", []) + [entry])[-JOURNAL_KEEP:]
+            if what == "image":
+                h = self.store.data.setdefault("health", {})
+                h["last_access"] = entry["at"]
+                if result == "ok":
+                    h["last_success"] = entry["at"]
+            self.store.save()
+        log(f"journal: {role} {what} {camera[-6:] if camera else ''} {result}".rstrip())
+
+    def _note_error(self, e):
+        h = self.store.data.setdefault("health", {})
+        h["last_error"] = {"at": int(self.now() * 1000), "status": getattr(e, "status", 0),
+                           "code": getattr(e, "detail", type(e).__name__)}
+        t = self.store.data.setdefault("telemetry", {})
+        t["ring_errors"] = t.get("ring_errors", 0) + 1
+        if getattr(e, "status", 0) == 429:
+            t["throttled"] = t.get("throttled", 0) + 1
+
     def _call(self, account_id, method, path, body=None, redirect=True):
+        if self.now() < self.cooldown_until:
+            raise RingError(429, "waiting out Ring's rate limit")
         acct = self._refresh(account_id)
         if acct is None:
             raise RingError(401, "account not linked")
+        with self.store.lock:
+            t = self.store.data.setdefault("telemetry", {})
+            t["ring_calls"] = t.get("ring_calls", 0) + 1
         try:
-            return self.ring.api(method, path, acct["access_token"], account_id, body, redirect)
+            try:
+                return self.ring.api(method, path, acct["access_token"], account_id, body, redirect)
+            except RingError as e:
+                if e.status != 401:
+                    raise
+                acct = self._refresh(account_id, force=True)
+                if acct is None:
+                    raise
+                return self.ring.api(method, path, acct["access_token"], account_id, body, redirect)
         except RingError as e:
-            if e.status != 401:
-                raise
-            acct = self._refresh(account_id, force=True)
-            if acct is None:
-                raise
-            return self.ring.api(method, path, acct["access_token"], account_id, body, redirect)
+            if e.status == 429:
+                self.cooldown_until = self.now() + max(5, min(300, int(getattr(e, "retry_after", 0) or 30)))
+            with self.store.lock:
+                self._note_error(e)
+            raise
 
-    # ── what Mission Control asks ────────────────────────────────────────
     def status(self):
         with self.store.lock:
-            return {"accounts": [{"account": short_id(aid), "email": a["email_masked"], "state": a["state"],
+            d = self.store.data
+            return {"version": VERSION, "global_on": bool(d.get("global_on")),
+                    "accounts": [{"account": short_id(aid), "email": a["email_masked"], "state": a["state"],
                                   "access_expires_in_s": int(a["expires_at"] - self.now()),
-                                  "linked_at": int(a["linked_at"])}
-                                 for aid, a in self.store.data["accounts"].items()],
-                    "unclaimed": len(self.store.data["unclaimed"]),
-                    "enabled": list(self.store.data["enabled"]),
-                    "recent_events": self.store.data["events"][-10:]}
+                                  "linked_at": int(a["linked_at"]), "refreshed_at": int(a.get("refreshed_at", 0))}
+                                 for aid, a in d["accounts"].items()],
+                    "unclaimed": len(d["unclaimed"]),
+                    "enabled": list(d["enabled"]), "names": dict(d.get("names", {})),
+                    "health": dict(d.get("health", {})), "telemetry": dict(d.get("telemetry", {})),
+                    "throttled_for_s": max(0, int(self.cooldown_until - self.now())),
+                    "webhooks": self.webhooks}
 
-    def devices(self):
-        out = []
+    def devices(self, fresh=False):
+        """The cameras the linked accounts share, as Ring says now (cached a
+        minute: Ring asks for device information to be cached). Sensors and
+        chimes are left out: no picture can come from them."""
+        if not fresh and self._dev_cache and self.now() - self._dev_cache[0] < DEVICES_TTL_S:
+            return [dict(c) for c in self._dev_cache[1]]
+        out, owners = [], {}
         for aid in list(self.store.data["accounts"]):
+            if self.store.data["accounts"][aid].get("state") != "linked":
+                continue
             _, _, raw = self._call(aid, "GET", "/v1/devices?include=status,capabilities")
             doc = json.loads(raw)
-            included = {(i.get("type"), i.get("id")): i.get("attributes", {}) for i in doc.get("included", [])}
-            owners = self.store.data.setdefault("owners", {})
+            inc = {(i.get("type"), i.get("id")): i.get("attributes") or {} for i in doc.get("included", [])}
             for d in doc.get("data", []):
-                owners[d.get("id")] = aid
-                a = d.get("attributes", {})
-                rel = d.get("relationships", {})
-                st = {}
-                for key in ("status",):
+                rel = d.get("relationships") or {}
+
+                def related(key):
                     ref = (rel.get(key) or {}).get("data") or {}
-                    st = included.get((ref.get("type"), ref.get("id")), {})
-                out.append({"id": d.get("id"), "account": short_id(aid),
-                            "name": a.get("name") or a.get("description") or "",
-                            "kind": a.get("type") or a.get("device_type") or d.get("type"),
-                            "model": a.get("model") or a.get("kind") or "",
-                            "status": st, "enabled": d.get("id") in self.store.data["enabled"],
-                            "attributes": {k: v for k, v in a.items() if k not in ("location",)}})
+                    return inc.get((ref.get("type"), ref.get("id")), {})
+                st, caps = related("status"), related("capabilities")
+                if "video" not in caps:
+                    continue
+                did = str(d.get("id"))
+                owners[did] = aid
+                out.append({"id": did, "ring_name": str((d.get("attributes") or {}).get("name") or "")[:60],
+                            "online": bool(st.get("online")),
+                            "battery": "battery_status" in st,
+                            "doorbell": "button_press" in caps})
+        with self.store.lock:
+            self.store.data["owners"] = owners
+            self.store.data["enabled"] = [c for c in self.store.data["enabled"] if c in owners]
+            self.store.data.setdefault("health", {})["last_discovery"] = int(self.now() * 1000)
+            self.store.save()
+        self._dev_cache = (self.now(), out)
+        return [dict(c) for c in out]
+
+    def cameras(self, role):
+        """Every shared camera for the owner; for Douglas only those he may
+        look through, and none while the global switch is off."""
+        names = self.store.data.get("names", {})
+        enabled = set(self.store.data["enabled"])
+        on = bool(self.store.data.get("global_on"))
+        out = []
+        for c in self.devices():
+            c["name"] = names.get(c["id"]) or c["ring_name"] or "camera"
+            c["enabled"] = c["id"] in enabled
+            if role == "douglas" and not (on and c["enabled"]):
+                continue
+            out.append(c)
         return out
 
-    def _owner(self, device_id):
-        """The linked account that shares this camera, asked of Ring each time."""
-        self.devices()
-        aid = self.store.data.get("owners", {}).get(device_id)
-        return aid if aid in self.store.data["accounts"] else None
+    def _find(self, role, ref):
+        """A camera by its id or its friendly name, as this role may see it."""
+        ref = str(ref or "").strip().lower()
+        for c in self.cameras(role):
+            if ref in (c["id"].lower(), c["name"].lower(), c["ring_name"].lower()):
+                return c
+        return None
+
+    # the owner's switches
+    def set_global(self, on):
+        with self.store.lock:
+            self.store.data["global_on"] = bool(on)
+            self.store.save()
+        self._journal("owner", "global " + ("on" if on else "off"))
+        return True
 
     def set_enabled(self, device_id, on):
-        if on and self._owner(device_id) is None:
+        if on and device_id not in {c["id"] for c in self.devices()}:
             return False
         with self.store.lock:
             en = [d for d in self.store.data["enabled"] if d != device_id]
@@ -526,20 +699,110 @@ class DougRing:
                 en.append(device_id)
             self.store.data["enabled"] = en
             self.store.save()
-        log(f"camera {device_id[-6:]}: {'switched on' if on else 'switched off'}")
+        self._journal("owner", "camera " + ("on" if on else "off"), device_id)
         return True
 
-    def snapshot(self, device_id, at_ms=None):
-        """The latest existing picture (Ring never takes a new one for this)."""
-        if device_id not in self.store.data["enabled"]:
-            raise PermissionError("camera is switched off in DougRing")
-        aid = self._owner(device_id)
-        if aid is None:
-            raise PermissionError("camera is not on a linked account")
-        now_ms = int(self.now() * 1000)
-        body = ({"type": "at_timestamp", "timestamp": int(at_ms)} if at_ms else
-                {"type": "latest_in_range", "start_timestamp": now_ms - SNAPSHOT_WINDOW_MS + 60_000})
-        body["image_options"] = {"format": "jpeg", "resolution": {"width": 1920, "height": 1080}}
+    def set_name(self, device_id, name):
+        name = " ".join(str(name or "").split())[:40]
+        if device_id not in {c["id"] for c in self.devices()}:
+            return False
+        with self.store.lock:
+            names = self.store.data.setdefault("names", {})
+            if name:
+                names[device_id] = name
+            else:
+                names.pop(device_id, None)
+            self.store.save()
+        self._journal("owner", "rename", device_id, name or "(Ring's name)")
+        return True
+
+    def forget(self):
+        """Drop every token and switch every camera off. Linking again is the
+        only way back. Ring's console ("Disconnect all") ends it at Ring too."""
+        with self.store.lock:
+            n = len(self.store.data["accounts"])
+            self.store.data.update(accounts={}, unclaimed=[], enabled=[], global_on=False, owners={})
+            self.store.save()
+        self._dev_cache = None
+        self._journal("owner", "forget", result=f"{n} account(s) dropped")
+        return True
+
+    # a picture
+    def image(self, role, ref, fresh=True):
+        """A picture from a camera this role may use, and what is known of it.
+        fresh: open a short live session so the camera records now, then take
+        Ring's picture of that moment; failing that, the latest existing one,
+        marked as such. Nothing is written to disk."""
+        retrieved_at = int(self.now() * 1000)
+        if not self.store.data.get("global_on"):
+            self._journal(role, "image", str(ref)[:80], "refused: cameras are switched off")
+            raise PermissionError("cameras are switched off in Mission Control")
+        cam = self._find(role, ref) if role == "douglas" else (self._find("owner", ref))
+        if cam is None or not cam["enabled"]:
+            self._journal(role, "image", str(ref)[:80], "refused: not a camera that is switched on")
+            raise PermissionError("not a camera that is switched on")
+        aid = self.store.data["owners"].get(cam["id"])
+        if not cam["online"]:
+            self._journal(role, "image", cam["id"], "camera offline")
+            raise RingError(503, "camera offline")
+        lock = self._cam_locks.setdefault(cam["id"], threading.Lock())
+        if not lock.acquire(timeout=CAPTURE_WAIT_S):
+            raise RingError(409, "another picture from this camera is being taken")
+        try:
+            img = meta = None
+            source = "latest existing"
+            if fresh:
+                try:
+                    started = self._live_trigger(aid, cam)
+                    img, meta = self._download_after(aid, cam["id"], started)
+                    source = "live-triggered"
+                except (RingError, OSError) as e:
+                    log(f"image: live picture failed ({e}); taking the latest existing one")
+            if img is None:
+                img, meta = self._download(aid, cam["id"],
+                                           {"type": "latest_in_range",
+                                            "start_timestamp": int(self.now() * 1000) - SNAPSHOT_WINDOW_MS + 60_000})
+        except Exception as e:
+            self._journal(role, "image", cam["id"], f"failed: {getattr(e, 'detail', '') or type(e).__name__}")
+            raise
+        finally:
+            lock.release()
+        captured = int(meta.get("media_timestamp") or 0) or None
+        age = round((retrieved_at - captured) / 1000) if captured else None
+        info = {"camera_id": cam["id"], "camera_name": cam["name"], "captured_ms": captured,
+                "retrieved_ms": retrieved_at, "source": source, "age_s": age,
+                "media_origin": meta.get("media_origin", ""), "status": "ok",
+                "content_type": meta.get("content_type", "image/jpeg")}
+        self._journal(role, "image", cam["id"], "ok", source=source, age_s=age)
+        with self.store.lock:
+            t = self.store.data.setdefault("telemetry", {})
+            t["pictures"] = t.get("pictures", 0) + 1
+            self.store.save()
+        return img, info
+
+    def _live_trigger(self, aid, cam):
+        """Ring's way to a current picture: a live session makes the camera
+        record. RTSP only to start it; the packets are not decoded."""
+        acct = self._refresh(aid)
+        if acct is None:
+            raise RingError(401, "account not linked")
+        return self.ring.live_session(cam["id"], acct["access_token"], LIVE_HOLD_S)
+
+    def _download_after(self, aid, device_id, started_ms):
+        """Ring's picture of the moment the session ran, once it is written
+        (416/425 until then)."""
+        deadline = self.now() + FRESH_WAIT_S
+        want = {"type": "at_timestamp", "timestamp": started_ms + 2000}
+        while True:
+            try:
+                return self._download(aid, device_id, want)
+            except RingError as e:
+                if e.status not in (416, 425) or self.now() >= deadline:
+                    raise
+            time.sleep(FRESH_POLL_S)
+
+    def _download(self, aid, device_id, body):
+        body = dict(body, image_options={"format": "jpeg", "resolution": {"width": 1920, "height": 1080}})
         path = f"/v1/devices/{urllib.parse.quote(device_id, safe='')}/media/image/download"
         status, headers, _ = self._call(aid, "POST", path, body, redirect=False)
         loc = {k.lower(): v for k, v in headers.items()}.get("location")
@@ -547,10 +810,12 @@ class DougRing:
             raise RingError(status, "no picture offered")
         img, h = self.ring.fetch_presigned(loc)
         h = {k.lower(): v for k, v in h.items()}
-        log(f"snapshot: camera {device_id[-6:]}, {len(img)} bytes, {h.get('x-media-origin', '?')}")
         return img, {"content_type": h.get("content-type", "image/jpeg"),
                      "media_timestamp": h.get("x-media-timestamp", ""),
                      "media_origin": h.get("x-media-origin", "")}
+
+    def journal(self, n=100):
+        return list(self.store.data.get("journal", [])[-n:])[::-1]
 
 
 # ── the public door ──────────────────────────────────────────────────────
@@ -571,6 +836,33 @@ def public_handler(app):
 
         def log_message(self, fmt, *args):
             pass  # the query string carries nonces: no access log at all
+
+        # A caller has RECV_DEADLINE_S, all told, to send its headers and
+        # body: one that trickles them is cut off and its slot freed.
+        def setup(self):
+            super().setup()
+            self._arrived = threading.Event()
+            self._timer = threading.Timer(RECV_DEADLINE_S, self._too_slow)
+            self._timer.daemon = True
+            self._timer.start()
+
+        def _too_slow(self):
+            if not self._arrived.is_set():
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        def _received(self):
+            self._arrived.set()
+            self._timer.cancel()
+
+        def finish(self):
+            self._timer.cancel()
+            try:
+                super().finish()
+            except OSError:
+                pass
 
         def _send(self, status, body=b"", ctype="text/plain; charset=utf-8"):
             if isinstance(body, str):
@@ -597,6 +889,7 @@ def public_handler(app):
             return self.rfile.read(n) if n else b""
 
         def do_GET(self):
+            self._received()
             u = urllib.parse.urlsplit(self.path)
             if u.path not in PUBLIC_PATHS or (u.path == "/ring/webhook" and not app.webhooks):
                 return self._send(404, "not found")
@@ -618,6 +911,9 @@ def public_handler(app):
                 raw = self._body()
             except ValueError:
                 return self._send(413, "bad length")
+            if len(raw) < int(self.headers.get("Content-Length") or 0):
+                return None                    # cut off for sending too slowly
+            self._received()
             if u.path == "/ring/token":
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                 if ctype != "application/x-www-form-urlencoded":
@@ -634,9 +930,15 @@ def public_handler(app):
 
 
 # ── the private door (Unix socket) ───────────────────────────────────────
+# Only deck-api opens it (group dougring-api). It says who is asking in
+# X-DougRing-Role: "owner" (the panel, the phone) or "douglas" (his camera
+# tool, on deck-api's camera token). Anything else is refused.
+ROLES = ("owner", "douglas")
+
+
 def private_handler(app):
     class H(BaseHTTPRequestHandler):
-        server_version = "DougRing"
+        server_version = "-"
         sys_version = ""
 
         def address_string(self):
@@ -644,6 +946,12 @@ def private_handler(app):
 
         def log_message(self, fmt, *args):
             pass
+
+        def handle_one_request(self):
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
         def _json(self, status, obj):
             body = json.dumps(obj).encode()
@@ -657,39 +965,73 @@ def private_handler(app):
             if isinstance(e, PermissionError):
                 return self._json(403, {"error": str(e)})
             if isinstance(e, RingError):
-                return self._json(502 if e.status >= 500 or e.status < 400 else e.status,
-                                  {"error": "ring", "status": e.status, "code": e.detail})
+                code = e.status if e.status in (401, 403, 404, 409, 416, 429, 503) else 502
+                return self._json(code, {"error": "ring", "status": e.status, "code": e.detail})
+            log(f"private: {type(e).__name__}")
             return self._json(502, {"error": type(e).__name__})
 
+        def _role(self):
+            r = (self.headers.get("X-DougRing-Role") or "").strip()
+            return r if r in ROLES else None
+
+        def _req(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n < 0 or n > MAX_BODY:
+                raise ValueError("bad length")
+            got = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            return got if isinstance(got, dict) else {}
+
         def do_GET(self):
+            role = self._role()
+            if role is None:
+                return self._json(403, {"error": "no role"})
             try:
                 if self.path == "/status":
-                    return self._json(200, app.status())
-                if self.path == "/devices":
-                    return self._json(200, {"devices": app.devices()})
+                    st = app.status()
+                    if role != "owner":
+                        st = {"global_on": st["global_on"], "linked": bool(st["accounts"]),
+                              "throttled_for_s": st["throttled_for_s"]}
+                    return self._json(200, st)
+                if self.path == "/cameras":
+                    return self._json(200, {"global_on": bool(app.store.data.get("global_on")),
+                                            "cameras": app.cameras(role)})
+                if self.path == "/journal" and role == "owner":
+                    return self._json(200, {"journal": app.journal()})
             except Exception as e:
                 return self._fail(e)
             self._json(404, {"error": "not found"})
 
         def do_POST(self):
+            role = self._role()
+            if role is None:
+                return self._json(403, {"error": "no role"})
             parts = self.path.strip("/").split("/")
             try:
-                if len(parts) == 3 and parts[0] == "cameras" and parts[2] in ("enable", "disable"):
-                    ok = app.set_enabled(urllib.parse.unquote(parts[1]), parts[2] == "enable")
-                    return self._json(200 if ok else 404, {"ok": ok})
-                if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "snapshot":
-                    n = int(self.headers.get("Content-Length") or 0)
-                    if n < 0 or n > MAX_BODY:
-                        return self._json(413, {"error": "bad length"})
-                    req = json.loads(self.rfile.read(n)) if n else {}
-                    img, meta = app.snapshot(urllib.parse.unquote(parts[1]), req.get("at_ms"))
+                req = self._req()
+            except ValueError:
+                return self._json(400, {"error": "bad body"})
+            try:
+                if parts == ["image"]:
+                    img, info = app.image(role, req.get("camera", ""), fresh=req.get("fresh", True) is not False)
                     self.send_response(200)
-                    self.send_header("Content-Type", meta["content_type"])
+                    self.send_header("Content-Type", info["content_type"])
                     self.send_header("Content-Length", str(len(img)))
-                    self.send_header("X-Media-Timestamp", meta["media_timestamp"])
-                    self.send_header("X-Media-Origin", meta["media_origin"])
+                    self.send_header("X-Observation", json.dumps(info))
                     self.end_headers()
                     return self.wfile.write(img)
+                if role != "owner":
+                    return self._json(403, {"error": "the owner's alone"})
+                if parts == ["switch"] and isinstance(req.get("on"), bool):
+                    return self._json(200, {"ok": app.set_global(req["on"])})
+                if parts == ["forget"]:
+                    return self._json(200, {"ok": app.forget()})
+                if len(parts) == 3 and parts[0] == "cameras" and parts[2] in ("enable", "disable", "name"):
+                    did = urllib.parse.unquote(parts[1])
+                    ok = (app.set_name(did, req.get("name", "")) if parts[2] == "name"
+                          else app.set_enabled(did, parts[2] == "enable"))
+                    return self._json(200 if ok else 404, {"ok": ok})
+                if parts == ["devices", "refresh"]:
+                    return self._json(200, {"cameras": len(app.devices(fresh=True))})
             except Exception as e:
                 return self._fail(e)
             self._json(404, {"error": "not found"})
