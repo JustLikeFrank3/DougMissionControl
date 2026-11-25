@@ -195,7 +195,13 @@ export function memoryView(host, opts) {
       purge.addEventListener('click', function (e) { e.stopPropagation(); });
       wireHold(purge, function () {
         ask({ op: 'purge', id: m.id }).then(function (r) {
-          if (r) { say('Purged. It is gone from his memory for good.'); st.open = 0; refresh(true); }
+          // Something else was reading the file (a backup): the row is gone,
+          // and its text leaves the database's log within the half minute.
+          if (r) {
+            say(r.lingering ? 'Purged. Something was reading the file, so its text leaves the log in a moment.'
+              : 'Purged. It is gone from his memory for good, with what it had replaced.');
+            st.open = 0; refresh(true);
+          }
         });
       });
       row.appendChild(purge);

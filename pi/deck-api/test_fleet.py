@@ -7,6 +7,7 @@ os.environ.update({"DEFAULT_SURFACE": "evals", "DECK_TOKEN": "the-deck-token",
                    "DECK_READ_TOKEN": "the-read-token", "DOUGLAS_AGENT_TOKEN": "agent-token",
                    "FLEET_UNITS": "deck-api fauxmo k3s gone"})
 import deck_api as d
+d.FLEET_KEEP_S = 0          # each reading made afresh here; that it is kept for a moment is tested below
 
 fails = []
 def check(label, got, want):
@@ -60,6 +61,9 @@ def set_state(s):
     s["nav_plan"] = [{"name": "HOME FIELD", "lat": 28.5, "lon": -81.3}]
     s["events"] = [{"ts": now - 30, "source": "probe", "level": "warn",
                     "text": "workstation at 192.0.2.50 refused http://198.51.100.7:9107/x?token=abc123&y=1"},
+                   {"ts": now - 60, "source": "probe", "level": "warn",
+                    "text": "fe80::1ff:fe23:4567:890a and 2001:db8::7 (aa-bb-cc-dd-ee-ff) at node1.tail1234.ts.net: "
+                            "Authorization: Bearer abc.def-123, and DECK_TOKEN is the-deck-token, api_key: zzz999"},
                    {"ts": now - 90, "source": "deck-api", "level": "info", "text": "listening on :8088"}]
 d.DECK.mutate(set_state)
 
@@ -113,7 +117,11 @@ check("no address is in it anywhere, no token, no flight plan, nothing to press"
 check("what happened lately is there, with the address and the token taken out of it",
       [(e["source"], e["level"], e["text"]) for e in f["events"]],
       [("probe", "warn", "workstation at (an address) refused http://(an address):9107/x?token=...&y=1"),
+       ("probe", "warn", "(an address) and (an address) ((an address)) at (an address): Authorization=..., and "
+                         "DECK_TOKEN=..., api_key=..."),
        ("deck-api", "info", "listening on :8088")])
+check("whatever kind of address or credential it was: none of it is left",
+      [w for w in ("fe80", "2001:db8", "aa-bb", "ts.net", "abc.def", "the-deck-token", "zzz999") if w in whole], [])
 check("and it says what it cannot tell", "say only whether they answer" in f["not_reported"], True)
 STATUS["agent"] = False
 check("Douglas's agent not answering: what the probe knows still stands, and no numbers are made up",
@@ -137,6 +145,25 @@ def broken(argv, **kw): raise OSError("no systemctl here")
 d.subprocess.run = broken
 d._units_kept.update(at=0.0, value=None)
 check("and no systemd at all is said as not known", d.fleet()["machines"][0]["services"], None)
+d.subprocess.run = fake_run
+
+d.subprocess.run = fake_run
+d.FLEET_KEEP_S, asked = 2.0, []
+real_status, d.douglas_status = d.douglas_status, lambda: (asked.append(1), dict(STATUS))[1]
+d._fleet_kept.update(at=0.0, value=None)
+for _ in range(25):
+    d.fleet()
+check("a reader asking over and over does not have Douglas's machine asked each time: the reading is kept for "
+      "a moment", len(asked), 1)
+d.douglas_status, d.FLEET_KEEP_S = real_status, 0
+SYSTEMD["asked"].clear()
+d.subprocess.run = broken
+d._units_kept.update(at=0.0, value=None)
+calls = []
+d.subprocess.run = lambda argv, **kw: (calls.append(1), broken(argv))[1]
+for _ in range(10):
+    d.own_units()
+check("nor is systemd, when it cannot be asked: that is kept as long as an answer would be", len(calls), 1)
 d.subprocess.run = fake_run
 
 print("-- who may read it, and what else that opens --")

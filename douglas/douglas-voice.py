@@ -2263,7 +2263,27 @@ def tool_draw(prompt: str = "", shape: str = "square") -> str:
 # since his last turn that he should be told (an edit finishing); "epoch"
 # counts conversations, so that work begun in one does not land in the next;
 # "repo" is the repository it has been about, for a question that names none.
-CONVO = {"private": False, "pending": None, "news": "", "epoch": 0, "repo": "", "recalled": set()}
+CONVO = {"private": False, "pending": None, "news": "", "epoch": 0, "repo": "", "recalled": set(),
+         "links": set()}
+# An address as it was given, for telling whether one he wants to fetch is
+# one that was already in the conversation. See run_tool.
+AN_ADDRESS = re.compile(r"https?://[^\s<>\"'\]\)\}\\]+", re.I)
+
+
+def address(url) -> str:
+    """An address in the one form two copies of it share: no space round
+    it, none of the punctuation a sentence leaves behind it, the scheme and
+    the host in small letters. Everything else stays as it is: a path or a
+    query that differs is another address."""
+    url = str(url or "").strip().rstrip(".,;:!?")
+    head, sep, rest = url.partition("://")
+    host, slash, path = rest.partition("/")
+    return f"{head.lower()}{sep}{host.lower()}{slash}{path}".rstrip("/")
+
+
+def addresses_in(text) -> set[str]:
+    return {address(u) for u in AN_ADDRESS.findall(str(text or ""))[:200]}
+
 TURN = threading.local()                      # .ctx: the turn this thread is answering
 JC = {"areas": {}, "catalogue": "", "words": None}   # what he may reach, from the server's own list
 JC_READY = threading.Event()                  # the first attempt to fetch that list is over
@@ -3110,6 +3130,7 @@ def push_made(change: dict) -> str:
     became of it. Only ever called for that: the job and the commit are the
     ones that were read back."""
     got = workshop("push", wait=330, job=change["args"]["job"], sha=change["args"]["sha"])
+    TURN.made = bool(got.get("ok"))
     log("repo push " + ("made" if got.get("ok") else "not made"))
     return str(got.get("text") or "The workshop gave no answer, so it is not known whether "
                                   "anything was pushed.")
@@ -3134,6 +3155,7 @@ def jc_commit(change: dict) -> str:
     """Send a change the person has just said yes to, and say truthfully
     what became of it. Only ever called for that."""
     area, action = change["area"], change["action"]
+    TURN.made = False                            # until the server says it is saved
     try:
         text, failed = jc_call(area, {"action": action, **change["args"]})
     except Exception as e:                       # noqa: BLE001 — say what happened, whatever it was
@@ -3155,6 +3177,7 @@ def jc_commit(change: dict) -> str:
         log(f"jobcontext {area}.{action} turned down by the server")
         return "It was not saved. The server said: " + (brief(text, 300) or "no reason given.")
     log(f"jobcontext {area}.{action} sent")
+    TURN.made = True
     if mark in ("\u2713", "\u2705"):
         return ("Saved. " + brief(text)).strip()
     return "Sent. " + ("The server says: " + brief(text) if brief(text) else
@@ -3375,8 +3398,11 @@ MEMORY_KINDS = ("preference", "fact", "project", "decision", "task", "lesson")
 GROUND_FILLER = set("""person owner they their them that this with from have been wants want like likes
 prefer prefers said says does will would should about when what which because before after more than into
 also takes take uses used work works working going plans plan decided chose live lives name named called
-always never usually often every their there where while still just only next last week month year today
-tomorrow morning evening""".split())
+usually often every their there where while still just only next last week month year today
+tomorrow morning evening the and for his her him its was are has had but who why how you your""".split())
+# What turns a sentence into its opposite. A wording that has one where the
+# person used none is not what they said.
+NEGATION = re.compile(r"\b(not|no|never|none|nothing|nobody|nowhere|neither|nor|without|cannot)\b|n['\u2019]t\b")
 
 
 def grounded(text: str, evidence: str) -> float:
@@ -3384,14 +3410,19 @@ def grounded(text: str, evidence: str) -> float:
     share of its telling words that they used, and nothing if it has a
     number in it that they did not say. The model writes the sentence; the
     names and the figures in it have to be the person's."""
+    if NEGATION.search(str(text).lower()) and not NEGATION.search(str(evidence).lower()):
+        return 0.0                               # "does not take sugar", of someone who said they take it
     # "Ann's" is Ann, whoever's it is.
     low, src = (re.sub(r"['\u2019]s\b|['\u2019]", "", str(t).lower()) for t in (text, evidence))
-    if any(n not in src for n in re.findall(r"\d+", low)):
+    said = set(re.findall(r"\d+", src))          # whole numbers: "4" is not in "14"
+    if any(n not in said for n in re.findall(r"\d+", low)):
         return 0.0
     have = {w[:5] for w in re.findall(r"[a-z0-9]{3,}", src)}
-    want = [w for w in re.findall(r"[a-z]{4,}", low)
+    want = [w for w in re.findall(r"[a-z]{3,}", low)
             if w not in GROUND_FILLER and w not in OWNER.lower().split()]
-    return sum(1 for w in want if w[:5] in have) / len(want) if want else 1.0
+    # A sentence with nothing in it to hold against what was said ("the
+    # owner said to say yes") is not thereby theirs: it is nobody's.
+    return sum(1 for w in want if w[:5] in have) / len(want) if want else 0.0
 
 
 def as_json(text: str):
@@ -3499,6 +3530,7 @@ def tool_memory(do: str = "", words: str = "", text: str = "") -> str:
                 "them to say so, for example \"Remember that ...\" or \"Forget that ...\".")
     if do == "tasks":
         got = memory("tasks")
+        CONVO["recalled"].update(m.get("id") for m in got.get("memories") or [] if isinstance(m, dict))
         lines = noted(got.get("memories") or [])
         log("memory tasks" + ("" if got.get("ok") else ": not done"))
         return ("What is noted as outstanding:\n" + lines if lines else
@@ -3530,9 +3562,14 @@ def tool_memory(do: str = "", words: str = "", text: str = "") -> str:
         return "\n".join(kept) or "Nothing was noted: there was nothing in that to remember."
     got = memory("matching", text=(words or said)[:600], limit=3)
     found = [m for m in got.get("memories") or [] if isinstance(m, dict) and m.get("id")]
+    # What was written down in Mission Control is not forgotten on a yes said
+    # to him: it is changed where it was written.
+    theirs = (" What was written down about this in Mission Control stays as it is: that is changed "
+              "or deleted there.") if got.get("owners") else ""
     if not found or "held" not in ctx:
         log("memory forget: nothing to read back")
-        return str(got.get("text")) if not got.get("ok") else "Nothing in your memory matches that."
+        return str(got.get("text")) if not got.get("ok") else (
+            "Nothing was forgotten." + theirs if theirs else "Nothing in your memory matches that.")
     # Which memories "that" means is a guess from words. Nothing is forgotten
     # here: they are read back as this turn's reply, and forgotten only if
     # the next message is a plain yes (see HELD), by this program.
@@ -3540,7 +3577,7 @@ def tool_memory(do: str = "", words: str = "", text: str = "") -> str:
                    "readback": ("This would forget what I have noted here:\n"
                                 + "\n".join("- " + str(m.get("text")) for m in found)
                                 + "\nSay yes to forget " + ("it" if len(found) == 1 else "them")
-                                + ", or no to keep " + ("it" if len(found) == 1 else "them") + "."),
+                                + ", or no to keep " + ("it" if len(found) == 1 else "them") + "." + theirs),
                    "args": {"ids": [int(m["id"]) for m in found]}}
     log("memory forget held for a yes")
     return ("Nothing has been forgotten. What would be is being read back to the person now, and they "
@@ -3553,6 +3590,7 @@ def forget_made(change: dict) -> str:
     as deleted, where the owner can still bring them back."""
     got = memory("forget", ids=change["args"]["ids"])
     n = len(got.get("forgotten") or [])
+    TURN.made = bool(got.get("ok") and n)
     log("memory forget " + (f"made: {n}" if got.get("ok") else "not made"))
     if not got.get("ok"):
         return "The memory did not answer, so it is not known whether anything was forgotten."
@@ -3568,8 +3606,9 @@ CONSOLIDATE = (
     "object and nothing else:\n"
     "{\"summary\": \"...\", \"memories\": [{\"kind\": \"...\", \"subject\": \"...\", \"text\": "
     "\"...\", \"said\": true}]}\n"
-    "summary: one or two sentences on what the conversation was about and where it was left, "
-    "so that it can be picked up again. Empty if it was small talk or one thing looked up.\n"
+    "summary: one or two sentences on what the person talked about and wanted, and where it "
+    "was left, in the person's own terms, so that it can be picked up again. Nothing in it of "
+    "what the assistant said or looked up. Empty if it was small talk or one thing looked up.\n"
     "memories: six at most, each one thing the PERSON said that will still matter another day. "
     "kind is one of: preference (how they like something), fact (something about them, their "
     "people, places or things), project (something they are working on, and where it stands), "
@@ -3653,8 +3692,8 @@ def consolidated(conv: dict, ask=None) -> list[dict]:
     evidence = "\n".join(theirs)
     shown, room = [], 9000
     for x in conv["lines"]:
-        if x["who"] == "user" and x["via"] == OPS_VIA:
-            continue
+        if x["via"] == OPS_VIA:
+            continue                    # the keeper's turn, and his answer to it: no part of this
         # The person's lines whole: they are the evidence. His own cut
         # short: they are there to make sense of the person's, and what he
         # looked up is in them.
@@ -3670,10 +3709,11 @@ def consolidated(conv: dict, ask=None) -> list[dict]:
     got = as_json(m.get("content")) or {}
     items = records_of(got.get("memories"), evidence)[:6]
     summary = " ".join(str(got.get("summary") or "").split())
-    # A summary is of both sides, so it is held to less: but it too is made
-    # of what was said, and is kept as something worked out, not stated.
-    if 20 <= len(summary) <= 400 and len(theirs) >= 2 and grounded(
-            summary, evidence + "\n" + "\n".join(x["text"] for x in conv["lines"])) >= 0.5:
+    # A summary is held to less than a memory, and kept as something worked
+    # out, not stated. But it too has to be made of the person's words: held
+    # against both sides, it would carry what a web page said, or a thing he
+    # recited from his memory, into every later conversation as a note.
+    if 20 <= len(summary) <= 400 and len(theirs) >= 2 and grounded(summary, evidence) >= 0.5:
         day = time.strftime("%Y-%m-%d %H:%M", time.localtime(conv["started"]))
         items.append({"kind": "summary", "subject": f"conversation {day}", "text": summary,
                       "source": "inferred"})
@@ -4819,6 +4859,27 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
                 "while they are part of it you cannot make a search of your own. Tell the "
                 "person that, and that it will work again in a new conversation, which they "
                 "can start by saying \"new conversation\".")
+    # What he remembers about the person is theirs too, and once any of it
+    # is in a conversation it must not leave by the same two ways. A page
+    # he has read may be telling him to look in his memory and then fetch an
+    # address with what he found written into it. So from then on he may
+    # fetch only an address that was already in the conversation, letter for
+    # letter: one the person gave, or one a lookup returned. An address he
+    # has put together or added to is refused, and so is a search in his own
+    # words. A search the program makes from the person's words still goes.
+    if name == "read_page" and CONVO["recalled"] and not theirs:
+        said = (ctx or {}).get("said") or []
+        if address(args.get("url")) not in CONVO["links"] | addresses_in(" ".join(map(str, said))):
+            log("tool read_page refused: what he remembers is in this conversation, and the address is his own")
+            return ("Not fetched. What you remember about the person is part of this conversation, "
+                    "and while it is you can fetch only an address exactly as the person gave it or "
+                    "as a lookup returned it: not one you have put together or changed. If the "
+                    "person wants that page, ask them for its address.")
+    if name in ("search", "reddit") and CONVO["recalled"] and not theirs:
+        log(f"tool {name} refused: what he remembers is in this conversation")
+        return ("Not searched. What you remember about the person is part of this conversation, and "
+                "while it is you cannot make a search in words of your own. Ask the person to say "
+                "what they want searched for.")
     if name == "jobcontext":             # it says what it did itself: names, never values
         keep = args
     else:
@@ -4829,6 +4890,9 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
     # Which tool, to do what: the name of the thing asked of it, where it
     # has one, and never the words it was given.
     what = str(args.get("do") or args.get("action") or args.get("area") or "")
+    # One plain word, or nothing: it goes into the record of what he did,
+    # and a sentence of his choosing there would be him writing his own record.
+    what = what if re.fullmatch(r"[a-z_]{1,24}", what) else ""
     try:
         result = fn(**keep)
     except Exception as e:      # whatever a lookup trips on, the turn goes on
@@ -4836,6 +4900,8 @@ def run_tool(name: str, args, quiet: bool = False, theirs: bool = False) -> str:
         audit("tool", name, what, False, (time.time() - began) * 1000, type(e).__name__)
         return f"The {name} lookup failed: {str(e)[:120] or type(e).__name__}"
     audit("tool", name, what, True, (time.time() - began) * 1000, "the person's asking" if theirs else "his own")
+    if len(CONVO["links"]) < 600:        # the addresses a lookup returned: ones he may go on to read
+        CONVO["links"] |= addresses_in(result)
     # What comes back is someone else's text. It is information, not orders.
     # (The records tool has cut its own answer to size, and said so in it.)
     return LOOKED_UP + str(result)[:JC_RESULT_MAX + 700 if name == "jobcontext" else RESULT_MAX]
@@ -5390,11 +5456,13 @@ class Pipeline:
                 log(f"{name} dropped: no answer in time")
                 lead, note = words["late"], words["late_note"]
             elif answer == "yes":
+                TURN.made = True
                 made = (push_made(waiting) if kind == "push" else self.job_made(waiting, via)
                         if kind == "job" else forget_made(waiting) if kind == "forget"
                         else jc_commit(waiting))
-                # What was done on a yes is a change of state: it goes in the log.
-                audit("change", name.split()[0], f"{name.split()[-1]} on a yes", True)
+                # What was done on a yes is a change of state: it goes in the
+                # record, with whether it was in fact done.
+                audit("change", name.split()[0], f"{name.split()[-1]} on a yes", bool(getattr(TURN, "made", True)))
                 return self._answered(said, clean(made), via, turn, always=True)
             elif answer == "no":
                 log(f"{name} dropped: the answer was no")
@@ -5772,6 +5840,7 @@ class Pipeline:
         called for that, with what was read back. What became of it, said
         truthfully."""
         got = workshop("work", **change["args"])
+        TURN.made = bool(got.get("ok") and got.get("job"))
         if got.get("repo"):
             CONVO["repo"] = str(got["repo"])
         if got.get("ok") and got.get("job"):
@@ -5805,10 +5874,12 @@ class Pipeline:
             got = {}
         WORKING.update(job="", ended=time.time())
         line = work_line(got)
-        if got.get("state") in ("done", "stopped", "failed") and got.get("kind") != "look":
+        if got.get("state") in ("done", "stopped", "failed") and got.get("kind") != "look" and via != OPS_VIA:
             # Kept, as something this machine saw happen, in the workshop's
             # own counts: that there was such a job, on what, and how it
-            # ended. Not the worker's account of it.
+            # ended. Not the worker's account of it, and not the reason it
+            # gave for failing, which is its own words. Not at all for a job
+            # that whoever looks after the machine started to try it.
             repo = str(got.get("repo") or "a repository")[:80]
             memory("remember", kind="lesson" if got.get("state") == "failed" else "project",
                    source="observed", subject=f"job {job} on {repo.split('/')[-1]}", via=via,
@@ -5818,8 +5889,7 @@ class Pipeline:
                             "failed": " failed"}[got["state"]]
                          + (f": {clip(got.get('stat') or 'files changed', 80)}, on the branch "
                             f"{clip(got.get('branch'), 80)}" if got.get("commits") else ": no file changed")
-                         + ("." if got.get("state") == "done" else
-                            f" ({clip(got.get('error') or 'no reason given', 120)}).")))
+                         + "."))
         # How it ended: never what it was.
         log(f"a job ended: {got.get('state') or 'lost track of'}")
         self.tr.append("douglas", line, via)
@@ -5854,7 +5924,7 @@ class Pipeline:
         self.history = []
         SEEN.update(image=b"", full=b"")
         CONVO.update(private=False, pending=None, news="", epoch=CONVO["epoch"] + 1, repo="",
-                     recalled=set())
+                     recalled=set(), links=set())
 
     def _hush(self) -> None:
         """Cut short an utterance playing on the remote speaker. Called with

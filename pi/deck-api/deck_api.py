@@ -1851,10 +1851,23 @@ FLEET_ROLES = {
     "mini": ("MINIDOUG4", "Mac mini"),
     "mobile": ("DOUGMOBILE", "MacBook: comes and goes"),
 }
-AN_ADDRESS = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
-A_TOKEN = re.compile(r"(token|key|secret|password)=[^&\s]+", re.I)
-_units_kept: dict = {"at": 0.0, "value": None}
+# What is taken out of an event's text before a reader sees it: where a
+# machine is (an address of either kind, a hardware address, a name on the
+# tailnet) and anything given as a credential, however it is put.
+AN_ADDRESS = re.compile(
+    r"\b\d{1,3}(?:\.\d{1,3}){3}\b"                                   # 192.0.2.7
+    r"|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b"                          # a hardware address
+    r"|(?<![\w:])(?=[0-9a-f:]*[0-9a-f])[0-9a-f:]*::[0-9a-f:]*(?![\w:])"  # fe80::1, 2001:db8::7
+    r"|(?<![\w:])(?:[0-9a-f]{1,4}:){5,7}[0-9a-f]{1,4}(?![\w:])"         # the long form (a time has two colons)
+    r"|\b[\w-]+(?:\.[\w-]+)*\.(?:ts\.net|local|lan|home|internal)\b", re.I)
+A_TOKEN = re.compile(
+    r"\b([\w-]*(?:token|key|secret|password|passwd|authorization|bearer|credential)[\w-]*)"
+    r"(\s*(?:=|:|\bis\b)\s*|\s+)(?:bearer\s+)?[^\s&,;\"']{3,}", re.I)
+_units_kept: dict = {"at": 0.0, "value": None, "asked": False}
 _units_lock = threading.Lock()
+FLEET_KEEP_S = 2.0
+_fleet_kept: dict = {"at": 0.0, "value": None}
+_fleet_lock = threading.Lock()
 
 
 def own_units() -> list[dict] | None:
@@ -1862,8 +1875,9 @@ def own_units() -> list[dict] | None:
     systemd has had to start them again. Asked of systemd with a fixed
     command, at most every fifteen seconds; None when it cannot be asked."""
     with _units_lock:
-        if time.monotonic() - _units_kept["at"] < 15 and _units_kept["value"] is not None:
-            return _units_kept["value"]
+        if _units_kept["asked"] and time.monotonic() - _units_kept["at"] < 15:
+            return _units_kept["value"]            # "could not be asked" is kept as long as an answer is
+        _units_kept.update(at=time.monotonic(), asked=True, value=None)
         try:
             ran = subprocess.run(
                 ["systemctl", "show", *[u + ".service" for u in FLEET_UNITS], "-p",
@@ -1905,6 +1919,16 @@ def fleet() -> dict:
     """The machines, for a reader. Every reading has when it was taken:
     `seen` is the last time a machine answered a probe, `as_of` the moment
     its numbers were read."""
+    # Made at most every two seconds: each making asks Douglas's agent for
+    # his machine's account, and a reader asking in a loop should not be
+    # able to keep two machines busy with it.
+    with _fleet_lock:
+        if _fleet_kept["value"] is not None and time.monotonic() - _fleet_kept["at"] < FLEET_KEEP_S:
+            return _fleet_kept["value"]
+        return _fleet_made()
+
+
+def _fleet_made() -> dict:
     s, now = DECK.snapshot(), time.time()
     ws, tel, d, v = s["workstation"], s["telemetry"], s["douglas"], s["voice"]
     boot = s["boot"]
@@ -1945,11 +1969,13 @@ def fleet() -> dict:
     events = [{"ts": e.get("ts"), "level": e.get("level"), "source": e.get("source"),
                "text": A_TOKEN.sub(r"\1=...", AN_ADDRESS.sub("(an address)", str(e.get("text") or "")))[:200]}
               for e in s["events"][:20]]
-    return {"ts": now, "machines": machines, "events": events,
+    view = {"ts": now, "machines": machines, "events": events,
             "deck": {"version": s["version"].get("mtime"), "ui": s["version"].get("ui"),
                      "panel_showing": s["surface"]["active"]},
             "not_reported": "DOUGVOICE, MINIDOUG4 and DOUGMOBILE say only whether they answer; "
                             "the workstation reports only while an exporter on it is running."}
+    _fleet_kept.update(at=time.monotonic(), value=view)
+    return view
 
 
 class Handler(BaseHTTPRequestHandler):

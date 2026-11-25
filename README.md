@@ -1266,15 +1266,22 @@ worked out, at half the confidence. Where the pipeline has got to is kept by
 the memory service, so a restart of either picks up where it stood, and what
 was said before there was a memory is not gone through unasked.
 
-*Newer does not simply win.* A memory of the same kind and subject, saying
-nothing the old one does not, is the same memory said again, and that one
-gets a little surer. Saying anything else (another date, a "not", one more
-detail) it takes the old one's place, and the old one is kept, marked
-replaced. Unless the old one came from a firmer source: what the owner wrote
+*Newer does not simply win, and is never simply dropped.* A memory is the
+same memory said again only when it says the same thing: the same words in
+the same order, once the small ones and the endings are off. That one gets a
+little surer. Anything else on the same subject (another date, a "not", one
+more detail, one detail fewer, the same names the other way round) takes the
+old one's place, and the old one is kept, marked replaced, for the owner to
+bring back. The test is strict because the other mistake costs more: taking
+something new for something known drops the newer word and makes the stale
+one surer. Unless the old one came from a firmer source: what the owner wrote
 down in Mission Control is not changed by something said in a conversation,
 and what was said is not changed by a guess. Then the old one stands, the new
 one is written beside it in its history, and he says so, and where to change
-it. Passwords, keys and tokens are refused at the door, whoever brings them.
+it. Nor is the owner's word forgotten on a yes said to Douglas: it is not
+read back for that, and he says it is changed in Mission Control. Passwords,
+door codes, card numbers and tokens are refused at the door, whoever brings
+them; an address or a branch name that merely looks like a key is not.
 
 *In Mission Control.* The phone page has a MEMORY card (closed until tapped,
 with how much he remembers on it) and the panel's DOUGLAS surface has MEMORY
@@ -1283,8 +1290,12 @@ from and how sure; opened, with what happened to it before, and with what can
 be done: correct it (it is the owner's word from then on, and what it said is
 in its history), mark a task done, delete it (a tap, because it can be
 undone), bring it back, or purge it (a hold, because it cannot: the row, its
-earlier wordings and its place in the index go, and the database's write-ahead
-log is cut back so that the text is not left in the file). WHAT HE DID is the
+earlier wordings, the memories it had replaced and its place in the index go,
+and the database's write-ahead log is cut back so that the text is not left
+in the file; if something else is reading the file at that moment the page
+says so, and the log is cut back within the half minute). A memory that is
+deleted or purged while the conversation it was said in has not yet been gone
+through stays gone: nothing is made of that conversation. WHAT HE DID is the
 record: which tool, to do what, on whose asking (the person's, or his own),
 whether it worked and how long it took. Never the words.
 
@@ -1322,6 +1333,50 @@ whether it worked and how long it took. Never the words.
   and he said it was noted. And test turns sent as the machine's keeper were
   written down as the panel's, so they would have been gone through as the
   owner's words. Both have tests now.
+
+*What a second pair of eyes found.* An independent review, told to break it,
+found no way from Douglas's door to the owner's operations and no route the
+read token opens but its own. It did find, and showed each by running it:
+
+- That what he remembers could be carried out of the house. A page he read
+  could tell him to look in his memory and then fetch an address with what he
+  found written into it. Once anything he remembers is in a conversation, he
+  now fetches only an address that was already in it, letter for letter (one
+  the person gave, one a lookup returned), and makes no search in words of
+  his own; a search the program makes from the person's words still goes.
+- That a wording could pass for the person's without being it: one with no
+  telling word in it to check, one whose number was a part of theirs ("the
+  4th" in "the 14th"), one with a "not" they never said. All three are
+  refused now.
+- That the summary of a conversation was held against both sides of it, and
+  so could carry what a web page said into every later conversation as a
+  note. It is held against the person's words alone.
+- That saying less than a memory counted as saying it again, so "he eats
+  meat" after "he does not eat meat" was dropped and the old one made surer
+  (see above), and that "forget that" and a yes could remove what the owner
+  wrote down.
+- That a memory purged, or forgotten on a yes, inside the six minutes before
+  its conversation was gone through came straight back from the record of
+  what was said.
+- That an operator's turn inside a real conversation was hidden only on the
+  operator's side, and that a job's own account of why it failed went into a
+  memory as something this machine saw.
+- Smaller things: subjects made only of small words all counting as one
+  subject, ticking a task off making it the owner's word, a secret refused
+  only in a few phrasings, older wordings left behind by a purge, the record
+  of what he did taking a sentence of his choosing as its "action", and the
+  fleet view passing an IPv6 or a hardware address through.
+
+Each has a test, and each test was checked by breaking the fix again in a
+copy: forty of forty noticed, a hundred with the sixty from before.
+
+Two things it raised are as they were. The other services that run as the
+pipeline's user cannot open his memory's door, but they could write into the
+record of what was said, which is where memories are made from; closing that
+means changing units that have nothing to do with this, and has not been
+done. And what was said against one of the owner's memories is kept in that
+memory's history, on purpose, where the owner sees it and nothing recalls it;
+it goes when that memory is purged.
 
 *What it does not do.* It does not embed anything: recall is by words, and a
 memory that shares none with the message is not found (he can be asked what he
@@ -2045,6 +2100,12 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   could. What a job writes, its commit message and the pull request's
   description carry the job's words and the model's account of its work, and
   are public if the repository is: the read-back says which it is.
+- What Douglas remembers about a person is treated as theirs, like their
+  records: once any of it is in a conversation, he fetches no address that he
+  has put together or added to (only one the person gave or a lookup
+  returned, exactly as it was) and makes no search in words of his own, until
+  the conversation ends. That is what stops something he has read from having
+  him send his memory away in a web address.
 - What Douglas remembers is in one SQLite file that only `douglas-memory`'s
   user can read, in a unit with no network, no devices and an empty
   capability set. Its two doors are sockets systemd makes, each with a group

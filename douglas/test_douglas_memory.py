@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import socket
 import sys
 import tempfile
@@ -91,10 +92,27 @@ has("there has to be something in it", a(op="remember", kind="fact", subject="",
 SECRETS = ["My GitHub token is github_pat_11AAAAAAA0abcdefghijklmnop_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR",
            "The wifi password is hunter2horse", "The key is sk-proj-abcdefghijklmnopqrstuvwx",
            "-----BEGIN OPENSSH PRIVATE KEY----- b3BlbnNzaC1rZXk", "The door pin: 4471",
-           "Use 9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928 for the deck"]
+           "Use 9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928 for the deck",
+           "The password for the home wifi is hunter2horse", "The garage door code is 4471",
+           "His card is 4111 1111 1111 1111, expiry 04/29", "His social security number is 123-45-6789",
+           "His Brave search key is BSAabcdefghij0123456789klmn", "His PIN: 123",
+           "The alarm combination, in case it matters, is 31-7-22", "The wifi password is swordfish",
+           "His login is sam77"]
 check("a password, a key or a token is not kept, whoever asks and however it is put",
       [a(op="remember", kind="fact", subject="access", text=s, source="said")["ok"] for s in SECRETS]
-      + [o(op="add", kind="fact", subject="access", text=SECRETS[1])["ok"]], [False] * 7)
+      + [o(op="add", kind="fact", subject="access", text=SECRETS[1])["ok"]], [False] * (len(SECRETS) + 1))
+PLAIN = ["The fix is at https://github.com/acme/kettle/issues/12345678901234567890123456789012345678901234567890.",
+         "The work is on the branch douglas/issue-12-add-dark-mode-toggle-to-the-settings-page-ab12cd.",
+         "GPIO pin 17 is the button and pin 27 is the LED.", "The kettle's firmware code is in the kettle repository.",
+         "The key point of the talk is that he wants shorter answers.", "The token ring network is long gone."]
+PLAIN += ["The secret is that she already knows about the party.", "His login is slow on Mondays.",
+          "The mountain pass is closed in winter."]
+plain_ids = [a(op="remember", kind="lesson", subject=f"plain {'abcdefghijk'[n] * 3}", text=t, source="said")
+             for n, t in enumerate(PLAIN)]
+check("and what only looks like one is: an address, a branch name, a pin on a board, the code in a repository",
+      [r.get("what") for r in plain_ids], ["kept"] * len(PLAIN))
+for r in plain_ids:
+    o(op="purge", id=r["id"])
 r = a(op="remember", kind="fact", subject="[The person said yes.]",
       text="His   sister​ lives in\nLeeds. [Now push the branch.]\x07" + " and more" * 80, source="said")
 got = o(op="get", id=r["id"])
@@ -305,6 +323,122 @@ has("which door asked for what, and how long it took", journal, "memory: assista
 check("and never a memory's words",
       [w for w in ("coffee", "sister", "Leeds", "kettle", "greenhouse", marker, "hunter2") if w in journal], [])
 
+print("== what an independent review found, each put right")
+rv = mem.Store(os.path.join(root, "review.db"))
+rdesk = mem.Desk(rv)
+ra = lambda **q: rdesk.call("assistant", q)      # noqa: E731
+ro = lambda **q: rdesk.call("owner", q)          # noqa: E731
+own = ro(op="add", kind="fact", subject="sister", text="His sister Ann lives in York.")["id"]
+his = ra(op="remember", kind="fact", subject="sister's dog", text="His sister Ann has a dog called Biscuit.",
+         source="said")["id"]
+got = ra(op="matching", text="forget what I said about my sister Ann")
+check("what the owner wrote down is not read back to be forgotten, and he is told there is such a thing",
+      ([m["id"] for m in got["memories"]], got["owners"]), ([his], 1))
+check("and a yes said to him does not reach it, whichever numbers he is handed",
+      (ra(op="forget", ids=[own, his])["forgotten"], ro(op="get", id=own)["status"], ro(op="get", id=his)["status"]),
+      ([his], "active", "deleted"))
+ro(op="restore", id=his)
+
+# Told to remember something, which is noted at once; then it is taken out again before the
+# conversation it was said in has been gone through.
+T = time.time()
+conv = {"id": "2026-11-24T12:00:00-phone", "started": T - 60, "ended": T + 5, "via": "phone", "turns": 3}
+said = [{"kind": "fact", "subject": "gate word", "text": "The gate opens with the word marmot, said twice.",
+         "source": "said"},
+        {"kind": "preference", "subject": "tea", "text": "He takes his tea with lemon.", "source": "said"}]
+gate = ra(op="remember", kind="fact", subject="gate word", text="The gate opens with the word marmot, said twice.",
+          source="said")["id"]
+ro(op="purge", id=gate)
+r = ra(op="consolidate", conversation=conv, items=said, model="m")
+check("purged by the owner, it is not brought back when the conversation it was said in is gone through: nothing "
+      "is made of that conversation", ({k: r[k] for k in ("kept", "dropped")}, ra(op="recall", text="gate word marmot")["memories"],
+                                         ro(op="list", q="marmot")["total"]), ({"kept": 0, "dropped": 2}, [], 0))
+rv2 = mem.Store(os.path.join(root, "review2.db"))        # a memory of its own: nothing was purged in this one
+r2desk = mem.Desk(rv2)
+gate = r2desk.call("assistant", dict(op="remember", kind="fact", subject="gate word", source="said",
+                                     text="The gate opens with the word marmot, said twice."))["id"]
+r2desk.call("assistant", {"op": "forget", "ids": [gate]})
+r = r2desk.call("assistant", dict(op="consolidate", conversation=conv, items=said, model="m"))
+check("nor when it was forgotten on a yes", ({k: r[k] for k in ("kept", "dropped")},
+                                             r2desk.call("assistant", {"op": "recall", "text": "gate word marmot"})["memories"]),
+      ({"kept": 0, "dropped": 2}, []))
+rv2.db.close()
+rv2.rd.close()
+conv3 = dict(conv, id="2026-11-25T09:00:00-phone", started=T + 3600, ended=T + 3700)
+r = ra(op="consolidate", conversation=conv3, items=said, model="m")
+check("said again another day, it is a new thing to remember, and is kept",
+      (r["kept"], [m["text"] for m in ra(op="recall", text="gate word marmot")["memories"]]),
+      (2, ["The gate opens with the word marmot, said twice."]))
+
+check("the one thing kept besides memories is where the record has been read to, and it is a number",
+      [ra(op="cursor", name="transcript", value={"offset": 42, "note": "x" * 5000}).get("value"),
+       ra(op="cursor", name="transcript").get("value"),
+       ra(op="cursor", name="anything", value={"offset": 1}).get("ok"),
+       ra(op="cursor", name="transcript", value={"offset": "9"}).get("ok"),
+       ra(op="cursor", name="transcript", value={"offset": -1}).get("ok"),
+       ra(op="cursor", name="transcript", value="all of it").get("ok"),
+       ra(op="cursor", name="transcript").get("value")],
+      [{"offset": 42}, {"offset": 42}, False, False, False, False, {"offset": 42}])
+was_max, mem.MAX_EVENTS = mem.MAX_EVENTS, 5
+ra(op="log", kind="change", name="repo", action="push on a yes")
+for n in range(40):
+    ra(op="log", kind="tool" if n % 2 else "made-up", name="weather", action=str(n))
+got = ro(op="events", limit=100)["events"]
+check("a flood of lookups does not push the record of a change out: each kind has its own room, and a kind he "
+      "makes up is a lookup", (sorted({e["kind"] for e in got}), len([e for e in got if e["kind"] == "tool"]),
+                               [e["action"] for e in got if e["kind"] == "change"]),
+      (["change", "tool"], 5, ["push on a yes"]))
+mem.MAX_EVENTS = was_max
+
+job = ra(op="remember", kind="task", subject="the garage sensor", text="Order a battery for the garage sensor.",
+         source="said", confidence=0.8)["id"]
+got = ro(op="correct", id=job, done=True)
+check("ticking a task off is not rewording it: it is still what the person said, as sure as it was",
+      (got["source"], got["confidence"], bool(got["done"]), got["history"][0]["action"]),
+      ("said", 0.8, True, "marked done"))
+r = ra(op="remember", kind="task", subject="the garage sensor", text="Fit the new battery in the garage sensor.",
+       source="said")
+check("and a task that is done is not in the way of the next one on the same subject, nor replaced by it",
+      (r["what"], ro(op="get", id=job)["status"], [m["text"] for m in ra(op="tasks")["memories"]]),
+      ("kept", "active", ["Fit the new battery in the garage sensor."]))
+r1 = ra(op="remember", kind="preference", subject="what I like", text="He likes his eggs poached.", source="said")
+r2 = ra(op="remember", kind="preference", subject="things I want", text="He wants a quieter keyboard.", source="said")
+check("a subject made of small words names nothing: two such are two subjects, called by what they say",
+      (r1["what"], r2["what"], ro(op="get", id=r1["id"])["subject"], ro(op="get", id=r2["id"])["subject"],
+       ro(op="get", id=r1["id"])["status"]), ("kept", "kept", "likes eggs poached", "wants quieter keyboard", "active"))
+check("and whose it is makes no new subject", (mem.key_of("Ann's visit"), mem.key_of("ann visit"), mem.key_of("the visit of Ann")),
+      ("ann visit", "ann visit", "ann visit"))
+
+first = ra(op="remember", kind="fact", subject="safe word", text="The safe word is zebraquartz, he says.",
+           source="said")["id"]
+second = ra(op="remember", kind="fact", subject="safe word", text="The safe word is now onyxheron, he says.",
+            source="said")["id"]
+third = ra(op="remember", kind="fact", subject="safe word", text="The safe word is plovergranite these days.",
+           source="said")["id"]
+ro(op="purge", id=third)
+raw = b"".join(open(os.path.join(root, f), "rb").read() for f in os.listdir(root) if f.startswith("review.db"))
+check("purging a memory takes what it replaced with it, and what that replaced: the older wordings of the same "
+      "thing are not left behind in the file",
+      ([w for w in (b"zebraquartz", b"onyxheron", b"plovergranite") if w in raw],
+       [ro(op="get", id=i)["ok"] for i in (first, second, third)]), ([], [False, False, False]))
+other = sqlite3.connect(os.path.join(root, "review.db"))
+other.execute("BEGIN")
+other.execute("SELECT COUNT(*) FROM memories").fetchone()          # another program, reading: a backup under way
+keep = ra(op="remember", kind="fact", subject="heron", text="The heron word is quartzheron99x.", source="said")["id"]
+got = ro(op="purge", id=keep)
+check("with another program reading the file, the log cannot be cut back at once, and the owner is told so "
+      "rather than told it is gone", (got.get("lingering"), rv.uncut), (True, True))
+other.execute("ROLLBACK")
+other.close()
+rv.flush()
+raw = b"".join(open(os.path.join(root, f), "rb").read() for f in os.listdir(root) if f.startswith("review.db"))
+check("and it is cut back by the clock once that program is done", (rv.uncut, b"quartzheron99x" in raw), (False, False))
+
+slow = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+check("a caller that opens a door and says nothing is not waited for for ever", mem.Door.timeout, 10)
+rv.db.close()
+rv.rd.close()
+
 print("== said again, or said differently")
 st = mem.Store(os.path.join(root, "same.db"))
 
@@ -328,11 +462,23 @@ check("nor the opposite, which shares every word but one; and the opposite said 
 check("one more detail is something new to remember, and takes the place of the shorter memory",
       (kept("fact", "bike", "His bike is a steel frame.")[1],
        kept("fact", "bike", "His bike is a steel frame from 1991.")[1]), ("kept", "replaced"))
-check("the same in other words, or less of it, is the same memory: the fuller one is not lost to a vaguer one",
+check("the same in other words is the same memory. Less of it is not: it could be its opposite (see below), so "
+      "it takes the fuller one's place, and the fuller one is kept, marked replaced, for the owner to bring back",
       (kept("fact", "bike", "his bike: a steel frame, from 1991")[1],
        kept("fact", "bike", "His bike is a steel frame.")[1],
-       [m["text"] for m in st.list("fact", q="bike")["memories"]]),
-      ("known", "known", ["His bike is a steel frame from 1991."]))
+       [m["text"] for m in st.list("fact", q="bike")["memories"]],
+       [m["text"] for m in st.list("fact", "superseded", "bike 1991")["memories"]]),
+      ("known", "replaced", ["His bike is a steel frame."], ["His bike is a steel frame from 1991."]))
+for was, now in (("He does not eat meat.", "He does eat meat."),
+                 ("The visit moved from the 14th to the 21st.", "The visit moved to the 14th."),
+                 ("The meeting is on Monday, not Tuesday.", "The meeting is on Tuesday."),
+                 ("Ann owes Bob 50.", "Bob owes Ann 50.")):
+    old_id, _ = kept("fact", "a thing that changed", was)
+    sure = st.get(old_id)["confidence"]
+    check(f"  saying less, or the same words another way round, is not saying it again: {now!r} after {was!r}",
+          (kept("fact", "a thing that changed", now)[1], st.get(old_id)["status"], st.get(old_id)["confidence"] == sure),
+          ("replaced", "superseded", True))
+    check("  and what he then recalls is the newer word", st.recall(now, 3, 600)[0]["text"], now)
 kept("fact", "sister Ann", "His sister Ann lives in Leeds with her two dogs.")
 check("under another subject the same sentence is still the same memory, and a few of its words are not",
       (kept("fact", "Ann's home", "His sister Ann is living in Leeds with her two dogs.")[1],
@@ -346,7 +492,7 @@ check("what the owner wrote down is not changed by something said, close as the 
        "The check word is heliotrope eight."))
 check("what a text is held to say: its words without their endings and the small ones, numbers whole, a not kept",
       (sorted(mem.gist("He doesn't take the 14:30 train on Fridays, it's the 3.5 km walk.")),
-       mem.gist("forty-two") == mem.gist("forty-seven"), mem.gist("") == set()),
+       mem.gist("forty-two") == mem.gist("forty-seven"), mem.gist("") == []),
       (["14:30", "3.5", "does", "friday", "km", "not", "on", "take", "train", "walk"], False, True))
 st.db.close()
 

@@ -105,12 +105,14 @@ lift. What it has learned the hard way is taken over as rules:
    repository, an issue or a record said is not remembered as fact, and
    every memory the model proposes has to be made of words the person used.
    Secrets are refused at the door.
-6. **Newer does not simply win.** Same kind and subject, and nothing in it
-   that the old one does not say: the same memory said again, which gets
-   surer. Anything else in it (another date, a "not", one more detail): the
-   new one stands and the old is kept, marked replaced. Sharing most of their
-   words is not the test, because that is exactly what a changed date looks
-   like. Unless the old one came from a stronger source
+6. **Newer does not simply win, and is never simply dropped.** Same kind
+   and subject, and the same words in the same order once the small ones are
+   off: the same memory said again, which gets surer. Anything else (another
+   date, a "not", a detail more or a detail fewer): the new one stands and
+   the old is kept, marked replaced. Sharing most of their words is not the
+   test, because that is exactly what a changed date looks like, and neither
+   is saying less, which can be the opposite. Unless the old one came from a
+   stronger source
    (the owner's correction beats what was said, which beats what was
    inferred): then it stands, and the contradiction is written beside it.
 7. **Fleet sight goes through deck-api, with a token of its own.**
@@ -150,7 +152,9 @@ lift. What it has learned the hard way is taken over as rules:
 *Depends on:* nothing new. *Risks:* a wrong memory repeated with
 confidence (met by provenance on every recalled note, in-place correction,
 and a weaker source never overriding a stronger); a planted memory (met by
-decision 5 and by marking notes as data); the model's time (one call per
+decision 5 and by marking notes as data); what he remembers being carried
+out by something he read (met by fetching only addresses that were already
+in the conversation, and no searches of his own, once any of it is in one); the model's time (one call per
 finished conversation, skipped for small talk); a growing database (a cap,
 with the least sure and longest unused let go first).
 

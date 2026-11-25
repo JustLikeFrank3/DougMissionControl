@@ -101,11 +101,26 @@ TEXT_MAX, SUBJECT_MAX = 400, 80
 HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁠-⁩﻿"
                     "\U000e0000-\U000e007f]")
 # What is never kept, whoever asks: a memory is not a place for a secret.
+# Three ways one is known: by its shape (a token of a kind that services
+# hand out), by being named and then given ("the password for the wifi is
+# ...", "garage door code: 4471"), and by being a card or a social security
+# number. A long run of letters and digits counts too, unless it is part of
+# an address or a path: a branch name is not a key.
 SECRET = re.compile(
     r"github_pat_\w{20,}|gh[pousr]_[A-Za-z0-9]{20,}|\bsk-[A-Za-z0-9_-]{20,}|\bAKIA[0-9A-Z]{16}\b|"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY|\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|"
-    r"\b(?:pass(?:word|phrase|code)?|pin|secret|token|api[ _-]?key)\b\s*(?:is|=|:)\s*\S{4,}|"
-    r"\b[A-Za-z0-9+/_-]{40,}\b", re.I)
+    r"\bBSA[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY|\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|"
+    # A password named and given is one, whatever it looks like ("the wifi
+    # password is swordfish"). The other names are ordinary words too ("the
+    # token ring network is long gone", "the secret is that she knows"), so
+    # what follows them has to look the part: a digit or a sign in it, or long.
+    r"\bpass(?:word|phrase|code)s?\b[^.!?\n]{0,40}?(?:\bis\b|\bare\b|=|:)\s*\S{3,}|"
+    r"(?:\b(?:secret|token|credentials?|login|combination|cvv|cvc|"
+    r"(?:api|secret|private|access|search|licen[cs]e|product)[ _-]?key|pin[ _-]?(?:code|number)|"
+    r"(?:door|gate|garage|alarm|safe|entry|access|security|lock)[ _-]?code)\b|(?-i:\bPIN\b))"
+    r"[^.!?\n]{0,40}?(?:\bis\b|\bare\b|=|:)\s*(?:(?=\S*[0-9!@#$%^&*+=_~])\S{3,}|\S{12,})|"
+    r"\bpin\b[^.!?\n]{0,20}?(?:\bis\b|=|:)\s*\d{3,8}\b|"      # "the door pin: 4471", not "pin 17 is the button"
+    r"\b(?:\d[ -]?){13,19}\b|\b\d{3}-\d{2}-\d{4}\b|"
+    r"(?<![/\w.-])[A-Za-z0-9+_-]{40,}(?![/\w.-])", re.I)
 STOP = set("""a about after again all also am an and any are as at be because been before being but by can
 could did do does doing don down for from had has have having he her here hers him his how i if in into is
 it its just me more most my no nor not now of off on once only or other our out over own s same she so
@@ -135,7 +150,8 @@ def words(text: str) -> list[str]:
 def key_of(subject: str) -> str:
     """What two subjects have to share to be the same subject: their words,
     whatever order, case or filler they came in."""
-    return " ".join(sorted(set(words(subject))))
+    low = str(subject).lower().replace("\u2019", "'").replace("'s", "")
+    return " ".join(sorted(set(words(low))))
 
 
 # The words that carry nothing by themselves. Kept short on purpose: what is
@@ -146,30 +162,30 @@ SMALL = set("a an the is are was were be been am to of and that this it its he s
             "him them i my me you your".split())
 
 
-def gist(text: str) -> set[str]:
+def gist(text: str) -> list[str]:
     """What a text says, for telling whether another says the same: its
-    words with their endings off and the small ones out. A number, a date
-    or a time stays whole: "14th" is not "15th", and "forty-two" is not
-    "forty-seven"."""
+    words in their order, with their endings off and the small ones out. A
+    number, a date or a time stays whole: "14th" is not "15th", and
+    "forty-two" is not "forty-seven"."""
     low = str(text).lower().replace("\u2019", "'").replace("n't", " not").replace("'s", "")
-    out = set()
-    for w in re.findall(r"[a-z0-9]+(?:[-.:/][a-z0-9]+)*", low):
-        if w in SMALL:
-            continue
-        out.add(re.sub(r"(ies|es|ed|ing|s)$", "", w) if w.isalpha() and len(w) > 4 else w)
-    return out
+    return [re.sub(r"(ies|es|ed|ing|s)$", "", w) if w.isalpha() and len(w) > 4 else w
+            for w in re.findall(r"[a-z0-9]+(?:[-.:/][a-z0-9]+)*", low) if w not in SMALL]
 
 
-def said_again(new: str, old: str, same_subject: bool) -> bool:
-    """Does a text say only what a memory says already? Then it is that
-    memory, said twice. Anything in it that the memory has not got (another
-    number, another name, a "not", one more detail) makes it something else
-    to remember, however many words the two share: sharing most of their
-    words is exactly what a changed date looks like. Between memories of
-    different subjects it also has to say most of what the other says, or a
-    few words that happen to be in a longer memory would pass for it."""
-    x, y = gist(new), gist(old)
-    return bool(x) and x <= y and (same_subject or len(x) >= 0.6 * len(y))
+def said_again(new: str, old: str) -> bool:
+    """Does a text say just what a memory says? Then it is that memory,
+    said twice. The test is strict on purpose, because the other mistake is
+    the costly one: taking something new for something known drops it, and
+    what is dropped is the newer word. Sharing most of their words will not
+    do (that is what a changed date looks like), and neither will saying
+    less: "he eats meat" after "he does not eat meat" is all inside the old
+    one, and is its opposite. Nor the same words in another order: "Ann
+    owes Bob" is not "Bob owes Ann". So: the same words, in the same order,
+    once the small ones and the endings are off. Anything else is a
+    different thing to remember; if it is on the same subject it takes the
+    old one's place, and the old one is kept, marked replaced."""
+    x = gist(new)
+    return bool(x) and x == gist(old)
 
 
 class Problem(Exception):
@@ -198,6 +214,7 @@ class Store:
         # change or by the clock (settle), never in the way of a recall.
         self.used: dict[int, list] = {}
         self.used_lock = threading.Lock()
+        self.uncut = False               # a purge whose text may still be in the log
 
     def migrate(self) -> None:
         """The schema, brought up to date one step at a time: each step runs
@@ -266,6 +283,8 @@ class Store:
         if self.used:
             with self.tx():
                 pass
+        if self.uncut:
+            self.cut()
 
     # -- writing ---------------------------------------------------------------
 
@@ -296,7 +315,10 @@ class Store:
             raise Problem("There is nothing in that to remember.")
         if SECRET.search(text) or SECRET.search(subject):
             raise Problem("That looks like a password, a key or a token, and those are not kept in memory.")
-        subject = subject or clean(" ".join(words(text)[:5]), SUBJECT_MAX)
+        # A subject made only of small words ("what I like", "about me") names
+        # nothing, and every such one would be the same subject as the next.
+        if not key_of(subject):
+            subject = clean(" ".join(words(text)[:5]), SUBJECT_MAX)
         key = key_of(subject)
         try:
             sure = min(1.0, max(0.05, float(confidence))) if confidence is not None else SURE[source]
@@ -308,11 +330,14 @@ class Store:
             due = None
         now = time.time()
         with self.tx():
+            # What there is on this subject already. A task that is done is not
+            # in the way of a new one, and is not replaced by it.
             same = self.db.execute("SELECT * FROM memories WHERE kind = ? AND subject_key = ? AND "
-                                   "status = 'active' ORDER BY updated DESC", (kind, key)).fetchall()
+                                   "status = 'active' AND (kind != 'task' OR done IS NULL) "
+                                   "ORDER BY updated DESC", (kind, key)).fetchall() if key else []
             near = same or self.like(text, kind, self.db)
             for old in near:
-                if said_again(text, old["text"], bool(same)):   # the same memory, said twice
+                if said_again(text, old["text"]):             # the same memory, said twice
                     self.db.execute("UPDATE memories SET updated = ?, confidence = ? WHERE id = ?",
                                     (now, min(1.0, max(old["confidence"], sure) + 0.05), old["id"]))
                     self.note(old["id"], who, "said again")
@@ -435,11 +460,15 @@ class Store:
             used += len(r["text"]) + 40
         return out
 
-    def matching(self, text: str, limit: int = 3) -> list[dict]:
+    def matching(self, text: str, limit: int = 3) -> tuple[list[dict], int]:
         """The memories a person most likely means by "forget that ...":
-        read back to them before anything is forgotten."""
+        read back to them before anything is forgotten. And how many more
+        match that are the owner's own word: those are not his to forget,
+        whoever asks him to."""
         with self.rlock:
-            return [self.shown(r) for r in self.like(text)[:max(1, min(int(limit), 5))]]
+            rows = self.like(text)[:8]
+        mine = [self.shown(r) for r in rows if r["source"] != "owner"]
+        return mine[:max(1, min(int(limit), 5))], len(rows) - len(mine)
 
     def forget(self, ids, who: str) -> list[int]:
         """Mark memories as deleted: out of reach of recall, still there
@@ -447,7 +476,10 @@ class Store:
         done = []
         with self.tx():
             for i in [int(x) for x in ids if str(x).isdigit()][:10]:
-                r = self.db.execute("SELECT * FROM memories WHERE id = ? AND status = 'active'", (i,)).fetchone()
+                # Not what the owner wrote down: that is changed where it was
+                # written, and a yes said to Douglas does not reach it.
+                r = self.db.execute("SELECT * FROM memories WHERE id = ? AND status = 'active' AND "
+                                    "source != 'owner'", (i,)).fetchone()
                 if r:
                     self.db.execute("UPDATE memories SET status = 'deleted', updated = ? WHERE id = ?",
                                     (time.time(), i))
@@ -468,6 +500,21 @@ class Store:
             if self.db.execute("SELECT 1 FROM conversations WHERE id = ? AND consolidated IS NOT NULL",
                                (cid,)).fetchone():
                 return dict(counts, already=True)
+            # Something noted down during this conversation has since been
+            # deleted or purged. What was said is still in the record this
+            # is made from, and going through it would bring the thing
+            # straight back; so nothing is made of this conversation.
+            try:
+                began, ended = float(conv.get("started") or 0) - 1, float(conv.get("ended") or 0) + 1
+            except (TypeError, ValueError):
+                began = ended = 0.0
+            if began > 0 and (
+                    self.db.execute("SELECT 1 FROM memories WHERE status = 'deleted' AND created BETWEEN ? AND ?",
+                                    (began, ended)).fetchone()
+                    or self.db.execute("SELECT 1 FROM history WHERE action = 'purged' AND "
+                                       "CAST(after AS REAL) BETWEEN ? AND ?", (began, ended)).fetchone()):
+                counts["dropped"] += len(items) if isinstance(items, list) else 0
+                items = []
             for item in (items if isinstance(items, list) else [])[:12]:
                 if not isinstance(item, dict):
                     counts["dropped"] += 1
@@ -505,6 +552,13 @@ class Store:
                 self.note(r["id"], "memory", "let go for room", before=r["text"])
 
     def state(self, name: str, value=None):
+        if name != "cursor:transcript":
+            raise Problem("There is one thing kept here: where the record of what was said has been read to.")
+        if value is not None:
+            if not (isinstance(value, dict) and isinstance(value.get("offset"), int)
+                    and not isinstance(value["offset"], bool) and value["offset"] >= 0):
+                raise Problem("That is a place in the record: a number of bytes, and nothing else.")
+            value = {"offset": value["offset"]}
         with self.tx():
             if value is not None:
                 self.db.execute("INSERT INTO state (name, value) VALUES (?,?) ON CONFLICT(name) DO UPDATE "
@@ -521,7 +575,11 @@ class Store:
                             "(?,?,?,?,?,?,?,?)", (time.time(), clean(kind, 20), clean(name, 40),
                                                   clean(action, 40), 1 if ok else 0, int(ms or 0),
                                                   clean(via, 20), clean(detail, 120)))
-            self.db.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (MAX_EVENTS,))
+            # Each kind has its own room: a flood of lookups does not push
+            # the record of a change out of the far end.
+            self.db.execute("DELETE FROM events WHERE kind = ? AND id <= COALESCE((SELECT id FROM events "
+                            "WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?), 0)",
+                            (clean(kind, 20), clean(kind, 20), MAX_EVENTS))
 
     # -- reading and changing, for the owner -------------------------------------
 
@@ -571,15 +629,20 @@ class Store:
                 raise Problem("A memory has to say something. To be rid of it, delete it.")
             if SECRET.search(new_text) or SECRET.search(new_subject):
                 raise Problem("That looks like a password, a key or a token, and those are not kept in memory.")
+            # Ticking a task off is not rewording it: whose word it is, and
+            # how sure, stay as they were.
+            reworded = text is not None or subject is not None or kind is not None or confidence is not None
             self.db.execute(
-                "UPDATE memories SET text = ?, subject = ?, subject_key = ?, kind = ?, source = 'owner', "
+                "UPDATE memories SET text = ?, subject = ?, subject_key = ?, kind = ?, source = ?, "
                 "confidence = ?, updated = ?, done = ? WHERE id = ?",
-                (new_text, new_subject, key_of(new_subject), new_kind,
+                (new_text, new_subject, key_of(new_subject), new_kind, "owner" if reworded else r["source"],
+                 r["confidence"] if not reworded else
                  1.0 if confidence is None else min(1.0, max(0.05, float(confidence))), time.time(),
                  (time.time() if done else None) if done is not None else r["done"], r["id"]))
             if r["status"] == "active":
                 self.index(r["id"], new_subject, new_text)
-            self.note(r["id"], who, "corrected", before=r["text"], after=new_text)
+            self.note(r["id"], who, "corrected" if reworded else "marked done" if done else "marked not done",
+                      before=r["text"], after=new_text)
             return self.get(r["id"])
 
     def set_status(self, memory, who: str, status: str) -> dict:
@@ -605,22 +668,43 @@ class Store:
             self.note(r["id"], who, "restored" if status == "active" else "deleted", before=r["text"])
             return self.get(r["id"])
 
-    def purge(self, memory, who: str) -> None:
-        """Gone for good: the memory, its place in the index, and every
-        earlier wording of it in its history. That it was purged, and when,
-        is all that stays."""
+    def purge(self, memory, who: str) -> bool:
+        """Gone for good: the memory, its place in the index, every earlier
+        wording of it in its history, and the memories it took the place
+        of, which said the same thing an older way. That each was purged,
+        and when, is all that stays. False when the text may still be in
+        the database's log for a moment (see cut)."""
         with self.tx():
-            i = int(memory)
-            if not self.db.execute("SELECT 1 FROM memories WHERE id = ?", (i,)).fetchone():
+            first = int(memory)
+            if not self.db.execute("SELECT 1 FROM memories WHERE id = ?", (first,)).fetchone():
                 raise Problem("There is no such memory.")
-            self.index(i, None, None)
-            self.db.execute("DELETE FROM memories WHERE id = ?", (i,))
-            self.db.execute("DELETE FROM history WHERE memory = ?", (i,))
-            self.note(i, who, "purged")
-        # And out of the write-ahead log, where it would linger. That can be
-        # done only while nobody is reading, so the reader is kept out for it.
+            gone, look = [first], [first]
+            while look:                              # what it replaced, and what those replaced
+                look = [r["id"] for r in self.db.execute(
+                    f"SELECT id FROM memories WHERE superseded_by IN ({','.join('?' * len(look))})", look)
+                    if r["id"] not in gone]
+                gone += look
+            for i in gone:
+                made = self.db.execute("SELECT created FROM memories WHERE id = ?", (i,)).fetchone()["created"]
+                self.index(i, None, None)
+                self.db.execute("DELETE FROM memories WHERE id = ?", (i,))
+                self.db.execute("DELETE FROM history WHERE memory = ?", (i,))
+                # When it had been noted down, and nothing of what it said: so
+                # that the conversation it came from is not gone through and
+                # the thing brought back (see consolidate).
+                self.note(i, who, "purged", after=f"{made:.0f}")
+        return self.cut()
+
+    def cut(self) -> bool:
+        """Cut the write-ahead log back to nothing, so that what was purged
+        is not left in it. That can be done only while nothing is reading
+        the file: this program's own reader is kept out for it, and if
+        another program has the file open (a backup under way) it is tried
+        again by the clock until it works. Whether it did."""
         with self.lock, self.rlock:
-            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            busy = self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+            self.uncut = bool(busy)
+        return not busy
 
     def events(self, limit=100, kind: str = "") -> list[dict]:
         with self.lock:
@@ -675,8 +759,9 @@ class Desk:
         if op == "known":
             return {"memories": s.known()}
         if op == "matching":
-            return {"memories": [{"id": m["id"], "kind": m["kind"], "text": m["text"]}
-                                 for m in s.matching(str(r.get("text") or "")[:600], r.get("limit") or 3)]}
+            found, owners = s.matching(str(r.get("text") or "")[:600], r.get("limit") or 3)
+            return {"memories": [{"id": m["id"], "kind": m["kind"], "text": m["text"]} for m in found],
+                    "owners": owners}
         if op == "forget":
             return {"forgotten": s.forget(r.get("ids") if isinstance(r.get("ids"), list) else [], "douglas")}
         if op == "consolidate":
@@ -694,7 +779,8 @@ class Desk:
             name = "cursor:" + clean(r.get("name"), 40)
             return {"value": s.state(name, r.get("value")) if "value" in r else s.state(name)}
         if op == "log":
-            s.event(r.get("kind") or "tool", r.get("name") or "", r.get("action") or "", bool(r.get("ok", True)),
+            s.event("change" if r.get("kind") == "change" else "tool", r.get("name") or "",
+                    r.get("action") or "", bool(r.get("ok", True)),
                     r.get("ms") or 0, r.get("via") or "", r.get("detail") or "")
             return {}
         if op == "stats":
@@ -719,8 +805,7 @@ class Desk:
         if op == "restore":
             return s.set_status(r.get("id"), "owner", "active")
         if op == "purge":
-            s.purge(r.get("id"), "owner")
-            return {}
+            return {} if s.purge(r.get("id"), "owner") else {"lingering": True}
         if op == "events":
             return {"events": s.events(r.get("limit"), str(r.get("kind") or ""))}
         if op == "stats":
@@ -749,6 +834,8 @@ class Desk:
 
 
 class Door(socketserver.StreamRequestHandler):
+    timeout = 10                                 # a caller that opens the door and says nothing
+
     def handle(self) -> None:
         try:
             reply = self.server.desk.call(self.server.role, json.loads(self.rfile.readline(262144) or b"null"))
@@ -817,15 +904,13 @@ def backup(to: str) -> str:
     copying one that is in use: whole, and never half of a change. To go
     back to it: stop the service, put the copy where the database is (and
     remove the -wal and -shm files beside it), start the service."""
-    if os.path.exists(to):
-        raise Problem(f"{to} is there already: a backup does not write over anything.")
+    try:                                         # made here, by this, or not at all
+        os.close(os.open(to, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    except FileExistsError:
+        raise Problem(f"{to} is there already: a backup does not write over anything.") from None
     src = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=30)
     try:
-        old = os.umask(0o077)
-        try:
-            dst = sqlite3.connect(to)
-        finally:
-            os.umask(old)
+        dst = sqlite3.connect(to)
         with dst:
             src.backup(dst)
         n = dst.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
