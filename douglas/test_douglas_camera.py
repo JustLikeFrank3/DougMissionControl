@@ -270,6 +270,9 @@ check("a follow-up without a look is marked too (the whole conversation)", got[-
 check("and nothing of it is gone through for memories",
       [l for c in voice.finished_conversations(turn_lines, 0, time.time() + 10_000, 60) for l in c["lines"]], [])
 check("a question about something else is not routed to a camera", voice.CAMERA_WORDS.search("what is two plus two"), None)
+for q in ("What can you see out of the front right now?", "is there a parcel on the porch", "is it raining",
+          "anyone at the door?", "look out the window", "what's in the driveway"):
+    check(f"heard as a possible camera question: {q}", bool(voice.CAMERA_WORDS.search(q)), True)
 
 print("-- memory keeps no camera --")
 check("consolidation is told to keep nothing a camera showed", "what a camera showed" in voice.CONSOLIDATE, True)

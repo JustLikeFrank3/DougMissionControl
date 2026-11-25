@@ -2119,9 +2119,11 @@ CAMERA_RULES = (
 # had not looked and asked which camera (2026-11-25, his first live
 # question). So a message that sounds like it is put to the model as a
 # yes-or-no question of its own, and on a yes the program looks before he
-# answers, as it does for a second look at a picture.
+# answers, as it does for a second look at a picture. The words are wide
+# ("out of the front" went unmatched once, and he then said he could not
+# look at all): the question to the model is what decides.
 CAMERA_WORDS = re.compile(
-    r"\b(cameras?|cam|outside|out front|out back|front (?:door|porch|yard|step|lawn)|porch|drive(?:way)?|"
+    r"\b(cameras?|cam|outside|out front|out back|front|look out|see out|out the window|porch|drive(?:way)?|"
     r"garage|back ?yard|garden|gate|parcels?|packages?|deliver(?:y|ed|ies)|at the door|doorbell|street|"
     r"rain(?:ing)?|snow(?:ing)?)\b", re.I)
 CAMERA_ASKED = ("Does this message ask what can be seen right now through a security camera at the "
