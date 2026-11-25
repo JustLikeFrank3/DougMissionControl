@@ -15,6 +15,7 @@ import { wireHold } from '../js/ui.js';
 import { fmtAgo, fmtClock, fmtDur, fmtTime } from '../js/format.js';
 import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
+import { noticesView } from '../js/notices.js';
 
 var $ = function (id) { return document.getElementById(id); };
 var KEY = 'dmc-deck-token';
@@ -1088,6 +1089,11 @@ function tickMem() {
   memory.refresh();
   did.refresh();
 }
+// What the watch raised. Asked for more often than the memory: a notice is
+// the one thing here that is news.
+var notices = noticesView($('ntc'), { get: getJSON, post: post, count: $('ntc-count') });
+function tickNotices() { notices.refresh(); }
+
 function paintMemOpen() {
   $('mem-body').hidden = !memOpen;
   $('mem-head').setAttribute('aria-expanded', memOpen ? 'true' : 'false');
@@ -1123,6 +1129,7 @@ function pollAll(on) {
   every('np', 3000, tickNp);
   every('mem', 30000, tickMem);
   every('fleet', 15000, tickFleet);
+  every('ntc', 15000, tickNotices);
 }
 
 // ── boot controls ────────────────────────────────────────────────────────

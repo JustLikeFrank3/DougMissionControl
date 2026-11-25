@@ -43,6 +43,17 @@ holding this agent's token, which also opens his conversation and his
 memory. Nothing can be asked for there and nothing changed: whatever is
 sent to it is not read.
 
+It also keeps watch. Every twenty seconds it holds what it has just read of
+this machine, and what Mission Control on the Pi says of the others
+(FLEET_URL, with the read token), against a handful of rules: a machine that
+should answer and does not, one that is too hot, a service that should be
+running and is not or keeps being started again, a disk nearly full, a task
+left open for days. What a rule finds is a notice, kept by douglas-memory
+(the owner's door): one for a thing for as long as it holds, raised only
+once it has held for a while and cleared only once it has been gone for a
+while, so that a reading that flickers raises nothing. No model is asked
+anything, and nothing is acted on: a notice is a sentence on a screen.
+
 What Douglas remembers is kept by douglas-memory, which has two doors: one
 for Douglas, and one for the owner, which is the one this has the key to
 (MEMORY_OWNER_SOCKET, a socket this unit's group may open). So the owner's
@@ -107,6 +118,25 @@ MODELS_DIR = os.environ.get("MODELS_DIR", "/srv/models")
 PROGRAMS_DIR = os.environ.get("PROGRAMS_DIR", "/opt/douglas")
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "/usr/bin/systemctl")
 VITALS_SOCKET = os.environ.get("VITALS_SOCKET", "")     # run by hand: the socket is made here
+# The watch (see the top of this file). On when there is somewhere to keep a
+# notice, and not switched off.
+WATCH = os.environ.get("WATCH", "1") != "0"
+WATCH_EVERY_S = float(os.environ.get("WATCH_EVERY_S", "20"))
+FLEET_URL = os.environ.get("FLEET_URL", "")              # Mission Control's view of the fleet, on the Pi
+FLEET_TOKEN = os.environ.get("FLEET_TOKEN", "")          # the read token for it, which opens nothing else
+# Machines that should always answer, besides the Pi itself. Not the
+# workstation and not the laptops: those being off is an ordinary evening.
+WATCH_ALWAYS_ON = tuple((os.environ.get("WATCH_ALWAYS_ON") or "dougvoice").split())
+# Too hot, in degrees C: a warning past the first figure, critical past the second.
+WATCH_HOT = {k: tuple(float(x) for x in v.split("/")) for k, _, v in (
+    p.partition("=") for p in (os.environ.get("WATCH_HOT") or
+                               "douglas=92/100 node1=75/82 workstation=85/92").split())}
+# A disk nearly full, in per cent free: a warning under the first, critical under the second.
+WATCH_DISK = tuple(float(x) for x in (os.environ.get("WATCH_DISK") or "10/5").split("/"))
+# Services whose being down is critical; any other is a warning.
+WATCH_CRITICAL = set((os.environ.get("WATCH_CRITICAL") or
+                      "llama-server douglas-voice douglas-memory deck-api").split())
+WATCH_TASK_DAYS = float(os.environ.get("WATCH_TASK_DAYS", "7"))   # a task left open this long is said so
 SYS = os.environ.get("SYSFS_ROOT", "/sys")     # overridable for tests
 PROC = os.environ.get("PROCFS_ROOT", "/proc")
 
@@ -593,10 +623,17 @@ def picture(pid: str) -> tuple[int, bytes | dict, str]:
 # changing another, so that a GET can never change anything. Nothing else
 # the memory's door answers (the whole of it at once, say) is passed on.
 MEMORY_LOOKS = {"list": ("kind", "status", "q", "limit", "offset"), "get": ("id",),
-                "events": ("limit", "kind"), "stats": ()}
+                "events": ("limit", "kind"), "stats": (), "notices": ("limit",)}
 MEMORY_CHANGES = {"correct": ("id", "text", "subject", "kind", "confidence", "done"),
                   "add": ("kind", "subject", "text"),
-                  "delete": ("id",), "restore": ("id",), "purge": ("id",)}
+                  "delete": ("id",), "restore": ("id",), "purge": ("id",),
+                  # A notice the owner has seen, and where each severity is to go.
+                  "notice_ack": ("id",),
+                  "notice_prefs": ("severity", "tell", "aloud", "quiet_from", "quiet_to")}
+# What the watch in this program asks of the same door. Not on either list
+# above: nothing that comes in over the network can raise or clear a notice.
+WATCH_ASKS = {"notice_raise": ("key", "rule", "subject", "severity", "text"), "notice_clear": ("key",),
+              "notices": ("limit",), "list": ("kind", "status", "limit")}
 MEMORY_MOST = {"list": 50, "events": 200}        # rows at a time
 
 
@@ -635,6 +672,234 @@ def memory(op: object, fields: dict, allowed: dict) -> tuple[int, dict]:
     except (OSError, ValueError):
         return 200, {"ok": False, "text": "Douglas's memory did not answer."}
     return 200, out
+
+
+# ── the watch ────────────────────────────────────────────────────────────
+
+def _bytes(b) -> str:
+    for unit, size in (("TB", 1 << 40), ("GB", 1 << 30), ("MB", 1 << 20)):
+        if b >= size:
+            return f"{b / size:.0f} {unit}" if b / size >= 100 else f"{b / size:.1f} {unit}"
+    return f"{b / 1024:.0f} KB"
+
+
+def day(when) -> str:
+    """A day, the way it is said: 15 November."""
+    try:
+        return time.strftime("%-d %B", time.localtime(float(when)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "a day not known"
+
+
+def findings(v: dict | None, fleet: dict | None, tasks: list, now: float, memo: dict) -> list[dict]:
+    """What holds right now that a rule is about, each as the notice it would
+    be: its key (one notice for a thing), who it is about, how bad, the
+    sentence, how long it has to hold before it is raised and how long it
+    has to be gone before it is cleared. A notice stays as it was written
+    for as long as it is open, so its sentence says what stays true that
+    long, and a number in it is said to be from when it was raised. From
+    readings only: `v` is this
+    machine's vitals, `fleet` what the Pi says of the rest (None when the Pi
+    did not answer), `tasks` the open tasks in his memory. `memo` is the
+    little that has to be carried from one look to the next."""
+    out: list[dict] = []
+
+    def find(key, rule, subject, severity, text, after, hold) -> None:
+        out.append({"key": key, "rule": rule, "subject": subject, "severity": severity, "text": text,
+                    "after": after, "hold": hold})
+
+    seen = []                             # (id, name, degrees or None, disks, services or None)
+    if v:
+        seen.append(("douglas", "DOUGLAS", (v.get("host") or {}).get("temp_c"), v.get("disks") or [],
+                     v.get("units")))
+    if FLEET_URL and fleet is None:
+        # The Pi itself. Nothing is said of the machines it speaks for: with
+        # it gone they are not known to be down, only not known.
+        find("gone:node1", "gone", "DOUG PRIME", "critical",
+             "Mission Control's Pi (DOUG PRIME) is not answering Douglas.", 90, 60)
+    for m in (fleet or {}).get("machines") or []:
+        if not isinstance(m, dict):
+            continue
+        mid, name, r = str(m.get("id") or ""), str(m.get("name") or m.get("id") or "a machine"), m.get("reports")
+        r = r if isinstance(r, dict) else {}
+        if mid in WATCH_ALWAYS_ON and not m.get("up"):
+            find(f"gone:{mid}", "gone", name, "warning", f"{name} is not answering.", 90, 60)
+        if mid == "node1":
+            seen.append((mid, name, r.get("temp_c"), [r["disk"]] if isinstance(r.get("disk"), dict) else [],
+                         m.get("services") if "services" in m else []))
+        elif mid == "workstation" and m.get("up"):
+            seen.append((mid, name, r.get("gpu_temp_c"), [], []))
+
+    # What was installed lately: a service that is down just after its
+    # program changed is a deployment that did not take.
+    for x in (v or {}).get("versions") or []:
+        f, sha = str(x.get("file") or ""), x.get("sha")
+        if f and memo["sha"].get(f) not in (None, sha):
+            memo["changed"][f.removesuffix(".py")] = now
+        if f:
+            memo["sha"][f] = sha
+
+    for mid, name, degrees, disks, services in seen:
+        warm, hot = WATCH_HOT.get(mid, (None, None))
+        if isinstance(degrees, (int, float)) and warm is not None and degrees > warm:
+            find(f"hot:{mid}", "hot", name, "critical" if degrees > hot else "warning",
+                 f"{name} is running hot: {degrees:.0f} degrees C when this was raised, over its line of "
+                 f"{hot if degrees > hot else warm:.0f}.", 120, 300)
+        for d in disks:
+            total, free = d.get("total_bytes"), d.get("free_bytes")
+            if not total or free is None:
+                continue
+            left = 100.0 * free / total
+            if left < WATCH_DISK[0]:
+                find(f"disk:{mid}:{d.get('path')}", "disk", f"the disk {d.get('path')} on {name}",
+                     "critical" if left < WATCH_DISK[1] else "warning",
+                     f"The disk {d.get('path')} on {name} is nearly full: {_bytes(free)} left "
+                     f"({100 - left:.0f}% full) when this was raised.", 60, 600)
+        for u in services or []:
+            unit, state = str(u.get("unit") or ""), u.get("state")
+            if not unit:
+                continue
+            grave = "critical" if unit in WATCH_CRITICAL else "warning"
+            off = state == "inactive" and u.get("enabled") in ("disabled", "masked")
+            if state != "active" and not off:
+                fresh = mid == "douglas" and now - memo["changed"].get(unit, 0) < 900
+                find(f"unit:{mid}:{unit}", "unit", f"{unit} on {name}", "critical" if fresh else grave,
+                     f"{unit} on {name} is not running "
+                     f"({SUB_SAID.get(u.get('sub'), u.get('sub')) or state or 'unknown'})"
+                     + (", and its program was changed a few minutes ago: the change did not take" if fresh else "")
+                     + ".", 30, 300)
+            # Started again and again: up when looked at, and not well.
+            n = u.get("restarts")
+            if isinstance(n, int):
+                was = memo["restarts"].setdefault(f"{mid}:{unit}", [])
+                was.append((now, n))
+                while was and now - was[0][0] > 600:
+                    was.pop(0)
+                if n - was[0][1] >= 3:
+                    find(f"restarts:{mid}:{unit}", "unit", f"{unit} on {name}", grave,
+                         f"{unit} on {name} keeps being started again: {n - was[0][1]} times in ten minutes "
+                         "when this was raised.", 0, 600)
+
+    for t in tasks:
+        if not isinstance(t, dict) or t.get("done") or t.get("kind") != "task":
+            continue
+        due, made = t.get("due"), t.get("created") or now
+        if due and due <= now:
+            find(f"task:{t.get('id')}", "task", "a task", "information",
+                 f"A task was due on {day(due)}: {str(t.get('text'))[:200]}", 0, 0)
+        elif not due and now - made >= WATCH_TASK_DAYS * 86400:
+            find(f"task:{t.get('id')}", "task", "a task", "information",
+                 f"A task has been open since {day(made)}: {str(t.get('text'))[:200]}", 0, 0)
+    return out
+
+
+RANK = {"information": 0, "warning": 1, "critical": 2}
+# systemd's word for how a service is not running, as a person would say it.
+SUB_SAID = {"dead": "stopped", "exited": "ended", "auto-restart": "being started again", "start-pre": "starting",
+            "start": "starting", "start-post": "starting", "stop": "stopping", "stop-sigterm": "stopping",
+            "stop-sigkill": "stopping", "stop-post": "stopping", "final-sigterm": "stopping"}
+
+
+class Watch:
+    """Which findings have become notices. A finding is raised once it has
+    held without a break for as long as its rule asks, and cleared once it
+    has been gone without a break for as long as its rule asks. So one that
+    flickers below that never becomes a notice, and one that flickers while
+    a notice is open leaves it open: one notice for a thing, not one a look."""
+
+    def __init__(self) -> None:
+        self.known: dict[str, dict] = {}
+
+    def adopt(self, key: str, severity: str) -> None:
+        """A notice that was open when this program started: watched from
+        here on, so that it is cleared if what it says holds no longer."""
+        self.known[key] = {"bad": None, "ok": None, "open": True, "severity": severity, "hold": 300}
+
+    def unraised(self, key: str) -> None:
+        """The notice could not be kept (the memory did not answer): it is
+        raised at the next look, not after holding all over again."""
+        if key in self.known:
+            self.known[key]["open"] = False
+
+    def uncleared(self, key: str) -> None:
+        """The notice could not be cleared: it is still open, and is cleared
+        at the next look that finds it still gone."""
+        self.known[key] = {"bad": None, "ok": 0.0, "open": True, "severity": "warning", "hold": 0}
+
+    def see(self, found: list[dict], now: float) -> tuple[list[dict], list[str]]:
+        """Take a look's findings: the notices to raise (or to make worse)
+        and the keys of those to clear."""
+        raise_, clear, here = [], [], {f["key"]: f for f in found}
+        for key, f in here.items():
+            k = self.known.setdefault(key, {"bad": None, "ok": None, "open": False, "severity": "", "hold": 0})
+            k["bad"], k["ok"], k["hold"] = k["bad"] if k["bad"] is not None else now, None, f["hold"]
+            if not k["open"] and now - k["bad"] >= f["after"]:
+                k.update(open=True, severity=f["severity"])
+                raise_.append(f)
+            elif k["open"] and RANK.get(f["severity"], 0) > RANK.get(k["severity"], 0):
+                k["severity"] = f["severity"]
+                raise_.append(f)
+        for key in [k for k in self.known if k not in here]:
+            k = self.known[key]
+            k["bad"], k["ok"] = None, k["ok"] if k["ok"] is not None else now
+            if not k["open"]:
+                del self.known[key]               # it never became a notice
+            elif now - k["ok"] >= k["hold"]:
+                clear.append(key)
+                del self.known[key]
+        return raise_, clear
+
+
+def fleet_seen() -> dict | None:
+    """Mission Control's view of the fleet, or None when the Pi does not
+    answer. The token goes in the address, which is written down nowhere."""
+    try:
+        with urllib.request.urlopen(FLEET_URL + ("&" if "?" in FLEET_URL else "?") + "token="
+                                    + quote(FLEET_TOKEN), timeout=6) as r:
+            got = json.loads(r.read(600_000))
+        return got if isinstance(got, dict) and isinstance(got.get("machines"), list) else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def look(watch: Watch, memo: dict, now: float | None = None) -> tuple[int, int]:
+    """One look: read, hold against the rules, raise and clear. How many of
+    each. What is raised is kept by the memory service; if that does not
+    answer, the notice is tried again at the next look."""
+    now = time.time() if now is None else now
+    if now - memo["tasks"][0] > 600:              # his open tasks: asked for every ten minutes, not every look
+        got = memory("list", {"kind": "task", "status": "active", "limit": 50}, WATCH_ASKS)[1]
+        memo["tasks"] = (now, got.get("memories") or [] if got.get("ok") else memo["tasks"][1])
+    found = findings(vitals(), fleet_seen() if FLEET_URL else None, memo["tasks"][1], now, memo)
+    to_raise, to_clear = watch.see(found, now)
+    raised = cleared = 0
+    for f in to_raise:
+        got = memory("notice_raise", f, WATCH_ASKS)[1]
+        if got.get("ok"):
+            raised += 1
+            # The key, never the sentence: a task's words are not for the journal.
+            print(f"douglas-agent: notice {got.get('what')}: {f['key']} ({f['severity']})", flush=True)
+        else:
+            watch.unraised(f["key"])
+    for key in to_clear:
+        if memory("notice_clear", {"key": key}, WATCH_ASKS)[1].get("ok"):
+            cleared += 1
+            print(f"douglas-agent: notice over: {key}", flush=True)
+        else:
+            watch.uncleared(key)
+    return raised, cleared
+
+
+def watch_forever() -> None:
+    watch, memo = Watch(), {"restarts": {}, "sha": {}, "changed": {}, "tasks": (0.0, [])}
+    for n in (memory("notices", {"limit": 200}, WATCH_ASKS)[1].get("open") or []):
+        watch.adopt(str(n.get("key")), str(n.get("severity")))
+    while True:
+        try:
+            look(watch, memo)
+        except Exception as e:                    # noqa: BLE001 - the watch outlives a bad reading
+            print(f"douglas-agent: the watch tripped: {type(e).__name__}", flush=True)
+        time.sleep(WATCH_EVERY_S)
 
 
 def vitals() -> dict:
@@ -768,9 +1033,13 @@ def main() -> None:
     door = vitals_socket()
     if door is not None:
         threading.Thread(target=serve_vitals, args=(door,), daemon=True).start()
+    watching = WATCH and bool(MEMORY_OWNER_SOCKET)
+    if watching:
+        threading.Thread(target=watch_forever, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"douglas-agent: listening on :{PORT}, model at {LLM_URL}, vitals socket "
-          f"{'on' if door is not None else 'off'}", flush=True)
+          f"{'on' if door is not None else 'off'}, watch {'on' if watching else 'off'}"
+          + (", with the fleet" if watching and FLEET_URL else ""), flush=True)
     srv.serve_forever()
 
 

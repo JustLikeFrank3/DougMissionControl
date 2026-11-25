@@ -75,6 +75,7 @@ html, body {
 .navb .s { font-size: 11px; letter-spacing: .1em; }
 .navb.on { color: var(--fg); background: #141d29; box-shadow: inset 0 -3px 0 var(--acc); }
 .navb.alert .s { color: var(--am); }
+.navb.grave .s { color: var(--rd); }
 
 .status { margin-left: auto; display: flex; align-items: center; gap: 26px;
           padding: 0 22px; font-size: 16px; color: var(--mut); }
@@ -1108,6 +1109,38 @@ html, body {
   font-size: 14px; letter-spacing: .16em; cursor: pointer; }
 .dgl-tabs button.on { color: var(--fg); border-bottom-color: var(--acc); }
 .dgl-tabs small { font-size: 12px; letter-spacing: .1em; color: var(--mut); margin-left: 6px; }
+
+/* What the watch raised. The bar at a row's left is its severity. */
+.dgl-ntc { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+  padding-right: 6px; }
+.dgl-tabs small.ntc-n.bad { color: var(--rd); }
+.dgl-tabs small.ntc-n.busy { color: var(--am); }
+.dgl-tabs small.ntc-n.ok { color: var(--gr); }
+.ntc-list { display: flex; flex-direction: column; }
+.ntc { position: relative; flex: none; display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 190px 12px 14px; border-top: 1px solid var(--ln); border-left: 3px solid var(--ln); min-width: 0; }
+.ntc:first-child { border-top: 0; }
+.ntc.bad { border-left-color: var(--rd); }
+.ntc.warn { border-left-color: var(--am); }
+.ntc.over { opacity: .5; }
+.ntc-top { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.ntc-s { flex: none; font-weight: 400; font-size: 12px; letter-spacing: .14em; color: var(--mut); }
+.ntc.bad .ntc-s, .ntc-s.bad { color: var(--rd); }
+.ntc.warn .ntc-s, .ntc-s.warn { color: var(--am); }
+.ntc-w { min-width: 0; font-size: 14px; color: var(--mut); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.ntc-t { font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
+.ntc-m { font-size: 13px; color: var(--mut); overflow-wrap: anywhere; }
+.ntc-ack { position: absolute; top: 14px; right: 14px; width: 160px; min-height: 56px; background: var(--pan);
+  border: 1px solid var(--ln); color: var(--cy); font-family: inherit; font-size: 15px; letter-spacing: .14em;
+  cursor: pointer; }
+.ntc-where { flex: none; display: flex; flex-direction: column; gap: 10px; }
+.ntc-where > .mem-chip { align-self: flex-start; }
+.ntc-pref { display: flex; align-items: center; gap: 10px; }
+.ntc-pref .ntc-s { width: 130px; }
+.ntc-hour { display: inline-flex; align-items: center; gap: 8px; }
+.ntc-hour .mem-chip { min-width: 56px; padding: 0; text-align: center; }
+.ntc-h { min-width: 110px; text-align: center; font-size: 14px; letter-spacing: .08em; }
 
 /* What he remembers: the owner's list. A row opens on a touch and shows
    where the memory came from and what may be done with it. */

@@ -20,11 +20,12 @@ import { openKeyboard, closeKeyboard, keyboardOpen } from './keyboard.js';
 import { fmtAgo } from './format.js';
 import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
+import { noticesView, navNotices } from './notices.js';
 
 var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, lastLogKey = '';
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
-var tab = 'convo', memory = null, did = null, memTimer = null;
+var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -38,16 +39,20 @@ export function paintDouglasTile(dgl) {
     text = (m.name ? m.name.toUpperCase() + ' · ' : '') + 'ONLINE';
   } else if (m.state === 'loading') { state = 'loading'; text = 'LOADING MODEL'; }
   else { state = 'down'; text = 'MODEL SERVER DOWN'; }
+  // What the watch raised and nobody has seen yet, wherever the panel is:
+  // under his name in the top bar, and on his line here.
+  var ntc = navNotices(dgl.notices);
   var bar = $('dgl-tile');
   if (bar) {
     bar.dataset.state = state;
-    $('dgl-tile-sub').textContent = text;
+    $('dgl-tile-sub').textContent = text + (ntc ? ' · ' + ntc.text.toUpperCase() : '');
   }
   var nav = $('nav-douglas');
   if (nav) {
-    nav.textContent = !dgl.up ? 'offline' : state === 'running' ? 'online'
-      : state === 'loading' ? 'loading' : 'no model';
-    nav.parentNode.classList.toggle('alert', state !== 'running');
+    nav.textContent = !dgl.up ? 'offline' : state === 'loading' ? 'loading'
+      : state !== 'running' ? 'no model' : ntc ? ntc.text : 'online';
+    nav.parentNode.classList.toggle('alert', state !== 'running' || !!ntc);
+    nav.parentNode.classList.toggle('grave', !!ntc && ntc.critical);
   }
 }
 
@@ -70,6 +75,7 @@ function tickMemory() {
   if (tab === 'mem') memory.refresh();
   else memory.glance();
   if (tab === 'did') did.refresh();
+  if (notices) notices.refresh();           // its count shows whichever tab is up
 }
 
 function memoryPoll(on) {
@@ -85,6 +91,7 @@ function showTab(name) {
   });
   $('dgl-log').hidden = $('dgl-askbar').hidden = name !== 'convo';
   $('dgl-mem').hidden = name !== 'mem';
+  $('dgl-ntc').hidden = name !== 'ntc';
   $('dgl-did').hidden = name !== 'did';
   if (name === 'convo') { var log = $('dgl-log'); log.scrollTop = log.scrollHeight; }
   tickMemory();
@@ -286,6 +293,8 @@ export function wireDouglas() {
     type: function (title, text, save) { openKeyboard(title, save, text); },
   });
   did = didView($('dgl-did'), { get: getJSON, rows: 40 });
+  notices = noticesView($('dgl-ntc'), { get: getJSON, post: post, count: $('dgl-ntc-count'),
+                                        countClass: 'ntc-n', over: 8 });
   [].forEach.call($('dgl-tabs').children, function (b) {
     b.addEventListener('click', function () { showTab(b.dataset.tab); });
   });

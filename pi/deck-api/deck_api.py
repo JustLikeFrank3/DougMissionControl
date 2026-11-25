@@ -673,6 +673,33 @@ def douglas_model() -> dict:
     return {"state": "running", "name": name}
 
 
+# How many notices are open on Douglas, for the panel's top bar: asked for
+# with the probe, at most three times a minute. Only the count: the notices
+# themselves are read by the owner's screens through the memory's route.
+NOTICES_EVERY_S = 20.0
+_notices_kept: dict = {"at": -1e9, "value": None}
+
+
+def douglas_notices() -> dict | None:
+    """How many notices the watch on Douglas has open, how many warnings and
+    worse among them nobody has marked as seen, and whether one of those is
+    critical. None when that could not be read, which is not none open."""
+    if time.monotonic() - _notices_kept["at"] < NOTICES_EVERY_S:
+        return _notices_kept["value"]
+    value = None
+    if DOUGLAS_AGENT_TOKEN:
+        got = _ws_json(f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/memory?token={DOUGLAS_AGENT_TOKEN}"
+                       "&op=notices&limit=50", timeout=3)
+        if isinstance(got, dict) and got.get("ok"):
+            rows = [n for n in got.get("open") or [] if isinstance(n, dict)]
+            new = [n for n in rows if not n.get("acked") and n.get("severity") in ("warning", "critical")]
+            value = {"open": len(rows), "new": len(new),
+                     "worst": ("critical" if any(n.get("severity") == "critical" for n in new)
+                               else "warning" if new else None)}
+    _notices_kept.update(at=time.monotonic(), value=value)
+    return value
+
+
 def fetch_douglas() -> dict:
     """Douglas's card: is the AI box up, which of its doors are open, and
     what the model server reports. Always-on hardware, so down is a fault
@@ -684,9 +711,43 @@ def fetch_douglas() -> dict:
             "stt": up and tcp_open(DOUGLAS_HOST, DOUGLAS_STT_PORT),
             "tts": up and tcp_open(DOUGLAS_HOST, DOUGLAS_TTS_PORT),
             "model": douglas_model() if up else {"state": "absent", "name": None},
+            "notices": douglas_notices() if up else None,
             "host": DOUGLAS_HOST,
             "last_alive": time.time() if up else
                 DECK.state.get("douglas", {}).get("last_alive")}
+
+
+# Douglas watches the other machines and himself, and keeps what he notices
+# on his own disk. He cannot notice that he is gone, and a notice kept on a
+# machine that is down reaches nobody. So the Pi says that much itself, in
+# the events it already shows: when Douglas or his ears stop answering, and
+# when they are back. After three looks in a row, so that one lost ping is
+# not a machine gone; nothing is kept beyond the event.
+_quiet: dict[str, dict] = {}
+
+
+def gone_or_back(name: str, up: bool) -> None:
+    k = _quiet.setdefault(name, {"misses": 0, "gone": False, "seen": False})
+    if up:
+        if k["gone"]:
+            DECK.event("probe", f"{name}: answering again")
+        k.update(misses=0, gone=False, seen=True)
+    elif k["seen"] and not k["gone"]:             # only of a machine that has been seen up since this started
+        k["misses"] += 1
+        if k["misses"] >= 3:
+            k["gone"] = True
+            DECK.event("probe", f"{name}: not answering", "warn")
+
+
+def who_is_gone(douglas: dict, voice: dict) -> None:
+    """One look at who should answer: Douglas, his ears, and the watch on
+    Douglas. The watch is his agent: with it gone and the machine up, no
+    notice is raised and none can be read, and nothing else would say so.
+    Of a machine that is down, nothing more is said than that."""
+    gone_or_back("DOUGLAS", douglas["up"])
+    if douglas["up"] and DOUGLAS_AGENT_TOKEN:
+        gone_or_back("the watch on DOUGLAS", tcp_open(DOUGLAS_HOST, DOUGLAS_AGENT_PORT))
+    gone_or_back("DOUGVOICE", voice["up"])
 
 
 def fetch_voice() -> dict:
@@ -1413,6 +1474,7 @@ def poll_once(prev_os):
     mobile = fetch_mobile()
     douglas = fetch_douglas()
     voice = fetch_voice()
+    who_is_gone(douglas, voice)
 
     def apply(s):
         w = s["workstation"]
@@ -1806,9 +1868,10 @@ CONTENT_TYPES = {
 # door to it. This passes one question on and hands the answer back. Looking
 # and changing are separate lists, so that a GET changes nothing whatever it
 # asks; and only these names travel, each as one plain value.
-MEMORY_LOOKS = ("list", "get", "events", "stats")
-MEMORY_CHANGES = ("correct", "add", "delete", "restore", "purge")
-MEMORY_FIELDS = ("id", "kind", "status", "q", "limit", "offset", "text", "subject", "confidence", "done")
+MEMORY_LOOKS = ("list", "get", "events", "stats", "notices")
+MEMORY_CHANGES = ("correct", "add", "delete", "restore", "purge", "notice_ack", "notice_prefs")
+MEMORY_FIELDS = ("id", "kind", "status", "q", "limit", "offset", "text", "subject", "confidence", "done",
+                 "severity", "tell", "aloud", "quiet_from", "quiet_to")
 
 
 def douglas_memory(op: object, fields: dict, change: bool) -> tuple[int, dict]:
@@ -1824,6 +1887,8 @@ def douglas_memory(op: object, fields: dict, change: bool) -> tuple[int, dict]:
     got = _ws_json(url, ask, timeout=8) if change else _ws_json(url + "&" + urlencode(ask), timeout=8)
     if not isinstance(got, dict):
         return 502, {"ok": False, "text": "douglas-agent did not answer"}
+    if change and op.startswith("notice"):
+        _notices_kept["at"] = -1e9                # seen on a screen: the top bar's count is asked for afresh
     return 200, got
 
 
@@ -2301,8 +2366,10 @@ class Handler(BaseHTTPRequestHandler):
             # Which change, to which memory, and whether it took. Never the
             # words: what he remembers is not for the journal.
             which = body.get("id")
-            self._note((op if isinstance(op, str) and op in MEMORY_CHANGES else "not a change")
-                       + (f" of memory {which}" if isinstance(which, int) else "")
+            known = isinstance(op, str) and op in MEMORY_CHANGES
+            self._note((op if known else "not a change")
+                       + (f" of {'notice' if known and op.startswith('notice') else 'memory'} {which}"
+                          if isinstance(which, int) else "")
                        + ("" if out.get("ok") else " refused"))
             return self._json(code, out)
 

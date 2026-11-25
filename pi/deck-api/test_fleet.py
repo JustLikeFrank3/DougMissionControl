@@ -17,6 +17,7 @@ def check(label, got, want):
 
 # Everything on this deck that does something is stood in for: a route that
 # opened when it should not have would otherwise boot a workstation.
+relay_as_it_is = d.douglas_memory          # before it is stood in for below
 DONE = []
 for name in ("fire_boot", "fire_shutdown", "fire_launch", "fire_abort", "douglas_say", "douglas_hear",
              "douglas_ptt", "douglas_memory", "sim_command"):
@@ -165,6 +166,69 @@ for _ in range(10):
     d.own_units()
 check("nor is systemd, when it cannot be asked: that is kept as long as an answer would be", len(calls), 1)
 d.subprocess.run = fake_run
+
+print("-- the Pi's own word when Douglas or his ears go quiet --")
+d.DECK.mutate(lambda s: s["events"].clear())
+d._quiet.clear()
+for up in (False, False, False, False):
+    d.gone_or_back("DOUGLAS", up)
+check("a machine that was never seen up since this started is not said to have gone", d.DECK.snapshot()["events"], [])
+for up in (True, False, True, False, False, True, False, False, False, False, False, True, True):
+    d.gone_or_back("DOUGLAS", up)
+check("gone is said after three looks in a row and once, not for one lost look; and back is said once",
+      [(e["source"], e["level"], e["text"]) for e in reversed(d.DECK.snapshot()["events"])],
+      [("probe", "warn", "DOUGLAS: not answering"), ("probe", "info", "DOUGLAS: answering again")])
+check("and it is in the fleet's reading, where Douglas reads it when he is back",
+      [e["text"] for e in d.fleet()["events"]][:2], ["DOUGLAS: answering again", "DOUGLAS: not answering"])
+
+d.DECK.mutate(lambda s: s["events"].clear())
+d._quiet.clear()
+real_open, PORT = d.tcp_open, {"open": True}
+d.tcp_open = lambda host, port, timeout=1.5: PORT["open"]
+was_token, d.DOUGLAS_AGENT_TOKEN = d.DOUGLAS_AGENT_TOKEN, "t"
+for machine, agent in ((True, True), (True, False), (True, False), (True, False), (True, False), (False, False),
+                       (False, False), (False, False), (False, False), (True, False), (True, True), (True, True)):
+    PORT["open"] = agent
+    d.who_is_gone({"up": machine}, {"up": True})
+check("the watch on Douglas gone while his machine is up is said, once; with the machine itself gone only that is "
+      "said; and each is said to be back",
+      [e["text"] for e in reversed(d.DECK.snapshot()["events"])],
+      ["the watch on DOUGLAS: not answering", "DOUGLAS: not answering", "DOUGLAS: answering again",
+       "the watch on DOUGLAS: answering again"])
+d.DECK.mutate(lambda s: s["events"].clear())
+d._quiet.clear()
+for machine in (True, False, False, False, False, True):
+    PORT["open"] = machine                           # a machine that is down has no ports open either
+    d.who_is_gone({"up": machine}, {"up": True})
+check("a machine gone is said to be gone, and nothing is added about the watch on it",
+      [e["text"] for e in reversed(d.DECK.snapshot()["events"])], ["DOUGLAS: not answering", "DOUGLAS: answering again"])
+d.tcp_open, d.DOUGLAS_AGENT_TOKEN = real_open, was_token
+
+real_ws, ASKED = d._ws_json, []
+OPEN = {"got": {"ok": True, "open": [
+    {"id": 1, "severity": "critical", "acked": None}, {"id": 2, "severity": "warning", "acked": 1_800_000_000.0},
+    {"id": 3, "severity": "warning", "acked": None}, {"id": 4, "severity": "information", "acked": None}]}}
+d._ws_json = lambda url, body=None, timeout=3: (ASKED.append(url.split("?")[0].rsplit("/", 1)[1]), OPEN["got"])[1]
+was_token, d.DOUGLAS_AGENT_TOKEN = d.DOUGLAS_AGENT_TOKEN, "t"
+d._notices_kept.update(at=-1e9, value=None)
+first, again = d.douglas_notices(), d.douglas_notices()
+check("for the top bar: how many notices are open, how many warnings and worse nobody has seen, and the worst of "
+      "those; asked of Douglas once, not at every look",
+      (first, again == first, ASKED), ({"open": 4, "new": 2, "worst": "critical"}, True, ["memory"]))
+OPEN["got"] = {"ok": True, "open": [{"id": 4, "severity": "information", "acked": None},
+                                    {"id": 2, "severity": "critical", "acked": 1_800_000_000.0}]}
+d._notices_kept["at"] = -1e9
+check("information, and what has been seen, are not for the top bar", d.douglas_notices(),
+      {"open": 2, "new": 0, "worst": None})
+OPEN["got"] = None
+d._notices_kept["at"] = -1e9
+check("not read is not none open", d.douglas_notices(), None)
+OPEN["got"] = {"ok": True, "open": []}
+check("and seen on a screen, the count is asked for afresh at the next look",
+      (d.douglas_notices(), relay_as_it_is("notice_ack", {"id": 1}, change=True)[0], d.douglas_notices()),
+      (None, 200, {"open": 0, "new": 0, "worst": None}))
+d._ws_json, d.DOUGLAS_AGENT_TOKEN = real_ws, was_token
+d._notices_kept.update(at=-1e9, value=None)
 
 print("-- who may read it, and what else that opens --")
 server = d.ThreadingHTTPServer(("127.0.0.1", 0), d.Handler)

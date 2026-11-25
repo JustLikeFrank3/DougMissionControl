@@ -13,8 +13,10 @@
 #
 # `show` prints what goes into /etc/douglas/voice.env on Douglas (FLEET_URL
 # and FLEET_TOKEN); restart douglas-voice there afterwards, when nobody is
-# talking to him. `off` removes the token here, which closes the route to
-# whoever holds it; take the two lines out of voice.env as well.
+# talking to him. douglas/setup.sh there then gives the same two lines to
+# douglas-agent, whose watch raises a notice when a machine stops answering.
+# `off` removes the token here, which closes the route to whoever holds it;
+# take the two lines out of voice.env and agent.env as well.
 set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)"; exit 1; }

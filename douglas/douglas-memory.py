@@ -27,6 +27,14 @@ Two doors, two kinds of caller, told apart by which door they can open
                      hands. List, read with its history, correct, delete,
                      restore, purge for good, read the log, export.
 
+Notices are kept here too, because this is where durable things on Douglas
+live: what the watch in douglas-agent raised (a machine gone, a service
+down, a disk nearly full), each once for as long as it holds. The watch
+raises and clears them through the owner's door; the owner reads them there,
+acknowledges them and says where each severity is to go; Douglas, through
+his own door, is given the open ones to mention and may mark them as told,
+and can do nothing else with them. No model is asked anything to raise one.
+
 One line of JSON in, one out:   {"op": "recall", "text": "..."}
 
 What is kept, of each memory:
@@ -88,6 +96,15 @@ MAX_ACTIVE = int(E("MEMORY_MAX", "5000"))
 MAX_EVENTS = int(E("MEMORY_EVENTS", "5000"))
 
 KINDS = ("preference", "fact", "project", "decision", "task", "lesson", "fleet", "summary")
+# A notice is one of three things, and where each goes is the owner's to say:
+# whether Douglas mentions it at the next turn (tell), and whether it is said
+# aloud in the room (aloud; never in the quiet hours). On the screens they
+# all are, always. Nothing is said aloud until the owner switches that on.
+SEVERITIES = ("information", "warning", "critical")
+PREFS = {"information": {"tell": False, "aloud": False}, "warning": {"tell": True, "aloud": False},
+         "critical": {"tell": True, "aloud": False}, "quiet_from": 22, "quiet_to": 8}
+NOTICES_MAX = 2000                # rows kept; the oldest that are over go first
+NOTICE_DAYS = 30                  # how long one that is over is kept
 # Who vouches for a memory, and how far: a weaker source does not replace a
 # stronger one's memory of the same thing.
 SOURCES = {"owner": 3, "said": 2, "observed": 2, "inferred": 1}
@@ -245,6 +262,13 @@ class Store:
                 name TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', ok INTEGER NOT NULL DEFAULT 1,
                 ms INTEGER NOT NULL DEFAULT 0, via TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '');
             CREATE TABLE state (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """, """
+            CREATE TABLE notices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, rule TEXT NOT NULL,
+                subject TEXT NOT NULL, severity TEXT NOT NULL, text TEXT NOT NULL,
+                raised REAL NOT NULL, updated REAL NOT NULL, cleared REAL, acked REAL, told REAL,
+                spoken REAL, times INTEGER NOT NULL DEFAULT 1);
+            CREATE INDEX notices_by_key ON notices (key, cleared);
         """]
         with self.lock:
             have = self.db.execute("PRAGMA user_version").fetchone()[0]
@@ -567,6 +591,139 @@ class Store:
             r = self.db.execute("SELECT value FROM state WHERE name = ?", (name,)).fetchone()
             return json.loads(r["value"]) if r else None
 
+    # -- notices: what the watch raised ------------------------------------------
+
+    @staticmethod
+    def prefs_of(row) -> dict:
+        """The owner's choices as they are kept, made whole: whatever is
+        missing or is not what it should be is as it was to begin with."""
+        try:
+            kept = json.loads(row["value"]) if row else {}
+        except ValueError:
+            kept = {}
+        kept = kept if isinstance(kept, dict) else {}
+        now = {}
+        for s in SEVERITIES:
+            mine = kept.get(s) if isinstance(kept.get(s), dict) else {}
+            now[s] = {k: mine[k] if isinstance(mine.get(k), bool) else PREFS[s][k] for k in ("tell", "aloud")}
+        for k in ("quiet_from", "quiet_to"):
+            v = kept.get(k)
+            now[k] = v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 23 else PREFS[k]
+        return now
+
+    def prefs(self, change: dict | None = None) -> dict:
+        """Where each severity of notice goes, and the hours nothing is said
+        aloud. Changed a severity or the hours at a time, each value checked:
+        nothing else can be put in here."""
+        with self.tx():
+            now = self.prefs_of(self.db.execute("SELECT value FROM state WHERE name = 'notice_prefs'").fetchone())
+            if change:
+                sev = change.get("severity")
+                if sev is not None and sev not in SEVERITIES:
+                    raise Problem(f"A notice is one of: {', '.join(SEVERITIES)}.")
+                for k in ("tell", "aloud"):
+                    if sev and isinstance(change.get(k), bool):
+                        now[sev][k] = change[k]
+                for k in ("quiet_from", "quiet_to"):
+                    v = change.get(k)
+                    if isinstance(v, int) and not isinstance(v, bool):
+                        if not 0 <= v <= 23:
+                            raise Problem("An hour is a number from 0 to 23.")
+                        now[k] = v
+                self.db.execute("INSERT INTO state (name, value) VALUES ('notice_prefs', ?) ON CONFLICT(name) "
+                                "DO UPDATE SET value = excluded.value", (json.dumps(now),))
+            return now
+
+    def raise_notice(self, key, rule, subject, severity, text) -> tuple[int, str]:
+        """The watch says something holds. One notice for a thing for as long
+        as it holds: said again while it is open, it is the same notice
+        ('open'); said again worse, it is that notice made worse, to be told
+        afresh ('worse'); otherwise it is new ('raised')."""
+        key, rule, subject = clean(key, 120), clean(rule, 20), clean(subject, 80)
+        text = clean(text, 300)
+        if severity not in SEVERITIES:
+            raise Problem(f"A notice is one of: {', '.join(SEVERITIES)}.")
+        if not key or len(text) < 3:
+            raise Problem("A notice is about something, and says something.")
+        now = time.time()
+        with self.tx():
+            r = self.db.execute("SELECT * FROM notices WHERE key = ? AND cleared IS NULL", (key,)).fetchone()
+            if r is None:
+                cur = self.db.execute(
+                    "INSERT INTO notices (key, rule, subject, severity, text, raised, updated) VALUES (?,?,?,?,?,?,?)",
+                    (key, rule, subject, severity, text, now, now))
+                self.db.execute("DELETE FROM notices WHERE cleared IS NOT NULL AND (cleared < ? OR id <= "
+                                "(SELECT MAX(id) FROM notices) - ?)", (now - NOTICE_DAYS * 86400, NOTICES_MAX))
+                return cur.lastrowid, "raised"
+            if SEVERITIES.index(severity) > SEVERITIES.index(r["severity"]):
+                self.db.execute("UPDATE notices SET severity = ?, text = ?, updated = ?, acked = NULL, told = NULL, "
+                                "spoken = NULL, times = times + 1 WHERE id = ?", (severity, text, now, r["id"]))
+                return r["id"], "worse"
+            return r["id"], "open"
+
+    def clear_notice(self, key) -> int:
+        """The watch says it holds no longer."""
+        with self.tx():
+            return self.db.execute("UPDATE notices SET cleared = ?, updated = ? WHERE key = ? AND cleared IS NULL",
+                                   (time.time(), time.time(), clean(key, 120))).rowcount
+
+    @staticmethod
+    def noticed(r) -> dict:
+        return {k: r[k] for k in ("id", "key", "rule", "subject", "severity", "text", "raised", "updated",
+                                  "cleared", "acked", "told", "spoken", "times")}
+
+    def notices(self, limit=50, days=3) -> dict:
+        """For the owner: what is open, the worst and the newest first, then
+        what was open lately and is over."""
+        limit = min(max(1, int(limit or 50)), 200)
+        with self.lock:
+            now = self.db.execute(
+                "SELECT * FROM notices WHERE cleared IS NULL ORDER BY CASE severity WHEN 'critical' THEN 0 "
+                "WHEN 'warning' THEN 1 ELSE 2 END, raised DESC LIMIT ?", (limit,)).fetchall()
+            over = self.db.execute("SELECT * FROM notices WHERE cleared IS NOT NULL AND cleared > ? "
+                                   "ORDER BY cleared DESC LIMIT ?", (time.time() - days * 86400, limit)).fetchall()
+            return {"open": [self.noticed(r) for r in now], "over": [self.noticed(r) for r in over]}
+
+    def ack_notice(self, notice) -> dict:
+        """The owner has seen it. It stays open for as long as it holds; it
+        is not told or said aloud again."""
+        with self.tx():
+            n = self.db.execute("UPDATE notices SET acked = ? WHERE id = ? AND acked IS NULL",
+                                (time.time(), int(notice))).rowcount
+            r = self.db.execute("SELECT * FROM notices WHERE id = ?", (int(notice),)).fetchone()
+            if r is None:
+                raise Problem("There is no such notice.")
+            return dict(self.noticed(r), changed=bool(n))
+
+    def notices_for_him(self) -> dict:
+        """For Douglas: what is open, in a few plain fields; which of those he
+        has yet to mention, and which are yet to be said aloud, by what the
+        owner has set for each severity. What the owner has acknowledged is
+        neither. Read through the reader: it is asked on every turn."""
+        with self.rlock:
+            rows = self.rd.execute("SELECT * FROM notices WHERE cleared IS NULL ORDER BY CASE severity WHEN "
+                                   "'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, raised DESC LIMIT 20").fetchall()
+            p = self.prefs_of(self.rd.execute("SELECT value FROM state WHERE name = 'notice_prefs'").fetchone())
+        quiet = [p["quiet_from"], p["quiet_to"]]
+        short = lambda x: {k: x[k] for k in ("id", "severity", "subject", "text", "raised")}       # noqa: E731
+        return {"open": [short(x) for x in rows],
+                "tell": [short(x) for x in rows if x["told"] is None and x["acked"] is None and p[x["severity"]]["tell"]],
+                "aloud": [short(x) for x in rows if x["spoken"] is None and x["acked"] is None
+                          and p[x["severity"]]["aloud"]],
+                "quiet": quiet}
+
+    def marked(self, ids, what: str) -> int:
+        """Douglas has mentioned these, or said them aloud. That is all he
+        can do to a notice: he cannot clear one, acknowledge one or raise one."""
+        if what not in ("told", "spoken"):
+            raise Problem("A notice is marked as told or as spoken.")
+        ids = [int(x) for x in (ids if isinstance(ids, list) else []) if str(x).isdigit()][:20]
+        if not ids:
+            return 0
+        with self.tx():
+            return self.db.execute(f"UPDATE notices SET {what} = ? WHERE {what} IS NULL AND id IN "
+                                   f"({','.join('?' * len(ids))})", (time.time(), *ids)).rowcount
+
     def event(self, kind: str, name: str, action: str = "", ok=True, ms=0, via: str = "", detail: str = "") -> None:
         """One line in the log of what Douglas did: which tool, to do what,
         whether it was done and how long it took. Never the words."""
@@ -689,6 +846,9 @@ class Store:
                 self.index(i, None, None)
                 self.db.execute("DELETE FROM memories WHERE id = ?", (i,))
                 self.db.execute("DELETE FROM history WHERE memory = ?", (i,))
+                # A task left open is a notice with the task's words in it:
+                # that goes with it, open or over.
+                self.db.execute("DELETE FROM notices WHERE key = ?", (f"task:{i}",))
                 # When it had been noted down, and nothing of what it said: so
                 # that the conversation it came from is not gone through and
                 # the thing brought back (see consolidate).
@@ -785,6 +945,10 @@ class Desk:
             return {}
         if op == "stats":
             return s.stats()
+        if op == "notices":
+            return s.notices_for_him()
+        if op == "notice_told":
+            return {"marked": s.marked(r.get("ids"), "spoken" if r.get("aloud") else "told")}
         raise Problem(f"That is not something the assistant's door answers: {op!r}.")
 
     def owner(self, op: str, r: dict):
@@ -810,6 +974,18 @@ class Desk:
             return {"events": s.events(r.get("limit"), str(r.get("kind") or ""))}
         if op == "stats":
             return s.stats()
+        if op == "notices":
+            return dict(s.notices(r.get("limit")), prefs=s.prefs())
+        if op == "notice_ack":
+            return s.ack_notice(r.get("id"))
+        if op == "notice_prefs":
+            return {"prefs": s.prefs({k: r[k] for k in ("severity", "tell", "aloud", "quiet_from", "quiet_to")
+                                      if k in r})}
+        if op == "notice_raise":                 # the watch, not Mission Control: the relay does not pass it on
+            i, what = s.raise_notice(r.get("key"), r.get("rule"), r.get("subject"), r.get("severity"), r.get("text"))
+            return {"id": i, "what": what}
+        if op == "notice_clear":
+            return {"cleared": s.clear_notice(r.get("key"))}
         if op == "export":
             with s.lock:
                 return {"memories": [s.shown(x) for x in s.db.execute(
@@ -828,7 +1004,7 @@ class Desk:
         except (TypeError, ValueError, sqlite3.Error) as e:
             log(f"memory: {role} {op} failed: {type(e).__name__}")
             return {"ok": False, "text": f"The memory could not do that ({type(e).__name__})."}
-        if op not in ("recall", "log", "cursor", "stats", "tasks", "known"):   # which, and how long: never the words
+        if op not in ("recall", "log", "cursor", "stats", "tasks", "known", "notices"):   # which, and how long: never the words
             log(f"memory: {role} {op} in {(time.time() - began) * 1000:.0f} ms")
         return dict(out or {}, ok=True)
 

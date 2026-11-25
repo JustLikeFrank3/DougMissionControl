@@ -13,6 +13,13 @@
 # machine is doing. He learns of it when douglas-voice is next restarted,
 # which this does not do. To take it away again, remove that line from
 # /etc/douglas/voice.env and restart douglas-voice.
+#
+# And the other way: where the voice pipeline has been given the view of the
+# fleet (FLEET_URL and FLEET_TOKEN, from pi/fleet-read.sh on the Pi), the
+# agent is given the same two lines, for its watch: the rules that raise a
+# notice when a machine stops answering or runs hot. That token opens one
+# reading on the Pi and nothing else. Without it the watch still looks at
+# this machine. WATCH=0 in /etc/douglas/agent.env switches the watch off.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -51,6 +58,26 @@ CONF
     echo "wrote $env - copy DOUGLAS_AGENT_TOKEN into the deck Pi's boot.env"
 fi
 
+# The fleet, for the watch: the two lines the pipeline has, copied by a
+# program from one root-only file to the other. Nothing of it is shown.
+if [ -f /etc/douglas/voice.env ] && ! grep -q '^FLEET_TOKEN=.' "$env"; then
+    python3 -I - /etc/douglas/voice.env "$env" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+got = {k: v for k, _, v in (l.partition("=") for l in open(src).read().splitlines())
+       if k in ("FLEET_URL", "FLEET_TOKEN") and v}
+if len(got) == 2:
+    kept = [l for l in open(dst).read().splitlines() if not l.startswith(("FLEET_URL=", "FLEET_TOKEN="))]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    kept += ["", "# The machines at home, as Mission Control on the Pi sees them: for the watch. The token opens nothing else.",
+             f"FLEET_URL={got['FLEET_URL']}", f"FLEET_TOKEN={got['FLEET_TOKEN']}"]
+    open(dst, "w").write("\n".join(kept) + "\n")
+    print("the watch has the view of the fleet now (FLEET_URL and FLEET_TOKEN, not shown)")
+PY
+fi
+chown root:root "$env" && chmod 600 "$env"
+
 systemctl daemon-reload
 # The socket first: a door cannot be made while the service behind it is up,
 # and the agent takes it over when it starts.
@@ -69,8 +96,9 @@ curl -fsS "http://127.0.0.1:${DOUGLAS_AGENT_PORT:-9111}/health" >/dev/null \
     && echo "douglas-agent up on :9111" \
     || { echo "douglas-agent did not answer - journalctl -u douglas-agent"; exit 1; }
 # The vitals, asked for the way the voice pipeline asks: as its user.
-if id douglas >/dev/null 2>&1; then
-    runuser -u douglas -- python3 -I -c '
+vu="$(systemctl show douglas-voice -p User --value 2>/dev/null)"; vu="${vu:-douglas}"
+if id "$vu" >/dev/null 2>&1; then
+    runuser -u "$vu" -- python3 -I -c '
 import json, socket
 s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect("/run/douglas-agent/vitals.sock")
 v = json.loads(s.makefile().readline())

@@ -104,8 +104,9 @@ pi/deck-ui/js/           the panel as ES modules — deck.js is now just wiring:
                            track, spark, gauges  drawing, given the state to draw
                            nav, sim, screens, media   a surface each, owning its
                                                  own state and its own listeners
-                           memory, fleet         what Douglas remembers and what the
-                                                 machines report, for panel and phone
+                           memory, fleet, notices   what Douglas remembers, what the
+                                                 machines report and what the watch
+                                                 raised, for panel and phone
 tools/screenshots.mjs    renders every surface at 2560x720 for the images above
                          (node + any installed Chrome + internet for map tiles;
                           `npm install playwright-core` first, `npm.cmd` on
@@ -605,8 +606,8 @@ Everything else lives in `/etc/douglas/*.env`, read by the units; edit and
 | `open-webui.env` | `OPENAI_API_BASE_URL` (llama.cpp's `/v1`), `WEBUI_NAME`, `WEBUI_SECRET_KEY`. The first account made in the browser is the admin |
 | `tts.env` | `douglas-tts`, his speaking voice on `:10210` (loopback): `KOKORO_MODEL` and `KOKORO_VOICES` (the two model files, in `/srv/models/kokoro`), `KOKORO_VOICE` (default `bm_lewis`), `KOKORO_SPEED` (default `1.0`), `TTS_BIND`/`TTS_LISTEN_PORT`. The unit is enabled by `provision.sh` only once the model files exist |
 | `speech.env` | `WHISPER_MODEL` (default `small`, on the CPU), `WHISPER_LANGUAGE`, `WHISPER_COMPUTE`, `WHISPER_ARGS`; `PIPER_VOICE` (default `en_GB-alan-medium`, fetched on first use), `PIPER_ARGS` |
-| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `SEARCH_KEY` (a Brave Search API key: with it he can search the web; `SEARCH_URL` if the service is somewhere else), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER` (an app registered with Reddit and the Reddit name it is registered to: with them he can search Reddit; `REDDIT_USER_AGENT` to say who he is in other words), `DOUGLAS_TURN_LOOKUP_S` (how long one turn may go on looking things up before he must answer, default `20`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image server, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `IMAGE_DRAW` and `IMAGE_EDIT` (the model that draws and the model that edits, each a name and a file under `DRAW_MODEL_DIR`: `flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf` for drawing by default and nothing for editing, so without `IMAGE_EDIT` he draws and does not edit), `IMAGE_PARTS` (the text encoders and VAE the two share), `IMAGE_EDIT_STEPS` (default `8`: an edit's time is its steps, about 13 seconds each at a megapixel), `IMAGE_EDIT_SIDE` (default `1024`, the long side an edit comes out at), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he makes are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `EYES_EDGE` (the long side of what his eyes are shown at once, 1280) and `EYES_SHOT` (the long side he asks a phone to send when Pillow is there to cut a closer look from it, 3072), `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact), `MEMORY_SOCKET` (his door to his memory; `memory-setup.sh` adds it), `MEMORY_BUDGET` (characters of notes put with one message, 900), `MEMORY_EVERY_S` and `MEMORY_QUIET_S` (how often finished conversations are looked for, 60, and how long past the idle time one is left before it is gone through, 45), `FLEET_URL` and `FLEET_TOKEN` (Mission Control's fleet view on the Pi and the read token for it), `VITALS_SOCKET` (his own machine's vitals; `setup.sh` adds it), `SIGHT_OLD_S` (the age past which a reading is said to be old, 90) |
-| `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token. `MEMORY_OWNER_SOCKET` (the owner's door to his memory; `memory-setup.sh` adds it), `AGENT_UNITS` (the services whose health it reports), `AGENT_DISKS` (the file systems, default `/ /srv/models`), `MODELS_DIR` (where the model files are) |
+| `voice.env` | `VOICE_SAT_HOST`/`VOICE_SAT_PORT` (DougVoice's satellite, `dougvoice:10700`), `VOICE_PTT_PORT`/`VOICE_PTT_TOKEN`, `STT_*`/`TTS_*`/`LLM_URL`, `TTS_VOICE` (unset by default: the voice is chosen in `tts.env`, and a name here overrides it for this pipeline only), `TTS_FALLBACK_PORT` (a second voice, Piper on `10200`, used when the first does not answer; `0` for none), `LLM_MAX_TOKENS`, `DOUGLAS_SYSTEM_PROMPT` (who he is and what he must not invent), `DOUGLAS_FACTS` (one line of true things about the household - the only local knowledge he has), `DOUGLAS_INSTRUCTIONS_DIR` (default `/etc/douglas/instructions.d`: every `.md`/`.txt` there is read in name order on every turn, so who the owner is, their rules and notes live in files on Douglas, not in this repo), `DOUGLAS_OWNER`, `SPEAKER_URL` (a machine with real speakers, e.g. the workstation's media agent at `http://<host>:9110/speak?token=...`: each reply plays there when that machine is up and unmuted, and through DougVoice otherwise; a new press or a cancel cuts it short there too), `MCP_URL`/`MCP_TOKEN` (the owner's MCP server: the pipeline reads the `stories` tone profile from it at start and every `TONE_REFRESH_S`, caches a few samples in `/var/lib/douglas/tone.md` and gives them to the model as the owner's writing voice; it makes no other call), `JOBCONTEXT_URL`/`JOBCONTEXT_TOKEN` (the owner's records on their jobContext server, read when asked and changed only after a read-back and a yes; `https` only), `JOBCONTEXT_AREAS` (the parts of it he may reach, e.g. `stories` for stories and writing samples alone; unset, all of it), `JOBCONTEXT_VIA` (where they may be asked about from, e.g. `phone`; unset, anywhere), `JOBCONTEXT_CONFIRM_S` (how long a change waits for its yes, default `180`), `SEARCH_KEY` (a Brave Search API key: with it he can search the web; `SEARCH_URL` if the service is somewhere else), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER` (an app registered with Reddit and the Reddit name it is registered to: with them he can search Reddit; `REDDIT_USER_AGENT` to say who he is in other words), `DOUGLAS_TURN_LOOKUP_S` (how long one turn may go on looking things up before he must answer, default `20`), `TZ` (so the time he is given is local), `VOICE_MAX_LISTEN_S` (a held button stops itself after this), `VOICE_QUIET_DB` (default `-45`: Whisper turns a quiet room into "you" or "thank you", so a transcript that is only such a stock word, from audio quieter than this, counts as nothing heard), `VOICE_HISTORY_TURNS`/`VOICE_HISTORY_IDLE_S` (how much of the conversation Douglas remembers, and for how long), `DOUGLAS_TOOLS` (`0` turns his lookups off), `DOUGLAS_HOME` (the place "the weather" means when none is named, e.g. `Springfield, Illinois`), `DOUGLAS_UNITS` (`us` for °F and mph), `DOUGLAS_NEWS_FEEDS` (RSS/Atom feeds for the top stories), `DOUGLAS_NEWS_SEARCH` (a news search feed, `{q}` replaced by the topic), `EYES_URL` (what he sees with: his own model at `http://127.0.0.1:8081` if it can see, else `llama-eyes` at `:8082`; unset, he cannot be shown a picture and says so), `IMAGE_URL` (the image server, `http://127.0.0.1:8083`; unset, he cannot draw and says so), `IMAGE_DRAW` and `IMAGE_EDIT` (the model that draws and the model that edits, each a name and a file under `DRAW_MODEL_DIR`: `flux1-schnell diffusion_models/flux1-schnell-q8_0.gguf` for drawing by default and nothing for editing, so without `IMAGE_EDIT` he draws and does not edit), `IMAGE_PARTS` (the text encoders and VAE the two share), `IMAGE_EDIT_STEPS` (default `8`: an edit's time is its steps, about 13 seconds each at a megapixel), `IMAGE_EDIT_SIDE` (default `1024`, the long side an edit comes out at), `PICTURES_DIR`/`PICTURES_KEEP` (where the pictures he makes are kept, and how many: `/var/lib/douglas/pictures`, the newest 60), `EYES_MAX_TOKENS`, `EYES_EDGE` (the long side of what his eyes are shown at once, 1280) and `EYES_SHOT` (the long side he asks a phone to send when Pillow is there to cut a closer look from it, 3072), `VOICE_MAX_IMAGE_BYTES`, `DOUGLAS_USER_AGENT` (how lookups introduce themselves; generic by default, and some sites, Wikimedia's image servers among them, turn an anonymous client away until it carries a contact), `MEMORY_SOCKET` (his door to his memory; `memory-setup.sh` adds it), `MEMORY_BUDGET` (characters of notes put with one message, 900), `MEMORY_EVERY_S` and `MEMORY_QUIET_S` (how often finished conversations are looked for, 60, and how long past the idle time one is left before it is gone through, 45), `FLEET_URL` and `FLEET_TOKEN` (Mission Control's fleet view on the Pi and the read token for it), `VITALS_SOCKET` (his own machine's vitals; `setup.sh` adds it), `SIGHT_OLD_S` (the age past which a reading is said to be old, 90), `NOTICES_EVERY_S` (how often it is asked whether a notice is to be said aloud, 30) |
+| `agent.env` | `douglas-agent`'s; `provision.sh` fills in `VOICE_PTT_URL` with the pipeline's token. `MEMORY_OWNER_SOCKET` (the owner's door to his memory; `memory-setup.sh` adds it), `AGENT_UNITS` (the services whose health it reports), `AGENT_DISKS` (the file systems, default `/ /srv/models`), `MODELS_DIR` (where the model files are). For the watch: `WATCH` (`0` switches it off), `WATCH_EVERY_S` (20), `FLEET_URL` and `FLEET_TOKEN` (the fleet view and its read token, the same two lines as the pipeline's; `setup.sh` copies them over, and without them the watch looks at this machine alone), `WATCH_ALWAYS_ON` (machines that should always answer, `dougvoice`), `WATCH_HOT` (`douglas=92/100 node1=75/82 workstation=85/92`: warning / critical, in °C), `WATCH_DISK` (`10/5`: per cent free), `WATCH_CRITICAL` (the services whose being down is critical), `WATCH_TASK_DAYS` (7) |
 | `memory.env` | `douglas-memory`, what he remembers (see below): `MEMORY_MAX` (memories kept in use, 5000; past that the least sure and longest unused are marked deleted), `MEMORY_EVENTS` (lines kept of the record of what he did, 5000) |
 
 **The voice pipeline.** `douglas-voice` connects *to* DougVoice's
@@ -1216,8 +1217,8 @@ memory is as it was. (How it got to this shape, and what comes after it, is in
 
 It has two doors, and which one a caller can open is decided by the file
 system, not by anything the caller says of itself. Douglas's
-(`assistant.sock`, a group only `douglas-voice`'s unit is given, so the six
-other services that run as the same user stay out) answers: what bears on
+(`assistant.sock`, a group only `douglas-voice`'s unit is given, so the
+other services on the machine stay out) answers: what bears on
 this message, what are you surest of, note this down, here is what a finished
 conversation came to, mark this as forgotten, and write a line in the record
 of what I did. The owner's (`owner.sock`, a group only `douglas-agent`'s unit
@@ -1460,8 +1461,94 @@ the machine had been up; and a service that is disabled on purpose was "dead".
 *What is not there.* The Pi's k3s workloads, anything from DougVoice and the
 Macs beyond whether they answer, the workstation's disk and uptime. Nothing is
 kept of any reading: there is no history to ask about, only now. And he
-cannot act on what he sees. That, and telling the owner when something goes
-wrong without being asked, are designed in the plan and not built.
+cannot act on what he sees.
+
+**What is noticed without anyone asking.** He could say how the machines were
+when asked, and nobody asks at three in the morning. `douglas-agent` keeps
+watch now: every twenty seconds it holds what it has just read of his own
+machine, and what Mission Control says of the others, against a handful of
+rules. What a rule finds is a notice. No model is asked anything to raise
+one, so a quiet house costs no inference, and nothing is acted on: a notice is
+a sentence on a screen with a reading in it.
+
+| a notice when | how bad | has to hold | has to be gone |
+|---|---|---|---|
+| DougVoice, which is always on, does not answer (`WATCH_ALWAYS_ON`) | warning | 90 s | 60 s |
+| Mission Control's Pi does not answer Douglas | critical | 90 s | 60 s |
+| a machine is over its line: Douglas 92 / 100 °C, the Pi 75 / 82, the workstation's card 85 / 92 (`WATCH_HOT`) | warning / critical | 2 min | 5 min |
+| a disk has less than 10 % / 5 % free (`WATCH_DISK`) | warning / critical | 1 min | 10 min |
+| a service that should be running is not: on Douglas or on the Pi | warning; critical for `llama-server`, `douglas-voice`, `douglas-memory`, `deck-api` (`WATCH_CRITICAL`) | 30 s | 5 min |
+| ... and its program was changed in the last quarter of an hour: a change that did not take | critical | 30 s | 5 min |
+| a service has been started again three times in ten minutes | as for that service | at once | 10 min |
+| a task in his memory is past its day, or has been open a week (`WATCH_TASK_DAYS`) | information | at once | until it is done |
+
+There is one notice for a thing for as long as it holds. A finding becomes a
+notice only once it has held without a break for as long as its rule asks, so
+a reading that flickers raises nothing; it is cleared only once it has been
+gone that long, so one that flickers while a notice is open leaves it the same
+notice; and one that gets worse is the same notice made worse, to be told
+afresh. The laptops being away raise nothing, nor does a service switched off
+on purpose, and with the Pi gone nothing is supposed of the machines it speaks
+for. A sentence says what stays true for as long as the notice is open, and a
+number in it is said to be from when it was raised.
+
+Notices are kept by `douglas-memory`, beside what he remembers, and only the
+watch can raise or clear one: it does that through the owner's door, and
+neither Douglas's door nor anything that arrives over the network can
+(`douglas-agent` and `deck-api` pass on three questions about notices: show
+them, this one has been seen, and where each kind is to go). A notice about a
+task has the task's words in it, so purging the task takes the notice along.
+
+Where they go is the owner's to say, for each of the three kinds, in Mission
+Control: the NOTICES card on the phone, the NOTICES tab on the panel, and,
+wherever the panel is, the count of those nobody has seen under DOUGLAS in its
+top bar. They are always on the screens. *Mentioned* (on for warnings and
+critical ones, off for information): with the next message that is not from
+whoever looks after the machine, Douglas is handed the ones he has not yet
+mentioned, as readings and not instructions, to be said after what was asked;
+he says each once. *Aloud* (off for all three until it is switched on): said
+in the room when nobody is talking to him, one at a time, and never in the
+quiet hours, 22 to 8 unless changed. SEEN on a notice means it is not
+mentioned or said aloud again; it stays until what it says is put right.
+Douglas can mark a notice as told and do nothing else to it. And both of his
+readings carry what is open, so asked whether anything is wrong he answers
+from the notices, with the Pi not answering too: they are kept on his own
+machine.
+
+A watch that is on Douglas cannot say that Douglas is gone, so the Pi says
+that much itself, in the deck's own events: `DOUGLAS: not answering` after
+three looks in a row and `answering again` once, the same for DougVoice, and
+`the watch on DOUGLAS: not answering` when his machine answers and his agent
+does not, which is when no notice would be raised and none could be read. The
+screens then say the notices could not be read, never that there are none.
+
+*What was measured*, on Douglas and the Pi. With nothing wrong the watch
+raised nothing. `douglas-draw` was stopped: one warning 48 seconds later, on
+the phone's card and the panel's top bar; asked as the operator whether
+anything was wrong, Douglas said "the draw service is down, so image
+generation is not working"; asked on the chat line what day of the week it
+was, he said "It is Tuesday, 24 November 2026. By the way, the douglas-draw
+service on this machine is not running and has been down since 19:56", and
+at the next message, nothing more of it. Marked as seen through Mission
+Control; an attempt to raise one and to clear one through Mission Control's
+route was refused at the Pi. The agent was stopped and started twice with the
+notice open: it was still one notice. The service was started again and the
+notice was over 5 minutes 18 seconds later. With the agent stopped the Pi
+said the watch was not answering after 36 seconds, and that it was answering
+again 15 seconds after it was back. Nothing was said aloud at any point.
+Every safeguard above was broken on purpose in a copy, one at a time: 81 of
+81 were caught by the tests, after the first run found nine that no test
+would have noticed, which have tests now.
+
+*What it does not do.* It does not reach a phone whose page is closed: a
+notice is seen when Mission Control is looked at, when Douglas is next spoken
+to, or, if switched on, when it is said aloud. Sending one to a phone means
+going through somebody else's service, and that is the owner's to decide. The
+Pi going unreachable for Douglas is noticed; the Pi's own account of
+*Douglas's machine* going away is an event on the deck and not a notice,
+since the notices are on the machine that is gone. That event was tested with
+stand-ins and not by taking Douglas off the network. The lines are settings
+and are not learned from what is usual. Nothing is done about a notice.
 
 **How he sounds.** Piper, the voice he started with, is quick and clear and
 sounds like a machine reading. He speaks with Kokoro instead: a small neural
@@ -1882,9 +1969,9 @@ fauxmo — see the WOL note in Troubleshooting.
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
-python3 pi/deck-api/test_fleet.py       # the fleet as a reading, and the token that opens it and nothing else
-python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service
-python3 douglas/test_douglas_memory.py  # what he remembers: both doors, on a database in a temp folder
+python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
+python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
+python3 douglas/test_douglas_memory.py  # what he remembers, and the notices: both doors, on a database in a temp folder
 python3 douglas/test_douglas_voice.py   # fake satellite, STT, llama.cpp and TTS
 python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand-in model
 python3 douglas/test_douglas_chatgpt.py # ChatGPT's line to Douglas: the secret path, the exchange, the persona
@@ -1898,14 +1985,14 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_grub_entry.sh` | finding the Windows menuentry in single- and double-quoted `grub.cfg` |
 | `tests/test_efi_utils.sh` | finding the Windows and GRUB entries in `efibootmgr` output — by description, by loader path, and via the generic `UEFI OS` label — and that reordering the boot list keeps every other entry |
 | `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
-| `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window |
+| `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window; and the wording of what Douglas remembers, what the machines report and what the watch raised, where "could not be read" is never shown as "none" |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
 | `douglas/test_douglas_voice.py` | the voice pipeline's state file and transcript, read back through `douglas-agent`'s own readers; a whole turn, cancel, barge-in, failures returning to idle; the Wyoming framing and clients against fake servers; the PTT endpoint as the agent relays to it; the owner's records against a stand-in server: which areas he may reach, what counts as a read, that a change is read back and sent only on a yes (and what counts as one), that deletes and redirects go nowhere, that a long answer is marked as partial or searched, that an answer given without looking is asked for again, and that the journal holds no values; drawing against a stand-in image server: the picture kept and fetched by its id, one a turn, and nothing of the request in the journal; editing against the same stand-in: the reply at once and the picture later as its own line, one picture at a time, a failed edit owned up to, a photo sent with the request going to `edit` and not `draw`, the tool calls kept in the conversation, a picture promised without a call asked for again, and a change to a photo that he turns down put to the one-word question, asked for again, and at last started by the program; the weather and the news looked up by the program before he answers, for the place or the topic asked about, and left alone when the message only uses the word; the web search and the Reddit search against stand-in services: offered only with a key, what is sent and what comes back, a refused or spent key said to be so, each standing in for the other, the news standing in for both when there is neither (its headlines handed over as headlines and no more, a question about Reddit or in the words of the owner's records left out of it, and nothing handed over when the news has nothing), a second asking that keeps what the program looked up, and neither the words nor the keys in the journal; the web search's answers in the shape the real service gives them (Markdown passages, a video as data, a forum's names, titles and addresses as long as real ones, the ordinary results' two dates and repeated description) and its refusals in its own words (an unknown key, a plan that leaves an address out, a request it cannot read); with a web search to make, a question with no searching word in it put to the wider question and searched for, what asks nothing left alone, a question that points back said again so that it stands alone, the note that goes with a search the program made and that search being the turn's only lookup, and a search of his own refused once the records have been read; what his eyes are asked (a name is read, never recognised; the picture by itself and then the question, so that a second look reads only the question; what the person said before, where a picture is sent again or the message says little more than "again"), the one-word question whether a message takes another look at the picture, that look taken by the program before he answers and handed to him as his own, and of any look only its size and time in the journal; the closer look (where the thing asked about is, as a box in thousandths; the part cut from the photo as it was sent and enlarged; a tighter part around a small mark, a name or a badge, where that is what would answer; the whole and the part both looked at on a first look and the part alone on a later one; none of it for a picture that cannot be opened or a message about the whole; skipped where Pillow is not installed), a second look by the program handed over as counting for more only when it was a closer one, and the size of photo he asks a phone for; a turn's allowance of lookups; the workshop: the one tool and what each thing he may ask of it is sent as, a message put to the question of what it asks and that done before he answers (a clone, a lookup, a job started with the person's own words and what they said before), a private repository closing the web for the rest of the conversation, a job, a clone or a push he thinks of himself refused, a push read back word for word with the model not asked and made only on a yes (not on a no, on anything else, or on a yes that comes too late), a job watched to its end and the line the person is then shown (with nothing in it that could pass for a note of the program's), a workshop that is not answering or still at it, and none of the names or words in the journal; and the tracker through his eyes: issues and checks read before he says a word and handed over as something read, a job on an issue started with its number and the person's words, one that would be made of somebody else's words read back and started only on a yes (not on a no, on anything else, or late), a job on an issue or on a pull request never begun on his own idea, and a change asked for just after a job asked about once more, whether it is more of that job's work; a question that takes reading through the code started as a job that only reads, its report told whole with the workshop's verdict on what it cites, never begun on his own idea; and, asked what he can do with a repository, the program's own account of it handed to him. His memory, against a stand-in and against the real service: what bears on a message put with it as notes and once a conversation, noting down and forgetting only on the person's own asking and never on an operator's turn, forgetting read back and done on a yes whatever a note says, a finished conversation gone through with only the person's words as evidence. And the two readings, against the Pi's real program and the real agent: each machine in a line with how old its figures are, what is not reported said so, the read token refused on the deck's other routes, neither tool taking an argument, and no name in the pipeline defined twice |
 | `douglas/test_douglas_agent.py` | `douglas-agent` against a fake `/proc`, `/sys`, llama.cpp and systemd: the meters; disks, each file system once; services up, restarting, failed or switched off, and systemd refusing to say read as not known; model files and what is installed; the vitals socket giving the machine without the conversation and reading nothing sent to it. And the memory relay against the real `douglas-memory`: no token, nothing; a GET cannot change anything; only the allowed questions and their fields reach the door |
-| `douglas/test_douglas_memory.py` | `douglas-memory` on a database in a temp folder, through both doors and over real sockets: kept, said again, replaced, refused (a changed date, a "not", one more detail are not the same thing said again; a guess does not replace what was said, nor what was said the owner's correction); secrets refused; what is stored cannot close a note from inside; recall ranked and kept to its budget; forgotten out of reach and out of the index; corrected in place with its history; purged out of the file itself; a conversation gone through once; the cursor; the record of what he did, capped; each door refusing the other's questions; nothing lost across a reopen or a schema step; a backup taken while it runs, and whether the database is sound |
-| `pi/deck-api/test_fleet.py` | `GET /api/fleet` on a state set by hand: every machine with its role, whether it answers and when it last did; no address, token, flight plan or word of Douglas's conversation in it; a machine that is off reporting nothing; how long it has been up said only of a change that was seen. And the read token: it opens that route, from another machine, and is refused on every other route the program has, found by reading its source, with everything that acts stood in for and never reached |
+| `douglas/test_douglas_memory.py` | `douglas-memory` on a database in a temp folder, through both doors and over real sockets: kept, said again, replaced, refused (a changed date, a "not", one more detail are not the same thing said again; a guess does not replace what was said, nor what was said the owner's correction); secrets refused; what is stored cannot close a note from inside; recall ranked and kept to its budget; forgotten out of reach and out of the index; corrected in place with its history; purged out of the file itself; a conversation gone through once; the cursor; the record of what he did, capped; each door refusing the other's questions; nothing lost across a reopen or a schema step; a backup taken while it runs, and whether the database is sound. And the notices: one for a thing for as long as it holds, made worse and told afresh, seen by the owner, where each kind goes, what Douglas's door may do with one (read it and mark it as told, and no more), old ones let go and never an open one, and a purged task taking its notice out of the file |
+| `pi/deck-api/test_fleet.py` | `GET /api/fleet` on a state set by hand: every machine with its role, whether it answers and when it last did; no address, token, flight plan or word of Douglas's conversation in it; a machine that is off reporting nothing; how long it has been up said only of a change that was seen. And the read token: it opens that route, from another machine, and is refused on every other route the program has, found by reading its source, with everything that acts stood in for and never reached. Who is gone: a machine after three looks in a row and once, the watch on Douglas when his machine answers and his agent does not, and each said to be back; and the count of notices for the panel's top bar, where not read is not none |
 | `douglas/test_douglas_work.py` | `douglas-work` against a stand-in GitHub (bare repositories in a folder, and a small API server), a stand-in model server and the kernel's real fence: a name as it is spoken found on the owner's account, a clone that is bare, one too large or not there or private without a token; reading the code a level, a file, a part of a file at a time, each answer within what Douglas is handed; a search that tries the phrase as code spells it and puts the code before its tests and its changelog; the socket, and a caller it does not know; the token in git's environment and on no command line; a whole job (the model asked by the manager on the job's behalf, with the manager's own list of tools; shown the file, the change, the command's output; the commit on the job's own branch, GitHub's code as it was); every way out tried from inside a job (a file of the owner's, a connection to this machine, a signal, links out of the tree, git's own files, a process left running); a job standing aside while someone talks, stopped, out of steps, over its share of the disk, and with no model server to ask; a push (not offered without a token or with pushing off; what would go said and nothing sent; another commit than the one read back refused; the branch on the stand-in GitHub afterwards and its main as it was; the pull request's branch, base, title and description; one that is open already, one that is refused after the branch went, and a push that is not taken; nothing but a job's branch ever pushed); and what the runner hands back checked (a report or result that is a link, a result for another branch or on other code). a tree moved aside for a link; a job nobody started, a report of the wrong kinds of thing and a question with a picture's address in it, none of them taken up; a job past its time ended by the manager; a model server that gives out with the work kept. Where the kernel has no Landlock 6 the job checks are left out, and the run says so; the tracker: the open issues, one by its number or by words of its title, a pull request that is not one; a job on the owner's own issue, given the issue as a reader of the page sees it, with other people's comments and what is hidden in the markup left out; somebody else's issue starting nothing until a yes, and a yes not holding once the issue has changed; the pull request named for the issue, closing it only where it goes into the default branch; a job that goes on from an earlier one's branch with what the owner wrote on the pull request, other people's comments only on a yes, a failed check with its annotations and the end of its log (fetched without the token); a second push adding to the open pull request and opening no other; a branch the owner added to on GitHub, one that has gone two ways, one moved under a running job, a pull request already merged; the branch a repository's work goes to when that is not its default; and a job's own changes checked by the runner and read over once, with the long conversation cut down; and a job that only reads: offered no tool that changes a file and refused when it tries one, ending with no commit and no branch, its report kept whole; what the report cites checked against the code (a file that is not there, a name that is nowhere, a name not at the lines given, a line a file does not have), sent back for it and marked when it is not put right, with nothing that does hold called wrong |
 | `douglas/test_douglas_tts.py` | the Kokoro voice service against a stand-in model: a reply as audio-start, chunks and audio-stop at the model's rate; the default voice, a named one, and a name the model lacks; silence for nothing to say; a model failure as an error event with the service still up; nonsense and half an event on the wire; three replies at once spoken one at a time; `describe`; and a journal with sizes and timings but never the words |
 | `dougvoice/test_dougvoice.py` | the satellite's command line in both modes; which state the face shows as satellite events, Douglas's polls and the button race each other; push-to-talk semantics; the LCD frames and LED colours; Wyoming framing; and the wake shim end to end on real sockets |
@@ -2022,6 +2109,20 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   how many things were noted, never which. The MEMORY card says "Douglas has
   no memory installed": `MEMORY_OWNER_SOCKET` is not in `agent.env`, which is
   `memory-setup.sh`'s to add.
+- **A notice that should be there is not, or the NOTICES card says they
+  could not be read.** The watch is in `douglas-agent`: its first line in the
+  journal ends `watch on, with the fleet` (`watch off` means `WATCH=0` or no
+  `MEMORY_OWNER_SOCKET` in `agent.env`; without `, with the fleet` it has no
+  `FLEET_URL` and `FLEET_TOKEN` and looks at Douglas alone: run
+  `sudo ./douglas/setup.sh` again after the pipeline has them). It writes
+  `notice raised: <which> (<how bad>)` and `notice over: <which>`, never the
+  sentence. A notice appears only after it has held for as long as its rule
+  asks and goes only after it has been gone that long; SEEN does not clear
+  it. "douglas-agent did not answer" on the card is the agent itself:
+  `systemctl status douglas-agent` on Douglas, and the deck's events will say
+  `the watch on DOUGLAS: not answering`. Douglas did not mention one: it is
+  information (not mentioned unless switched on under WHERE THEY GO), it was
+  marked as seen first, or the message came from the operator's line.
 - **Douglas says Mission Control would not show the machines.** His read
   token is not the Pi's any more: on the Pi, `sudo ./pi/fleet-read.sh show`
   prints the two lines that belong in `/etc/douglas/voice.env`. "Did not
@@ -2077,7 +2178,7 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   all, is also limited to loopback by systemd (`IPAddressDeny=any`). So is
   `douglas-draw`, the image server.
 - The web search key and Reddit's id and secret live in
-  `/etc/douglas/voice.env` (root:douglas, 640) and go only to the service
+  `/etc/douglas/voice.env` (root's alone) and go only to the service
   each belongs to, in the header that service asks for. What is searched
   for goes to the service searched and nowhere else, the journal included.
   With a web search switched on more goes out than without: any question
@@ -2137,11 +2238,20 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
 - Douglas can see the fleet with `DECK_READ_TOKEN`, which is not the deck's
   token: it opens `GET /api/fleet` and is refused everywhere else, the boot
   and shutdown routes and his own conversation and memory included. It is
-  kept in `/etc/douglas/voice.env` (root:douglas, 640) and goes to the Pi in
-  the address, as the deck takes it; nothing writes that address down. The
+  kept in `/etc/douglas/voice.env` and, for the watch, in
+  `/etc/douglas/agent.env` (both root's alone) and goes to the Pi in the
+  address, as the deck takes it; nothing writes that address down. The
   fleet view has no addresses in it and nothing that can be pressed. Removing
   the token on the Pi (`sudo ./pi/fleet-read.sh off`) closes it to whoever
   holds it.
+- A notice is raised by rules in `douglas-agent` and by nothing else: no
+  model is asked, and neither Douglas's door to his memory nor any request
+  over the network can raise or clear one, so nothing he reads or is told can
+  make an alarm or silence one. He is handed notices as readings, with
+  nothing in them that could pass for the program's own brackets, and can
+  mark one as told. Whether one is said aloud in the room is the owner's
+  switch in Mission Control and is off until it is set. The journal has which
+  notice and how bad, never its sentence, which may hold a task's words.
 - `douglas-agent` gives this machine's vitals to any program on it, at a
   socket that reads nothing and answers one thing. What comes out is what any
   of them can read for itself from `/proc`, `/sys` and `systemctl`: no
@@ -2150,8 +2260,8 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   file system read-only.
 - Douglas's key to the owner's jobContext records is a whole one: the server
   has no narrower kind, so which parts he reaches (`JOBCONTEXT_AREAS`) is the
-  pipeline's doing. It lives in `/etc/douglas/voice.env` (root:douglas,
-  640), is sent only over HTTPS and never to a redirect, and is used under
+  pipeline's doing. It lives in `/etc/douglas/voice.env` (root's alone),
+  is sent only over HTTPS and never to a redirect, and is used under
   the pipeline's rules, not the model's: reads on request, changes only after
   a read-back and a yes, no deletes. Revoking the key on the server ends all
   of it.

@@ -379,6 +379,21 @@ n = len(ASKED)
 code, out, log = post("/api/douglas/memory", {"op": "list\nhttp: forged line", "id": "7\nhttp: forged"})
 check("a POST cannot look, and what it sent cannot forge a line",
       (code, len(ASKED) - n, log.strip()), (400, 0, "http: /api/douglas/memory from 127.0.0.1: not a change refused"))
+code, out = look("op=notices&limit=5")
+check("the notices are read like the rest of what is kept on Douglas", (code, ASKED[-1][0], ASKED[-1][3]),
+      (200, "GET", {"op": "notices", "limit": "5"}))
+code, out, log = post("/api/douglas/memory", {"op": "notice_ack", "id": 4})
+check("one is acknowledged, and the journal says which notice", (ASKED[-1][3], log.strip()),
+      ({"op": "notice_ack", "id": 4}, "http: /api/douglas/memory from 127.0.0.1: notice_ack of notice 4 refused"))
+code, out, log = post("/api/douglas/memory", {"op": "notice_prefs", "severity": "critical", "aloud": True,
+                                             "quiet_from": 23, "text": ["x"], "key": "gone:node1"})
+check("and where a severity goes is said, with only what that may carry",
+      ASKED[-1][3], {"op": "notice_prefs", "severity": "critical", "aloud": True, "quiet_from": 23})
+n = len(ASKED)
+check("a notice cannot be raised or cleared from a screen: that is the watch's, on Douglas",
+      ([post("/api/douglas/memory", {"op": op, "key": "gone:node1", "severity": "critical", "text": "Made up."})[0]
+        for op in ("notice_raise", "notice_clear", "notice_told")], look("op=notice_clear&key=gone:node1")[0],
+       len(ASKED) - n), ([400, 400, 400], 400, 0))
 check("nor ask what only he asks of his memory",
       [post("/api/douglas/memory", {"op": op, "text": "The sky is green."})[0] for op in ("remember", "consolidate", "forget", "log")],
       [400] * 4)

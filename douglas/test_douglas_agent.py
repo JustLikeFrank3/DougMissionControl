@@ -357,6 +357,165 @@ check("what reaches the memory is the question that was allowed and the fields t
 agent.MEMORY_OWNER_SOCKET = real_door
 ear.close()
 
+print("-- the watch: rules over readings, and the notices they raise --")
+NOWW = 1_800_000_000.0
+agent.FLEET_URL = "http://pi.example/api/fleet"
+memo = lambda: {"restarts": {}, "sha": {}, "changed": {}, "tasks": (0.0, [])}      # noqa: E731
+unit = lambda name, state="active", **more: dict({"unit": name, "state": state, "sub": "running" if state == "active" else state, "restarts": 0}, **more)   # noqa: E731
+V = {"host": {"temp_c": 95.2}, "disks": [{"path": "/", "total_bytes": 1000 << 30, "free_bytes": 40 << 30}],
+     "units": [unit("llama-server", "failed"), unit("douglas-draw", "failed"), unit("douglas-tts"),
+               unit("llama-eyes", "inactive", enabled="disabled")],
+     "versions": [{"file": "douglas-voice.py", "sha": "aaa"}]}
+FLEET = {"machines": [
+    {"id": "node1", "name": "DOUG PRIME", "up": True, "reports": {"temp_c": 76.0, "disk": {
+        "path": "/", "total_bytes": 28 << 30, "free_bytes": 6 << 30}}, "services": [unit("deck-api"), unit("fauxmo", "failed")]},
+    {"id": "workstation", "name": "DOUG DUALBOOT", "up": True, "reports": {"gpu_temp_c": 93}},
+    {"id": "dougvoice", "name": "DOUGVOICE", "up": False}, {"id": "mini", "name": "MINIDOUG4", "up": False},
+    {"id": "mobile", "name": "DOUGMOBILE", "up": False}]}
+TASKS = [{"id": 3, "kind": "task", "text": "Order a battery for the garage sensor.", "created": NOWW - 9 * 86400},
+         {"id": 4, "kind": "task", "text": "Done already.", "created": NOWW - 30 * 86400, "done": NOWW - 86400},
+         {"id": 5, "kind": "task", "text": "Call the dentist.", "created": NOWW - 3600, "due": NOWW - 60},
+         {"id": 6, "kind": "task", "text": "New today.", "created": NOWW - 3600}]
+got = {f["key"]: f for f in agent.findings(V, FLEET, TASKS, NOWW, memo())}
+check("what the rules find in one look: his own machine hot, its disk nearly full, a service down (and which "
+      "matters most); the Pi warm with a service down; the workstation's card too hot; the satellite gone; two tasks",
+      {k: f["severity"] for k, f in got.items()},
+      {"hot:douglas": "warning", "disk:douglas:/": "critical", "unit:douglas:llama-server": "critical",
+       "unit:douglas:douglas-draw": "warning", "hot:node1": "warning", "unit:node1:fauxmo": "warning",
+       "hot:workstation": "critical", "gone:dougvoice": "warning", "task:3": "information", "task:5": "information"})
+check("each in a sentence with the reading in it",
+      [got[k]["text"] for k in ("hot:douglas", "disk:douglas:/", "unit:douglas:llama-server", "gone:dougvoice",
+                                "hot:workstation", "task:3", "task:5")],
+      ["DOUGLAS is running hot: 95 degrees C when this was raised, over its line of 92.",
+       "The disk / on DOUGLAS is nearly full: 40.0 GB left (96% full) when this was raised.",
+       "llama-server on DOUGLAS is not running (failed).", "DOUGVOICE is not answering.",
+       "DOUG DUALBOOT is running hot: 93 degrees C when this was raised, over its line of 92.",
+       f"A task has been open since {agent.day(NOWW - 9 * 86400)}: Order a battery for the garage sensor.",
+       f"A task was due on {agent.day(NOWW - 60)}: Call the dentist."])
+os.environ["TZ"] = "UTC"
+time.tzset()
+check("a day is said as a day, and one that is not a time is not a crash",
+      (agent.day(1_800_000_000), agent.day(None), agent.day("x")), ("15 January", "a day not known", "a day not known"))
+os.environ.pop("TZ")
+time.tzset()
+check("nothing is made of a laptop being away, a service switched off on purpose, a task that is done or one "
+      "from today, or a disk with room", [k for k in got if any(w in k for w in ("mini", "mobile", "llama-eyes", "task:4",
+                                                                         "task:6", "disk:node1"))], [])
+got = agent.findings(V, None, [], NOWW, memo())
+check("the Pi not answering is the Pi not answering: critical, and nothing is supposed of the machines it "
+      "speaks for", sorted(f["key"] for f in got if not f["key"].endswith(":douglas") and "douglas:" not in f["key"]),
+      ["gone:node1"])
+check("a reading that is not there finds nothing: no degrees is not too many",
+      agent.findings({"host": {}, "disks": [{"path": "/"}], "units": None}, {"machines": [{"id": "node1", "up": True}]},
+                     [], NOWW, memo()), [])
+m = memo()
+looks = [agent.findings({"units": [unit("douglas-voice", restarts=n)], "versions": []}, {"machines": []}, [],
+                        NOWW + t, m) for t, n in ((0, 5), (60, 6), (120, 7), (180, 9), (1200, 9))]
+check("a service that is up each time it is looked at and has been started again four times in ten minutes is "
+      "said so, and no longer once the ten minutes are over",
+      [[f["text"] for f in fs] for fs in looks],
+      [[], [], [], ["douglas-voice on DOUGLAS keeps being started again: 4 times in ten minutes when this was "
+                    "raised."], []])
+m = memo()
+agent.findings({"units": [unit("douglas-voice")], "versions": [{"file": "douglas-voice.py", "sha": "aaa"}]},
+               {"machines": []}, [], NOWW, m)
+got = agent.findings({"units": [unit("douglas-voice", "activating", sub="auto-restart")],
+                      "versions": [{"file": "douglas-voice.py", "sha": "bbb"}]}, {"machines": []}, [], NOWW + 20, m)
+check("a service that is down just after its program was changed is a change that did not take, and critical "
+      "whichever service it is", [(f["severity"], f["text"]) for f in got],
+      [("critical", "douglas-voice on DOUGLAS is not running (being started again), and its program was changed "
+                    "a few minutes ago: the change did not take.")])
+check("a service that was stopped is said to be stopped, in a person's word for it",
+      [f["text"] for f in agent.findings({"units": [unit("douglas-draw", "inactive", sub="dead", enabled="enabled")],
+                                          "versions": []}, {"machines": []}, [], NOWW, memo())],
+      ["douglas-draw on DOUGLAS is not running (stopped)."])
+
+w = agent.Watch()
+F = lambda sev="warning", after=30, hold=300: [{"key": "unit:x", "severity": sev, "after": after, "hold": hold}]  # noqa: E731
+steps = [(0, F()), (20, F()), (40, F()), (60, F()), (80, []), (100, F()), (300, []), (500, []), (700, [])]
+check("a finding becomes a notice once it has held for as long as its rule asks, once; a break while the notice "
+      "is open leaves it open; it is cleared when it has been gone for as long as the rule asks",
+      [(len(r), c) for r, c in (w.see(f, NOWW + t) for t, f in steps)],
+      [(0, []), (0, []), (1, []), (0, []), (0, []), (0, []), (0, []), (0, []), (0, ["unit:x"])])
+w = agent.Watch()
+check("one that flickers and never holds that long raises nothing",
+      [len(w.see(F() if n % 2 == 0 else [], NOWW + 20 * n)[0]) for n in range(12)], [0] * 12)
+w = agent.Watch()
+check("made worse while open, it is raised again as worse, and not again after that",
+      [len(w.see(F(sev, after=0), NOWW + t)[0]) for t, sev in ((0, "warning"), (20, "warning"), (40, "critical"),
+                                                               (60, "critical"), (80, "warning"))], [1, 0, 1, 0, 0])
+w = agent.Watch()
+w.adopt("unit:old", "warning")
+check("a notice that was open when the program started is cleared when what it says no longer holds",
+      [w.see([], NOWW + t)[1] for t in (0, 200, 400)], [[], [], ["unit:old"]])
+
+# With the real memory behind the owner's door.
+LOOKS = {"v": V, "fleet": FLEET}
+real_vitals, real_fleet = agent.vitals, agent.fleet_seen
+agent.vitals, agent.fleet_seen = lambda: LOOKS["v"], lambda: LOOKS["fleet"]
+task_id = desk.assistant("remember", {"kind": "task", "subject": "garage sensor", "source": "said",
+                                      "text": "Order a battery for the garage sensor marked zebra."})["id"]
+desk.store.db.execute("UPDATE memories SET created = ? WHERE kind = 'task'", (NOWW - 9 * 86400,))
+import contextlib, io      # noqa: E401, E402
+said_by_watch = io.StringIO()
+w, m = agent.Watch(), memo()
+with contextlib.redirect_stdout(said_by_watch):
+    counts = [agent.look(w, m, NOWW + t) for t in (0, 20, 40, 100, 130)]
+open_now = {n["key"]: n["severity"] for n in desk.owner("notices", {})["open"]}
+check("looked at over two minutes, each finding is raised when it has held long enough, and once",
+      (counts, open_now),
+      ([(1, 0), (0, 0), (3, 0), (2, 0), (3, 0)],
+       {f"task:{task_id}": "information", "unit:douglas:llama-server": "critical", "unit:douglas:douglas-draw": "warning",
+        "unit:node1:fauxmo": "warning", "disk:douglas:/": "critical", "gone:dougvoice": "warning",
+        "hot:douglas": "warning", "hot:node1": "warning", "hot:workstation": "critical"}))
+journal = said_by_watch.getvalue()
+check("the journal has which notice and how bad, and not a task's words",
+      ("douglas-agent: notice raised: unit:douglas:llama-server (critical)" in journal, "zebra" in journal,
+       "battery" in journal), (True, False, False))
+LOOKS["v"] = {"host": {"temp_c": 50}, "disks": [], "units": [unit("llama-server"), unit("douglas-draw")], "versions": []}
+LOOKS["fleet"] = {"machines": [{"id": "dougvoice", "name": "DOUGVOICE", "up": True}]}
+with contextlib.redirect_stdout(io.StringIO()):
+    counts = [agent.look(w, m, NOWW + 130 + t) for t in (20, 100, 340, 700)]
+check("put right, they are cleared, each when it has been gone for as long as its rule asks; the task stays",
+      (counts, sorted(n["key"] for n in desk.owner("notices", {})["open"]), len(desk.owner("notices", {})["over"])),
+      ([(0, 0), (0, 1), (0, 6), (0, 1)], [f"task:{task_id}"], 8))
+w2 = agent.Watch()
+for n in desk.owner("notices", {})["open"]:
+    w2.adopt(n["key"], n["severity"])
+desk.owner("correct", {"id": task_id, "done": True})
+m["tasks"] = (0.0, [])
+with contextlib.redirect_stdout(io.StringIO()):
+    agent.look(w2, m, NOWW + 2000)
+    agent.look(w2, m, NOWW + 2400)
+check("a task that is ticked off stops being a notice, also after the program was started afresh",
+      [n["key"] for n in desk.owner("notices", {})["open"]], [])
+desk.owner("purge", {"id": task_id})
+# The memory not answering while the watch has something to say.
+LOOKS["v"] = {"host": {}, "disks": [], "units": [unit("douglas-draw", "failed")], "versions": []}
+LOOKS["fleet"] = {"machines": []}
+w3, m3 = agent.Watch(), memo()
+real_memory, DOWN = agent.memory, {"down": True}
+agent.memory = lambda op, fields, allowed: ((200, {"ok": False, "text": "Douglas's memory did not answer."})
+                                            if DOWN["down"] else real_memory(op, fields, allowed))
+with contextlib.redirect_stdout(io.StringIO()):
+    quiet = [agent.look(w3, m3, NOWW + 5000 + t) for t in (0, 40, 60)]
+    DOWN["down"] = False
+    heard = agent.look(w3, m3, NOWW + 5080)
+check("a notice the memory could not take is not thought raised: it is raised at the first look the memory answers",
+      (quiet, heard, [n["key"] for n in desk.owner("notices", {})["open"]]),
+      ([(0, 0)] * 3, (1, 0), ["unit:douglas:douglas-draw"]))
+LOOKS["v"] = {"host": {}, "disks": [], "units": [unit("douglas-draw")], "versions": []}
+with contextlib.redirect_stdout(io.StringIO()):
+    agent.look(w3, m3, NOWW + 5100)
+    DOWN["down"] = True
+    quiet = agent.look(w3, m3, NOWW + 5500)          # gone long enough, and the memory does not answer
+    DOWN["down"] = False
+    later = [agent.look(w3, m3, NOWW + 5520 + t) for t in (0, 400)]
+check("and one the memory could not clear is not thought cleared: it is cleared at the first look it answers",
+      (quiet, later, [n["key"] for n in desk.owner("notices", {})["open"]]), ((0, 0), [(0, 1), (0, 0)], []))
+agent.memory = real_memory
+agent.vitals, agent.fleet_seen = real_vitals, real_fleet
+
 web = ThreadingHTTPServer(("127.0.0.1", 0), agent.Handler)
 threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
@@ -383,6 +542,23 @@ check("a POST cannot be made to ask what only the assistant asks",
       (call("/memory?token=t", {"op": "remember", "kind": "fact", "text": "The sky is green."})[0],
        call("/memory?token=t", {"op": "log", "name": "x"})[0], call("/memory?token=t", {})[0],
        call("/memory?token=t", ["purge"])[0]), (400, 400, 400, 400))
+desk.owner("notice_raise", {"key": "gone:dougvoice", "rule": "gone", "subject": "DOUGVOICE", "severity": "warning",
+                            "text": "DOUGVOICE is not answering."})
+code, got = call("/memory?token=t&op=notices")
+nid = got["open"][0]["id"]
+check("the owner's screen reads the notices and where each severity goes", (code, got["open"][0]["text"],
+                                                                         got["prefs"]["critical"]),
+      (200, "DOUGVOICE is not answering.", {"tell": True, "aloud": False}))
+check("acknowledges one, and says where a severity is to go",
+      (call("/memory?token=t", {"op": "notice_ack", "id": nid})[1]["changed"],
+       call("/memory?token=t", {"op": "notice_prefs", "severity": "warning", "tell": False, "aloud": {"x": 1}})[1]["prefs"]["warning"]),
+      (True, {"tell": False, "aloud": False}))
+check("and cannot raise one or clear one: only the watch in this program does, and nothing that comes in over "
+      "the network", (call("/memory?token=t", {"op": "notice_raise", "key": "x", "rule": "x", "subject": "x",
+                                               "severity": "critical", "text": "Made up."})[0],
+                      call("/memory?token=t", {"op": "notice_clear", "key": "gone:dougvoice"})[0],
+                      call("/memory?token=t&op=notice_clear&key=gone:dougvoice")[0],
+                      len(desk.owner("notices", {})["open"])), (400, 400, 400, 1))
 code, got = call("/memory?token=t", {"op": "delete", "id": first})
 check("deleted from the owner's screen", (code, got["status"], desk.assistant("recall", {"text": "coffee"})["memories"]),
       (200, "deleted", []))

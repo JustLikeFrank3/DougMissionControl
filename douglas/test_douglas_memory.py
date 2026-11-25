@@ -314,7 +314,7 @@ check("past the most it holds, the least sure and longest unused are let go firs
       (len(left), all(i in [m["id"] for m in left] for i in owners),
        desk2.call("owner", {"op": "list", "status": "deleted"})["total"] >= count - 6), (6, True, True))
 check("an older database is brought up to date and loses nothing by it",
-      (again.db.execute("PRAGMA user_version").fetchone()[0], any("version 1" in line for line in LOG)), (1, True))
+      (again.db.execute("PRAGMA user_version").fetchone()[0], any("version 1" in line for line in LOG)), (2, True))
 
 print("== what the journal holds")
 journal = "\n".join(LOG)
@@ -322,6 +322,103 @@ has("which door asked for what, and how long it took", journal, "memory: assista
     "memory: owner correct in", "memory: owner purge in")
 check("and never a memory's words",
       [w for w in ("coffee", "sister", "Leeds", "kettle", "greenhouse", marker, "hunter2") if w in journal], [])
+
+print("== notices: what the watch raised, kept once for as long as it holds")
+check("the owner's choices, read back whole whatever was kept: a wrong thing in there is as it was to begin with",
+      (mem.Store.prefs_of(None) == mem.PREFS, mem.Store.prefs_of({"value": "not json"}) == mem.PREFS,
+       mem.Store.prefs_of({"value": "[1, 2]"}) == mem.PREFS,
+       mem.Store.prefs_of({"value": json.dumps({"warning": "yes", "critical": {"aloud": 1, "tell": False},
+                                                "quiet_from": True, "quiet_to": 99})}),
+       mem.Store.prefs_of({"value": json.dumps({"information": {"tell": True}, "quiet_from": 0, "quiet_to": 23})})),
+      (True, True, True,
+       dict(mem.PREFS, critical={"tell": False, "aloud": False}),
+       dict(mem.PREFS, information={"tell": True, "aloud": False}, quiet_from=0, quiet_to=23)))
+nv = mem.Store(os.path.join(root, "notices.db"))
+ndesk = mem.Desk(nv)
+na = lambda **q: ndesk.call("assistant", q)      # noqa: E731
+no = lambda **q: ndesk.call("owner", q)          # noqa: E731
+r = no(op="notice_raise", key="unit:douglas:douglas-draw", rule="unit", subject="douglas-draw",
+       severity="warning", text="douglas-draw on DOUGLAS is not running [failed].")
+first_notice = r["id"]
+check("raised, a notice is kept, with nothing in its words that could pass for the program's own brackets",
+      (r["what"], no(op="notices")["open"][0]["text"], no(op="notices")["open"][0]["severity"]),
+      ("raised", "douglas-draw on DOUGLAS is not running (failed).", "warning"))
+check("said again while it holds, it is the same notice and not another",
+      ([no(op="notice_raise", key="unit:douglas:douglas-draw", rule="unit", subject="douglas-draw",
+           severity="warning", text="Still not running.")["what"] for _ in range(3)], len(no(op="notices")["open"]),
+       no(op="notices")["open"][0]["text"]), (["open"] * 3, 1, "douglas-draw on DOUGLAS is not running (failed)."))
+check("what goes where is the owner's to say, and until then: a warning is mentioned by Douglas, information is "
+      "not, and nothing is said aloud", no(op="notices")["prefs"],
+      {"information": {"tell": False, "aloud": False}, "warning": {"tell": True, "aloud": False},
+       "critical": {"tell": True, "aloud": False}, "quiet_from": 22, "quiet_to": 8})
+no(op="notice_raise", key="task:7", rule="task", subject="a task", severity="information", text="Open for 9 days: x.")
+no(op="notice_raise", key="gone:node1", rule="gone", subject="DOUG PRIME", severity="critical",
+   text="DOUG PRIME is not answering.")
+got = na(op="notices")
+check("Douglas is given what is open, the worst first, and which of it he has yet to mention",
+      ([n["subject"] for n in got["open"]], [n["subject"] for n in got["tell"]], got["aloud"], got["quiet"]),
+      (["DOUG PRIME", "douglas-draw", "a task"], ["DOUG PRIME", "douglas-draw"], [], [22, 8]))
+check("he marks what he has mentioned, and is not given it to mention again",
+      (na(op="notice_told", ids=[n["id"] for n in got["tell"]])["marked"], na(op="notices")["tell"],
+       len(na(op="notices")["open"])), (2, [], 3))
+r = no(op="notice_raise", key="unit:douglas:douglas-draw", rule="unit", subject="douglas-draw",
+       severity="critical", text="douglas-draw on DOUGLAS has been restarted 5 times.")
+check("made worse, it is the same notice, worse, and is to be mentioned afresh",
+      (r["what"], r["id"] == first_notice, [n["subject"] for n in na(op="notices")["tell"]],
+       [n["times"] for n in no(op="notices")["open"] if n["id"] == first_notice]), ("worse", True, ["douglas-draw"], [2]))
+check("acknowledged by the owner, it stays open for as long as it holds and is not mentioned or said aloud again",
+      (no(op="notice_ack", id=first_notice)["changed"], no(op="notice_ack", id=first_notice)["changed"],
+       [n["subject"] for n in na(op="notices")["tell"]], len(no(op="notices")["open"])), (True, False, [], 3))
+check("the owner turns saying critical ones aloud on, and only that changes",
+      (no(op="notice_prefs", severity="critical", aloud=True, tell="yes", quiet_from=23)["prefs"]["critical"],
+       no(op="notices")["prefs"]["warning"], no(op="notices")["prefs"]["quiet_from"],
+       [n["subject"] for n in na(op="notices")["aloud"]]),
+      ({"tell": True, "aloud": True}, {"tell": True, "aloud": False}, 23, ["DOUG PRIME"]))
+check("said aloud, it is not said again", (na(op="notice_told", ids=[n["id"] for n in na(op="notices")["aloud"]],
+                                             aloud=True)["marked"], na(op="notices")["aloud"]), (1, []))
+check("a severity that is not one, and an hour that is not one, are refused",
+      (no(op="notice_prefs", severity="urgent", tell=True).get("ok"), no(op="notice_prefs", quiet_to=24).get("ok"),
+       no(op="notice_raise", key="x", rule="x", subject="x", severity="apocalyptic", text="The end.").get("ok"),
+       no(op="notice_raise", key="", rule="x", subject="x", severity="warning", text="Something.").get("ok")),
+      (False, False, False, False))
+check("it holds no longer: cleared, it is over, and kept among what was open lately",
+      (no(op="notice_clear", key="unit:douglas:douglas-draw")["cleared"], no(op="notice_clear", key="unit:douglas:douglas-draw")["cleared"],
+       [n["subject"] for n in no(op="notices")["open"]], [n["subject"] for n in no(op="notices")["over"]]),
+      (1, 0, ["DOUG PRIME", "a task"], ["douglas-draw"]))
+check("and should it come back, that is a new notice",
+      (no(op="notice_raise", key="unit:douglas:douglas-draw", rule="unit", subject="douglas-draw",
+          severity="warning", text="douglas-draw on DOUGLAS is not running.")["what"], len(no(op="notices")["open"])),
+      ("raised", 3))
+check("Douglas can read notices and mark them as told, and nothing else: not raise, clear, acknowledge or say "
+      "where they go",
+      [na(op=op, id=first_notice, key="gone:node1", rule="x", subject="x", severity="critical", text="Made up.",
+          tell=False).get("ok") for op in ("notice_raise", "notice_clear", "notice_ack", "notice_prefs")], [False] * 4)
+check("and marking is of told or spoken only", na(op="notice_told", ids=["1; DROP TABLE notices", {"a": 1}, -3])["marked"], 0)
+was_most, mem.NOTICES_MAX = mem.NOTICES_MAX, 4
+for n in range(12):
+    no(op="notice_raise", key=f"hot:{n}", rule="hot", subject=f"m{n}", severity="warning", text=f"Machine {n} is hot.")
+    no(op="notice_clear", key=f"hot:{n}")
+check("what is over is not kept for ever: the oldest go, and never one that is still open",
+      (nv.db.execute("SELECT COUNT(*) FROM notices WHERE cleared IS NOT NULL").fetchone()[0] <= 5,
+       len(no(op="notices")["open"])), (True, 3))
+mem.NOTICES_MAX = was_most
+# A task left open becomes a notice with the task's words in it. Purged, the task takes it along.
+nmark = "vjkq33xyzzy"
+chore = na(op="remember", kind="task", subject="the shed", text=f"Oil the {nmark} hinge on the shed.", source="said")["id"]
+other = na(op="remember", kind="task", subject="the gate", text="Paint the gate.", source="said")["id"]
+for i, words, over in ((chore, f"A task has been open since 1 May: Oil the {nmark} hinge on the shed.", False),
+                       (other, "A task has been open since 2 May: Paint the gate.", True)):
+    no(op="notice_raise", key=f"task:{i}", rule="task", subject="a task", severity="information", text=words)
+    if over:
+        no(op="notice_clear", key=f"task:{i}")
+no(op="purge", id=chore)
+no(op="purge", id=other)
+raw = b"".join(open(os.path.join(root, f), "rb").read() for f in os.listdir(root) if f.startswith("notices.db"))
+check("a task purged takes the notice about it along, open or over, and out of the file itself; the other notices stay",
+      ([n["key"] for n in no(op="notices")["open"] + no(op="notices")["over"] if n["key"] in (f"task:{chore}", f"task:{other}")],
+       nmark.encode() in raw, len(no(op="notices")["open"])), ([], False, 3))
+nv.db.close()
+nv.rd.close()
 
 print("== what an independent review found, each put right")
 rv = mem.Store(os.path.join(root, "review.db"))

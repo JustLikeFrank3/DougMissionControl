@@ -7,9 +7,11 @@ do. The rule throughout: **broad visibility, narrow authority.** He gets to
 see and to remember; he does not get to act on anything he could not act on
 before.
 
-Phases 1 and 2 are built and running (the README's "A memory" and "What he
-can see of the machines, and of himself" say how they work and what was
-measured). Phases 3 to 6 are designed here and wait for a go-ahead.
+Phases 1 to 3 are built and running (the README's "A memory", "What he can
+see of the machines, and of himself" and "What is noticed without anyone
+asking" say how they work and what was measured). Phases 4 to 6 are designed
+here; the owner has said in which order, and that the house waits to be
+asked for by name.
 
 ## 1. What was found
 
@@ -182,7 +184,8 @@ a reboot of the machine.
 *Still not seen after it:* the Pi's k3s workloads; anything from DougVoice
 and the two Macs beyond whether they answer (they run no agent); the
 workstation's disk and uptime. Nothing is kept of a reading, so there is no
-"was it hot last night": that is phase 3's.
+"was it hot last night": phase 3 notices what is wrong now and keeps
+what it raised, and still no history of readings.
 
 *Depends on:* phase 1 only for the log. *Risks:* a read token that opens
 more than a read (met by an allow-list of one route, tested from both
@@ -196,49 +199,77 @@ moment, says so when a machine reports nothing, and the read token is
 refused on every other route. *All of it was seen live*, the last from
 Douglas itself against eighteen routes.
 
-### Phase 3: proactive notices (designed)
+### Phase 3: proactive notices (built)
 
-A watcher where the readings already are, and no model in it. deck-api's
-poll turns each cycle into a state; the watcher compares it with the last
-one and applies rules to what *changed*. Douglas's agent does the same for
-his own machine, so that the Pi being down is not the end of noticing. A
-rule is data, not code:
+A watch where the readings already are, and no model in it: in
+`douglas-agent`, which reads his own machine anyway and is given the fleet
+view with the same read token the pipeline has. Every twenty seconds it
+holds both against rules; a rule is a few lines over readings and nothing
+else:
 
-| Rule | Raised when | Severity | One notice per | Quiet for |
+| Rule | Raised when | Severity | One notice per | Held / gone for |
 |---|---|---|---|---|
-| a machine gone | it has not answered for 3 cycles, and it is one that should be on (not the laptop, not the workstation when it was shut down from the deck) | warning; critical for Douglas and the Pi | machine | until it is back, then one "back" notice |
-| too hot | over its line for 2 minutes (a line per machine, in the settings) | warning; critical 10 degrees further | machine | 30 minutes, unless it gets worse |
-| a service down | a unit that should run is failed, or has been restarted 3 times in 10 minutes | critical for the model server, the pipeline, the memory, deck-api; warning for the rest | unit | until it is up for 5 minutes |
-| a deployment that did not take | the checksum of an installed program changed and its unit is not up a minute later | critical | unit | until it is up |
-| disk nearly full | under 10% free; critical under 5% | as given | file system | a day, unless it crosses the next line |
-| something due | a task in his memory whose day has come | information | task | a day; gone when marked done |
+| a machine gone | DougVoice (the list of what should always be on is a setting) does not answer; the Pi does not answer Douglas | warning; critical for the Pi | machine | 90 s / 60 s |
+| too hot | over its line (a pair of lines per machine, in the settings) | warning; critical over the second line | machine | 2 min / 5 min |
+| a service down | a unit that should run is not running, on Douglas or the Pi; not one switched off on purpose | critical for the model server, the pipeline, the memory, deck-api; warning for the rest | unit | 30 s / 5 min |
+| a change that did not take | that, within a quarter of an hour of its program's checksum changing | critical | unit (the same notice) | 30 s / 5 min |
+| started again and again | 3 restarts in 10 minutes | as for that unit | unit | at once / 10 min |
+| disk nearly full | under 10% free; critical under 5% | as given | file system | 1 min / 10 min |
+| something due | a task in his memory past its day, or open a week | information | task | at once / until done |
 
-Each notice is a row: when, rule, key (what "one notice per" names),
-severity, the reading that raised it, and when it was acknowledged. The key
-is what deduplicates: a notice that is already open for a key is updated,
-not raised again, and a reading that flaps inside its quiet time raises
-nothing. Notices are kept in the memory service's database, which is where
-durable things on Douglas live, in a table of their own with the owner's
-door on it; the Pi keeps nothing, as before, and hands what it raises to
-Douglas's agent.
+A notice is a row in the memory service's database: its key (what "one
+notice per" names), rule, severity, sentence, when it was raised, made
+worse, seen by the owner, mentioned by Douglas, said aloud, and cleared. The
+key is what deduplicates. A finding has to hold without a break before it is
+a notice and be gone without a break before the notice is over, so a reading
+that flickers raises nothing and clears nothing; worse is the same notice,
+told afresh. Only the watch raises and clears, through the owner's door:
+Douglas's door can read notices and mark them as told, and the relays in the
+agent and on the Pi pass on reading, "seen", and the preferences, and no
+more.
 
-Where a notice goes is the owner's preference, by severity, set in Mission
-Control and kept with the notices: on the panel and the phone always; aloud
-through DougVoice for critical, within the hours it may speak; and to
-Douglas as news for his next turn, so that "anything I should know?" has an
-answer. The model is asked nothing to raise a notice. It is asked one
-thing, and only when the owner asks for it: to word the day's notices as a
-sentence or two.
+Where a notice goes is the owner's, by severity, set in Mission Control and
+kept with the notices: on the screens always (the phone's NOTICES card, the
+panel's NOTICES tab, and a count under DOUGLAS in the panel's top bar
+wherever it is); mentioned by Douglas with his next answer, once (on for
+warnings and critical ones); said aloud when nobody is talking and outside
+the quiet hours (off for all until switched on). His two readings carry the
+open notices, so "is anything wrong?" has an answer.
 
-*Depends on:* phase 2's readings; a history of readings is not needed (a
-rule keeps the two or three it compares). *Risks:* noise, which is what
-ends anyone's trust in a notice (met by keys, quiet times, "should be on",
-and a week of dry running that only writes what it would have said); a
-watcher that is itself down (the Pi and Douglas each watch the other).
+What differs from the design, and why:
+
+- The watch is on Douglas alone, not on the Pi as well. The Pi handing
+  notices to Douglas would have needed a route on Douglas that writes, held
+  by the Pi; instead the Pi says in its own events when Douglas, DougVoice
+  or the watch itself stops answering, and Douglas reads those events when
+  he reads the fleet.
+- A machine being back is not a notice of its own: the notice is over, and
+  is listed as over for three days.
+- The workstation and the laptops being off raise nothing at all, rather
+  than "unless it was shut down from the deck": they are off most days.
+- Quiet is not a clock per rule ("30 minutes", "a day"): a notice stays one
+  notice for as long as it holds and is mentioned once, which does the same
+  job with less to get wrong.
+- The model is not asked to word the day's notices. Asked, he reads them
+  and says them.
+
+*Not done:* the week of dry running. It was run dry once against the live
+readings, which found nothing to raise, and switched on. Whether a week of
+ordinary days raises nothing is not known yet; the lines are settings.
+Reaching a phone whose page is closed is not built: that goes through
+somebody else's service, and is the owner's to ask for.
 
 *Accepted when:* pulling a machine's plug raises one notice, not one per
-poll; a flapping reading raises none inside its quiet time; quiet hours and
-per-severity preferences hold; a week of normal running raises nothing.
+poll; a flapping reading raises none; quiet hours and per-severity
+preferences hold; a week of normal running raises nothing. *Seen so far:* a
+service stopped on Douglas raised one warning in 48 seconds, which stayed
+one notice across two restarts of the watch, was shown on both screens,
+answered from when he was asked what was wrong, mentioned once with his next
+answer on the chat line, and was over five minutes after the service was
+back; nothing was said aloud; the Pi said the watch was gone 36 seconds
+after it was stopped. Flickering, quiet hours and the preferences hold in
+the tests, with stand-ins; 81 of 81 safeguards broken on purpose were
+caught. No plug was pulled, and the week has not passed.
 
 ### Phase 4: tasks, approvals, capability switches (designed)
 
@@ -328,10 +359,14 @@ Decided by the owner on 2026-11-24, and done or kept accordingly:
   is shut to them. An independent review had raised it.
 - Douglas was rebooted: every service and door came back by itself, and
   what he remembered was there.
+- Phase 3 is built and running (2026-11-24). Saying a notice aloud is off
+  for every severity until switched on in Mission Control.
 
 Still the owner's to say:
 
 - Phase 6, by name, when its turn comes.
+- Whether a notice should reach a phone whose page is closed. That means
+  another company's push service, or one more thing to run at home.
 - Whether ChatGPT's connector should become Douglas (phase 5). It is
   reachable from the internet and answers to another company's service: as
   Douglas it would hand what he remembers to both. It stays the bare model
@@ -349,6 +384,11 @@ was as it had been.)
 `pi/fleet-read.sh off` on the Pi removes the read token, which closes
 `/api/fleet` to whoever holds it; taking `FLEET_URL` and `FLEET_TOKEN` out
 of `voice.env` takes the `fleet` tool away, and `VITALS_SOCKET` the `self`
-tool. Each takes effect when `douglas-voice` is next restarted. The programs
+tool. Each takes effect when `douglas-voice` is next restarted.
+`WATCH=0` in `/etc/douglas/agent.env` and a restart of `douglas-agent`
+switches the watch off: nothing is raised or cleared after that, what was
+raised stays in the list, and the two switches under WHERE THEY GO in
+Mission Control stop Douglas mentioning notices without touching the watch.
+The programs
 and settings from before each phase are kept in the home directory of the
 account that installed them, on Douglas and on the Pi.

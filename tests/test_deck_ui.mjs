@@ -23,6 +23,7 @@ const spd = await import(pathToFileURL(path.join(UI, 'speedprofile.js')));
 const nav = await import(pathToFileURL(path.join(UI, 'nav.js')));
 const mem = await import(pathToFileURL(path.join(UI, 'memory.js')));
 const fleet = await import(pathToFileURL(path.join(UI, 'fleet.js')));
+const ntc = await import(pathToFileURL(path.join(UI, 'notices.js')));
 
 let passed = 0;
 const failures = [];
@@ -502,6 +503,47 @@ test('a machine line carries only what was read, and says when it is old', () =>
   assert.equal(fleet.machineLine({ up: true, reports: { temp_c: null, load: undefined } }, now).text, '');
   assert.equal(fleet.diskPct({ total_bytes: 0, used_bytes: 5 }), null);
   assert.equal(fleet.diskPct(null), null);
+});
+
+/* ── what the watch raised ──────────────────────────────────────────────── */
+
+test('how many notices are open, and how bad the worst is; not read is not none', () => {
+  assert.deepEqual(ntc.summary({ ok: true, open: [] }), { text: 'NONE', cls: 'ok' });
+  assert.deepEqual(ntc.summary({ ok: true, open: [{ severity: 'warning' }, { severity: 'information' }] }),
+                   { text: '2 OPEN', cls: 'busy' });
+  assert.deepEqual(ntc.summary({ ok: true, open: [{ severity: 'warning', acked: 1 }, { severity: 'critical' }] }),
+                   { text: '2 OPEN · 1 NEW', cls: 'bad' });
+  assert.deepEqual(ntc.summary({ ok: true, open: [{ severity: 'information' }] }), { text: '1 OPEN', cls: '' });
+  assert.deepEqual(ntc.summary({ ok: false, text: 'Douglas has no memory installed.' }), { text: '—', cls: '' });
+  assert.deepEqual(ntc.summary(null), { text: '—', cls: '' }, 'no answer is a dash, never NONE');
+});
+
+test('the top bar says how many notices nobody has seen, and nothing when there is none or it is not known', () => {
+  assert.deepEqual(ntc.navNotices({ open: 3, new: 2, worst: 'critical' }), { text: '2 notices', critical: true });
+  assert.deepEqual(ntc.navNotices({ open: 1, new: 1, worst: 'warning' }), { text: '1 notice', critical: false });
+  assert.equal(ntc.navNotices({ open: 2, new: 0, worst: null }), null, 'seen ones are not for the bar');
+  assert.equal(ntc.navNotices(null), null, 'not read: the bar says what it always said');
+  assert.equal(ntc.navNotices(undefined), null);
+});
+
+test('the quiet hours step an hour at a time, round midnight', () => {
+  assert.equal(ntc.hourStep(22, 1), 23);
+  assert.equal(ntc.hourStep(23, 1), 0);
+  assert.equal(ntc.hourStep(0, -1), 23);
+  assert.equal(ntc.hourStep(8, -1), 7);
+  assert.equal(ntc.hourStep(undefined, 1), 1, 'an hour not known is taken as midnight, never NaN');
+});
+
+test('a notice says since when, and what has become of it', () => {
+  const now = 2000000000, at = fmt.fmtClock(now - 600);
+  assert.equal(ntc.meta({ raised: now - 600 }, now), 'since ' + at + ' · 10 m · not yet mentioned');
+  assert.equal(ntc.meta({ raised: now - 600, told: now - 500, times: 2 }, now),
+               'since ' + at + ' · 10 m · got worse · Douglas has mentioned it');
+  assert.equal(ntc.meta({ raised: now - 600, acked: now - 100, spoken: now - 400 }, now),
+               'since ' + at + ' · 10 m · seen · said aloud');
+  assert.equal(ntc.meta({ raised: now - 600, cleared: now - 300, acked: now - 400 }, now),
+               'over since ' + fmt.fmtClock(now - 300) + ' · lasted 5 m',
+               'one that is over says how long it lasted, not how long ago it began');
 });
 
 if (failures.length) {
