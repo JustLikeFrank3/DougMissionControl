@@ -953,7 +953,7 @@ def audio_spectrum() -> dict:
     if os_now == "windows" and SIM_TOKEN:
         url = _sim_url("/audio")
     elif os_now == "linux" and LINUX_MEDIA_TOKEN:
-        url = (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/audio"
+        url = (f"http://{linux_host()}:{LINUX_MEDIA_PORT}/audio"
                f"?token={quote(LINUX_MEDIA_TOKEN)}")
     else:
         return {"active": False, "reason": "no agent answering on the booted OS"}
@@ -1046,7 +1046,7 @@ def _media_url(path: str, os_now: str) -> str | None:
     if os_now == "windows" and SIM_TOKEN:
         return _sim_url(path)
     if os_now == "linux" and LINUX_MEDIA_TOKEN:
-        return (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}{path}"
+        return (f"http://{linux_host()}:{LINUX_MEDIA_PORT}{path}"
                 f"?token={quote(LINUX_MEDIA_TOKEN)}")
     return None
 
@@ -1228,7 +1228,7 @@ def _monitor_url(method: str, payload: dict | None = None) -> dict | None:
     if os_now == "windows" and SIM_TOKEN:
         url = _sim_url("/monitor")
     elif os_now == "linux" and LINUX_MEDIA_TOKEN:
-        url = (f"http://{WS_LAN}:{LINUX_MEDIA_PORT}/monitor"
+        url = (f"http://{linux_host()}:{LINUX_MEDIA_PORT}/monitor"
                f"?token={quote(LINUX_MEDIA_TOKEN)}")
     else:
         return None
@@ -1436,6 +1436,24 @@ def poller() -> None:
         time.sleep(POLL_BUSY if DECK.state["boot"]["in_flight"] else POLL_IDLE)
 
 
+# Where the Linux boot's agents are dialled: the address it last answered a
+# probe on. That is the LAN address from boot.env wherever nothing has gone
+# wrong, and the point-to-point link when only that answers.
+#
+# linux_seen() learned the second route the night the LAN address moved, and
+# the panel went back to saying "linux". Nothing else learned it: the screens,
+# the track, the bars and the off button went on dialling WS_LAN. So with the
+# workstation's LAN cable out, the panel showed a running Linux box and NO
+# LINK on every surface that has to ask that box something, which at the desk
+# read as a fault in the graphics driver.
+_linux_at = [WS_LAN]
+
+
+def linux_host() -> str:
+    """The address to dial the Linux boot's agents on."""
+    return _linux_at[0]
+
+
 def linux_seen() -> bool:
     """Linux, by any route this Pi has.
 
@@ -1444,14 +1462,20 @@ def linux_seen() -> bool:
     defend its DHCP lease, so that assumption has already failed once. The
     point-to-point link is immune: it exists only under the Linux boot and no
     router hands out its addresses.
+
+    The route that answered is the one its agents are dialled on until the
+    next probe (linux_host). The LAN address is asked first every time, so it
+    is back in use the cycle after it answers again.
     """
-    if http_ok(f"http://{WS_LAN}:{LINUX_PORT}/"):
-        return True
-    if tcp_ok(WS_LAN, LINUX_AGENT_PORT):
+    if http_ok(f"http://{WS_LAN}:{LINUX_PORT}/") or tcp_ok(WS_LAN, LINUX_AGENT_PORT):
+        _linux_at[0] = WS_LAN
         return True
     if not LINUX_PROBE_IP:
         return False
-    return tcp_ok(LINUX_PROBE_IP, 22) or pingable(LINUX_PROBE_IP)
+    if tcp_ok(LINUX_PROBE_IP, 22) or pingable(LINUX_PROBE_IP):
+        _linux_at[0] = LINUX_PROBE_IP
+        return True
+    return False
 
 
 def poll_once(prev_os):
@@ -1649,7 +1673,7 @@ def fire_shutdown() -> tuple[bool, str]:
     elif os_now == "linux":
         if not LINUX_AGENT_TOKEN:
             return False, "LINUX_AGENT_TOKEN unset in /etc/flightsim/boot.env"
-        url = f"http://{WS_LAN}:{LINUX_AGENT_PORT}/shutdown?token={LINUX_AGENT_TOKEN}"
+        url = f"http://{linux_host()}:{LINUX_AGENT_PORT}/shutdown?token={LINUX_AGENT_TOKEN}"
     else:
         return False, f"nothing to shut down: workstation is {os_now}"
     if http_ok(url, timeout=5):

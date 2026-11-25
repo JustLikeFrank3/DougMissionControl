@@ -2210,6 +2210,7 @@ bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
 python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
+python3 pi/deck-api/test_linux_route.py # where the Linux boot is dialled: its LAN address, or the direct link when only that answers
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
 python3 douglas/test_douglas_memory.py  # what he remembers, and the notices: all three doors, on a database in a temp folder
 python3 douglas/test_douglas_mcp.py     # the MCP server: the real memory behind it, a stand-in fleet and vitals
@@ -2332,6 +2333,16 @@ See [Which OS a cold boot lands in](#which-os-a-cold-boot-lands-in).
   confuse with the Pi's own.
 - **Machine wakes but nothing is spoken.** Nobody logged on — the greeting
   is a logon task. See auto sign-in above.
+- **SCREENS reads NO LINK under Linux, and the monitors are fine.** It is
+  the network, not the monitors or the graphics driver. The panel asks the
+  workstation's media agent on the workstation's LAN address (`WS_LAN`).
+  When that address stops answering (its cable is out, or it was a lease
+  that moved), deck-api asks over the point-to-point link from `LINUX_SSH`
+  instead, from its next probe on, and goes back the cycle after the LAN
+  address answers again; the track, the bars and the off button go the same
+  way. With no such link, or the agent's port closed on it, NO LINK stays.
+  On the workstation, `python3 media-agent.py --monitors` shows what DDC
+  reaches. Waking the workstation still needs its wired LAN port.
 - **Douglas says the workshop is not answering, or a job fails at once.**
   On Douglas: `systemctl status douglas-work douglas-job`
   and `journalctl -u douglas-work -u douglas-job -o cat -n 40` (which names
