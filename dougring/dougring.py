@@ -864,6 +864,17 @@ def public_handler(app):
         def _send(self, status, body=b"", ctype="text/plain; charset=utf-8"):
             if isinstance(body, str):
                 body = body.encode()
+            # One line a request: method, path, status, and for a POST its
+            # content type and size. Never the query (it carries nonces) or
+            # the body (it carries codes).
+            path = urllib.parse.urlsplit(self.path).path[:60]
+            extra = ""
+            if self.command == "POST":
+                extra = (f" {(self.headers.get('Content-Type') or '-').split(';')[0][:40]}"
+                         f" {self.headers.get('Content-Length') or 0} B"
+                         f"{' signed' if self.headers.get('X-Signature') else ''}")
+            log(f"public: {self.command} {path} -> {status}{extra}"
+                f"{' ua=' + (self.headers.get('User-Agent') or '-')[:40] if path.startswith('/ring/') else ''}")
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
