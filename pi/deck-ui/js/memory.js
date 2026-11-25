@@ -22,7 +22,8 @@ import { fmtAgo, fmtClock } from './format.js';
 var HOW = { owner: 'you set this', said: 'you said so', observed: 'he saw it happen',
             inferred: 'he worked it out' };
 var STATES = [['active', 'KEPT'], ['superseded', 'REPLACED'], ['deleted', 'DELETED']];
-var KINDS = ['preference', 'fact', 'project', 'decision', 'task', 'lesson', 'fleet', 'summary'];
+var KINDS = ['preference', 'fact', 'project', 'decision', 'task', 'lesson', 'fleet', 'summary', 'place',
+             'observation'];
 var WHO = { owner: 'you', douglas: 'him', memory: 'the memory itself' };
 var PAGE = 30;
 var ROUTE = '/api/douglas/memory';

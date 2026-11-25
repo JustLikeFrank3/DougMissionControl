@@ -40,6 +40,23 @@ that blocked, and they are fixed: see "From the review" at the end.
   Mission Control, and never tried in the room.
 - **The house (phase 6).** Not without being asked for by name.
 
+## Finding memories by their sense (docs/DOUGLAS-MEMORY-SEARCH.md)
+
+- **Camera observations.** The schema, expiry and labels are ready, and
+  storing them is off (`MEMORY_OBSERVATIONS=0`). Switch it on only with
+  DougRing, and only when asked. Before then, restart `douglas-voice` so that
+  he shows an observation as "seen at …, not checked since". That label is
+  committed but not yet running live.
+- **Mission Control.** The memory page's kind filter knows `place` and
+  `observation`, but it has not been deployed to node1. There is no button to
+  rebuild the vectors (`reindex`): adding one would widen what the deck can
+  ask for.
+- **Thresholds on real data.** `EMBED_MIN` 0.30 was measured on 38 made-up
+  memories. Once he has a few hundred real ones, check that unrelated
+  questions still bring back nothing.
+- **A reranker.** Not justified at 0.97 found-in-top-3. Measure again if the
+  memory grows.
+
 ## ChatGPT's line
 
 - Tools on that line. There are none, on purpose. Readings (the weather, the

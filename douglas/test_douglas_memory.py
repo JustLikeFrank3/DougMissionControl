@@ -132,7 +132,7 @@ a(op="remember", kind="task", subject="dentist", text="He means to book the dent
   source="said", due=time.time() + 86400)
 got = a(op="recall", text="Where had we got to with the kettle display?")["memories"]
 check("the memories that share the message's words, the nearest first, each with where it came from",
-      ([m["subject"] for m in got], sorted(got[0])[:6], got[0]["uses"] >= 0),
+      ([m["subject"] for m in got], sorted(set(got[0]) - {'category', 'expires'})[:6], got[0]["uses"] >= 0),
       (["kettle display driver", "kettle firmware"],
        ["confidence", "conversation", "created", "done", "due", "id"], True))
 check("and each that was handed out is marked as used", o(op="get", id=got[0]["id"])["uses"], 1)
@@ -356,7 +356,7 @@ check("past the most it holds, the least sure and longest unused are let go firs
       (len(left), all(i in [m["id"] for m in left] for i in owners),
        desk2.call("owner", {"op": "list", "status": "deleted"})["total"] >= count - 6), (6, True, True))
 check("an older database is brought up to date and loses nothing by it",
-      (again.db.execute("PRAGMA user_version").fetchone()[0], any("version 1" in line for line in LOG)), (2, True))
+      (again.db.execute("PRAGMA user_version").fetchone()[0], any("version 1" in line for line in LOG)), (3, True))
 
 print("== what the journal holds")
 journal = "\n".join(LOG)

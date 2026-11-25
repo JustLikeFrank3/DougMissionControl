@@ -1,0 +1,56 @@
+[Unit]
+Description=douglas-embed - the small model that finds Douglas's memories by their sense (CPU only, no network)
+# What it is for: douglas-memory asks it for one vector a sentence, at a Unix
+# socket, and keeps the vectors in its own database. This service never sees
+# that database, holds nothing between requests, and is told only the words
+# douglas-memory already keeps. Without it, the memory is searched by words
+# only, as it was before it existed.
+Before=douglas-memory.service
+
+[Service]
+User=douglas-embed
+Group=douglas-embed
+EnvironmentFile=/etc/douglas/embed.env
+# The socket is made by llama-server, as this user, in a directory only the
+# group douglas-embed may enter: douglas-memory's unit is given that group
+# (embed-setup.sh), and nothing else is.
+RuntimeDirectory=douglas-embed
+RuntimeDirectoryMode=0750
+UMask=0007
+# On the CPU, and not many of its cores: the GPU is the language model's and
+# the drawing model's, and a vector for a sentence takes a few milliseconds.
+ExecStart=/opt/llama.cpp/build/bin/llama-server --host /run/douglas-embed/embed.sock -m ${EMBED_MODEL} \
+    --embedding --device none -ngl 0 -t ${EMBED_THREADS} -tb ${EMBED_THREADS} -c 4096 -b 2048 -ub 2048 \
+    --parallel 2 --no-webui $EMBED_ARGS
+Nice=5
+CPUWeight=50
+MemoryMax=2G
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+InaccessiblePaths=/etc/douglas/voice.env /etc/douglas/memory.env -/var/lib/douglas -/var/lib/douglas-memory -/var/lib/douglas-work -/var/lib/douglas-spool
+ReadOnlyPaths=/srv/models
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
