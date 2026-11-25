@@ -15,6 +15,9 @@ read his memory is fixed before it is listed anywhere else.
 ## Waiting for the owner to say
 
 - **Pushing.** The commits from the pipeline's own user onwards are local.
+  The eight pictures in `docs/img/douglas*.png` were made from made-up data
+  on a workstation; two were looked at again after they came in, and the
+  other six should be before they are published.
 - **A message typed in ChatGPT itself.** ChatGPT's line was tried from the
   internet's side with a stand-in for ChatGPT's connector client. A
   conversation in ChatGPT takes the owner's account. If ChatGPT still shows
@@ -79,10 +82,17 @@ read his memory is fixed before it is listed anywhere else.
 - Open WebUI: a picture he draws is not shown there; his answer arrives in
   one piece; a message is one line of 2,000 characters at most; its separate
   conversations are one conversation to him.
-- Looking back through the conversation: one request reads at most 4 MB back
-  from the end of the record, so in a record years long the far past cannot
-  be reached, and the screen would call that "the beginning of the record".
-  It needs the agent to find its place in the file by time.
+- Looking back through the conversation (built: at the top of the log, or
+  on EARLIER, thirty older lines at a time): one request reads at most 4 MB
+  back from the end of the record, so in a record years long the far past
+  cannot be reached, and the screen would call that "the beginning of the
+  record". It needs the agent to find its place in the file by time. Lines
+  that were loaded are kept for as long as the page is open.
+- Seen while taking the README's pictures, and left as they are: on the
+  phone's MEMORY card the second row of filter chips runs past the card's
+  edge; the panel's conversation shows the time as "09:25 PM" where the rest
+  of the panel uses the 24-hour clock; under the box of something waiting
+  for a yes the conversation can begin in the middle of a bubble.
 
 ## Housekeeping
 

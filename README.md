@@ -119,6 +119,8 @@ pi/deck-ui/js/           the panel as ES modules — deck.js is now just wiring:
                                                  raised, for panel and phone
                            owner                 a yes to what is waiting for one, and
                                                  the switches for what he may use
+                           convo                 the conversation, and looking back
+                                                 through the record of it
 tools/screenshots.mjs    renders every surface at 2560x720 for the images above
                          (node + any installed Chrome + internet for map tiles;
                           `npm install playwright-core` first, `npm.cmd` on
@@ -300,7 +302,11 @@ the agent unreachable every meter reads "—" rather than an idle-looking 0.
 Under the meters, his services (how many are up, by name the ones that are
 not) and his disk. The middle column has three readings, picked at its head:
 the conversation, what he remembers, and what he did (see "A memory" below);
-correcting a memory opens the on-screen keyboard with its words in it.
+correcting a memory opens the on-screen keyboard with its words in it. The
+conversation goes back through the whole record: at the top of it, or on
+EARLIER, thirty older lines are fetched at a time and put above without the
+view moving, here and on the phone, and what ChatGPT said to him is marked
+CHATGPT, not YOU.
 Reachable from the strip or by tapping the DOUGLAS line under DECK's boot
 tiles.
 
