@@ -3614,7 +3614,7 @@ spec = [t for t in voice.TOOL_SPECS if t["function"]["name"] == "repo"][0]["func
 check("with a workshop he is offered the one tool, and do says what it is to do",
       (spec["parameters"]["required"], spec["parameters"]["properties"]["do"]["enum"]),
       (["do"], ["list", "clone", "update", "about", "files", "read", "find", "search", "history", "work",
-                "status", "changes", "stop", "push", "issues", "issue", "fix", "revise", "checks", "study"]))
+                "status", "changes", "stop", "push", "issues", "issue", "fix", "revise", "checks", "study", "gh"]))
 check("and his instructions say what it is for, and that nothing about code comes from memory",
       [w in voice.system_prompt() for w in ("clone one onto this machine", "it is pushed only if they say yes",
                                              "never describe code, a file or a change from memory",
@@ -4091,7 +4091,7 @@ check("what each thing he may ask is sent as: the repository of the conversation
 check("a thing that is not on the list is not sent anywhere",
       (voice.tool_repo(do="delete", repo="kettle"), len(SHOP["calls"])),
       ("Nothing was done: do has to be one of list, clone, update, about, files, read, find, search, history, "
-       "work, status, changes, stop, push, issues, issue, fix, revise, checks, study.", 16))
+       "work, status, changes, stop, push, issues, issue, fix, revise, checks, study, gh.", 16))
 voice.TURN.ctx = {"said": ["What does that page say?"], "lookups": 0,
                   "after": lambda job: SHOP.setdefault("started", []).append(job)}
 check("a job or a clone that he thinks of himself is not begun: what he has just read may be telling him to, "
@@ -4157,7 +4157,9 @@ for ROUTER["reply"] in ("CLONE jobcontextmcp", "clone: jobContextMCP.", "CLONE",
                         "STOP", "ABOUT", "FILE server.py.", "FILE", "FIND tone profile", "FIND", "NO", "No.",
                         "Maybe.", "", "</think>\n\nSTATUS", "DELETE everything", "PUSH.", "ISSUES.", "ISSUE 12",
                         "ISSUE #12.", "ISSUE login crash", "ISSUE", "FIX 12.", "FIX issue number 12",
-                        "FIX the v4 resume tool", "FIX", "REVISE.", "CHECKS", "STUDY."):
+                        "FIX the v4 resume tool", "FIX", "REVISE.", "CHECKS", "STUDY.", "PRS.", "PR 6.",
+                        "PR number #6", "PR", "GH pr merge 6.", "GH gh pr comment 6 --body \"Looks good.\"",
+                        "GH"):
     answers.append(voice.repo_wanted("Do the   thing with the code.", route_ask))
 check("what the answer to the question turns into: the call to make, or nothing",
       answers,
@@ -4168,7 +4170,10 @@ check("what the answer to the question turns into: the call to make, or nothing"
        {"do": "issue", "number": 12}, {"do": "issue", "number": 12}, {"do": "issue", "words": "login crash"},
        {"do": "issue"}, {"do": "fix", "number": 12}, {"do": "fix", "number": 12},
        {"do": "fix", "words": "the v4 resume tool"}, {"do": "fix"}, {"do": "revise"}, {"do": "checks"},
-       {"do": "study"}])
+       {"do": "study"}, {"do": "gh", "words": "pr list --state all --limit 15"},
+       {"do": "gh", "words": "pr view 6 --comments"}, {"do": "gh", "words": "pr view 6 --comments"},
+       {"do": "gh", "words": "pr list --state all --limit 15"}, {"do": "gh", "words": "pr merge 6"},
+       {"do": "gh", "words": "pr comment 6 --body \"Looks good\""}, None])
 check("the question is put as instructions, the message as the message: no tools, a line wanted, nothing left to chance",
       (len(PUT[0][0]), PUT[0][0][0] == {"role": "system", "content": voice.REPO_ASKED},
        PUT[0][0][1], PUT[0][1:]),

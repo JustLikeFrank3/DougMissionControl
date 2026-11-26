@@ -44,6 +44,14 @@ fi
 
 command -v git >/dev/null || { echo "git is not installed (apt install git)"; exit 1; }
 id douglas >/dev/null 2>&1 || { echo "there is no douglas user yet: run provision.sh first"; exit 1; }
+# gh, GitHub's own command line: what he reads a pull request with (any of
+# them, its diff, what was written on it). The manager runs it, with the
+# token from work.env, to read and for nothing else. Without it the rest
+# works as before, and he says that gh is not installed.
+if ! command -v gh >/dev/null; then
+    apt-get install -y gh >/dev/null 2>&1 \
+        || echo "gh could not be installed (apt install gh): he will not be able to read pull requests with it"
+fi
 # A job is fenced in by the kernel (Landlock 6 or later: Linux 6.12).
 python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None).syscall(444, None, 0, 1) >= 6 else 1)' \
     || { echo "this kernel cannot fence a job in (it needs Landlock 6, Linux 6.12 or later): not installed"; exit 1; }
