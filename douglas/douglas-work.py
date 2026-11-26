@@ -3329,6 +3329,8 @@ class Worker:
         self.look = s.get("kind") == "look"      # a job that only reads, and hands back a report
         # The requirements the job was handed, and what the worker has said
         # became of each: nothing, until it says.
+        self.msgs: list[dict] = []               # the conversation of the job, as it stands
+        self.short = ""                          # what it ran out of, if it did: "time" or "room"
         self.needs = [dict(n, state="", note="") for n in needs_of(s.get("needs"))]
         self.pressed = set()                     # which of the two reminders about them have been given
         self.room = 0                            # tokens the model server holds of one conversation
@@ -3563,7 +3565,14 @@ class Worker:
             return "Not done: this job only reads. Nothing is to be changed; report what you find."
         props = next(t[2] for t in WORK_TOOLS if t[0] == name)
         try:
-            return clip(fn(**{k: v for k, v in args.items() if k in props}), 9000)
+            got = str(fn(**{k: v for k, v in args.items() if k in props}))
+            # Nine thousand characters of one answer, or less where the model
+            # holds little: a tenth of what it may hold, and said to be cut.
+            ceiling = min(self.context, int(self.room * 0.7)) if self.room else self.context
+            most = max(2000, min(9000, ceiling * 4 // 10))
+            return got if len(got) <= most else (
+                got[:most].rsplit("\n", 1)[0] + f"\n[Cut here to fit: {len(got) - most:,} more characters. Ask for "
+                "less at a time (fewer lines, a narrower search) to see the rest.]")
         except OSError as e:
             return ("Not done: " + ("that path leads outside the repository." if e.errno in (18, 40)
                                     else f"{e.strerror or e}."))
@@ -3892,15 +3901,16 @@ class Worker:
         return ""
 
     @staticmethod
-    def lighten(msgs: list[dict]) -> int:
+    def lighten(msgs: list[dict], keep: int = 8) -> int:
         """Make room in a long job's conversation: what a tool answered long
         ago is cut down to its first lines and a note of what it was. The
-        last answers stay whole, and so does every word of the model's own.
-        How many were cut."""
+        last answers stay whole (`keep` of them: fewer where the model
+        holds little), and so does every word of the model's own. How many
+        were cut."""
         tools = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
         calls = {c.get("id"): c.get("function") or {} for m in msgs for c in m.get("tool_calls") or []}
         cut = 0
-        for i in tools[:-8]:
+        for i in tools[:-keep] if keep else tools:
             content = str(msgs[i].get("content") or "")
             if len(content) > 700 and not content.startswith(DROPPED):
                 f = calls.get(msgs[i].get("tool_call_id")) or {}
@@ -3959,6 +3969,7 @@ class Worker:
                        "or blocked.\n\n" if self.needs else "")
                     + f"You have {self.steps} steps.")}]
         quiet = 0
+        self.msgs = msgs                         # for the last word, if the job is cut short (see last_word)
         while self.step < self.steps:
             self.waited()
             began = time.time()
@@ -4034,16 +4045,88 @@ class Worker:
             # hold of one conversation if that is less: asked for more than it
             # holds, the server refuses, and the job would end there.
             ceiling = min(self.context, int(self.room * 0.7)) if self.room else self.context
-            if self.tokens > ceiling * 0.6 and self.lighten(msgs):
+            # A model that holds little (16,000 tokens a conversation, where
+            # the server's room is shared between two) is filled by eight
+            # whole answers alone: there, fewer of the last ones stay whole,
+            # and fewer still once it is over what it may hold.
+            keep = 8 if ceiling >= 30000 else 4
+            if self.tokens > ceiling * 0.6 and self.lighten(msgs, keep):
                 self.tokens = int(self.tokens * 0.6)     # until the next answer says how much it is now
+            if self.tokens > ceiling and self.lighten(msgs, 2):
+                self.tokens = int(self.tokens * 0.7)
             late = self.late()
             if self.spent > self.seconds * 1.15 or self.tokens > ceiling * 1.2:
+                self.short = "time" if self.spent > self.seconds * 1.15 else "room"
                 break
             wrap = LOOK_WRAP_UP if self.look else WRAP_UP
             if late and msgs[-1]["role"] in ("tool", "user") and wrap not in str(msgs[-1]["content"]):
                 msgs[-1] = dict(msgs[-1], content=str(msgs[-1]["content"]) + wrap)
             self.status("running", doing="thinking about the next step")
         raise Stopped
+
+    def last_word(self) -> None:
+        """A job cut short (out of steps, of time, of room) is asked once
+        more, with no tools: what it had found or done by then. Without
+        this a look that ran out handed back nothing at all, though it had
+        read for half an hour. The model is shown the job, and what it did
+        and was answered, the newest last and cut down to fit: its own words
+        whole, what the tools answered in a few lines each."""
+        if self.summary or len(self.msgs) < 3:
+            return
+        ceiling = min(self.context, int(self.room * 0.7)) if self.room else self.context
+        room = max(6000, min(40000, ceiling * 2))            # characters: about half of what it may hold
+        calls = {c.get("id"): c.get("function") or {} for m in self.msgs for c in m.get("tool_calls") or []}
+        rows, size = [], 0
+        for m in reversed(self.msgs[2:]):
+            if m.get("role") == "assistant":
+                row = THINK.sub("", str(m.get("content") or "")).strip()
+                row = "You said: " + clip(row, 1500) if row else ""
+            elif m.get("role") == "tool":
+                f = calls.get(m.get("tool_call_id")) or {}
+                row = (f"You called {f.get('name') or 'a tool'} "
+                       f"{clip(' '.join(str(f.get('arguments') or '').split()), 160)} and were answered:\n"
+                       + clip(str(m.get("content") or ""), 600))
+            else:
+                row = ""
+            if not row:
+                continue
+            if size + len(row) > room:
+                break
+            rows.append(row)
+            size += len(row)
+        if not rows:
+            return
+        asked = ("You have run out of " + ("steps" if self.step >= self.steps else self.short or "time or room")
+                 + " for this job, and it ends here. No more tools. "
+                 + ("Write your report now, from what you have read so far: what you found, with the files and "
+                    "functions, what you did not get to, and where you would look next. Say only what you have "
+                    "read." if self.look else
+                    "Write your summary now: what you changed and in which files, how far you checked it, and "
+                    "what is left undone."))
+        msgs = [self.msgs[0], {"role": "user", "content": (
+            clip(str(self.msgs[1].get("content") or ""), 6000)
+            + "\n\nWhat you did and were answered, the newest last, cut down to fit:\n\n"
+            + "\n\n".join(reversed(rows)) + "\n\n[" + asked + "]")}]
+        self.status("running", doing="writing up what it had found" if self.look else "writing up what it did")
+        try:
+            for _ in range(20):
+                self.waited()
+                try:
+                    reply = self.ask(msgs, True)
+                    break
+                except Held:
+                    continue
+            else:
+                return
+        except Exception as e:                   # noqa: BLE001 - no last word: the job ends as it would have
+            log(f"job {self.id}: no last word could be had: {type(e).__name__}")
+            return
+        said = THINK.sub("", str(reply.get("content") or "")).strip()
+        if said:
+            self.summary = clip(("(Cut short: " + ("it ran out of steps" if self.step >= self.steps else
+                                                   f"it ran out of {self.short or 'time or room'}")
+                                 + " before it was finished. What it had by then:) ") + said,
+                                REPORT_MAX if self.look else 1500)
 
     def keep(self) -> int:
         """Commit whatever was changed, and hand it over. How many commits."""
@@ -4089,7 +4172,17 @@ class Worker:
                 error = ("it was told to stop" if os.path.exists(os.path.join(self.spool, "cancel"))
                          else "it filled more of the disk than a job may, and what it made was "
                               "thrown away" if self.full
-                         else f"it ran out of {'steps' if self.step >= self.steps else 'time or room'}")
+                         else "it ran out of steps" if self.step >= self.steps
+                         else f"it ran out of time ({self.seconds // 60} minutes)" if self.short == "time"
+                         else "it ran out of room: the model on this machine holds "
+                              + (f"{self.room:,} tokens" if self.room else "only so much")
+                              + " of one conversation, and the job had read more than fits (this is the "
+                                "model's memory, not the disk)"
+                         if self.short == "room" else "it ran out of time or room")
+                # Cut short is not empty-handed: what it had found or done by
+                # then is asked for once more, in words, before it is over.
+                if not self.full and not os.path.exists(os.path.join(self.spool, "cancel")):
+                    self.last_word()
             except Exception as e:               # noqa: BLE001 - the model server gone, a tool that
                 # tripped: the job ends here, and what it had changed is kept.
                 state, error = "stopped", f"{type(e).__name__}: {clip(e, 300)}"

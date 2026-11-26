@@ -1700,9 +1700,31 @@ else:
                    for i in range(10)] + [says("", ("done", {"summary": "Read it."}))],
                   repo="jobContextMCP", task="Read all of long.txt and say what is in it.")
     told = [x["content"] for x in MODEL["seen"][-1]["messages"] if x["role"] == "tool"]
-    check("in a job that fills its room, the model is shown its old lookups cut down and its last ones whole",
-          (rec["state"], len(told), [t.startswith(work.DROPPED) for t in told]),
-          ("done", 10, [True] * 2 + [False] * 8))
+    check("in a job that fills its room, the model is shown its old lookups cut down and its last ones whole: "
+          "four of them where it holds little, and each answer cut to what fits, and said to be cut",
+          (rec["state"], len(told), [t.startswith(work.DROPPED) for t in told],
+           "[Cut here to fit:" in told[-1], len(told[-1]) < 2300),
+          ("done", 10, [True] * 6 + [False] * 4, True, True))
+    recs = run_job([dict(says("I see hello.py holds greet().", ("read", {"path": "hello.py"})), tokens=1500),
+                    dict(says("", ("read", {"path": "long.txt", "lines": 100})), tokens=3200),
+                    says("hello.py holds greet(), which builds the greeting. I did not get to the tests.")],
+                   repo="jobContextMCP", look=1, task="Trace how the greeting is built, through every file.")
+    last = MODEL["seen"][-1]
+    has("a look that runs out of room is asked once more, with no tools, for what it had found: it is shown the "
+        "question and what it did and was answered, cut down to fit",
+        last["messages"][1]["content"], "Trace how the greeting is built, through every file.",
+        "What you did and were answered, the newest last, cut down to fit:", "You said: I see hello.py holds greet().",
+        'You called read {"path": "hello.py"} and were answered:', "1: def greet(name):",
+        "You have run out of room for this job, and it ends here. No more tools. Write your report now")
+    check("so it does not end with nothing to say: what it had is its report, marked as cut short, and why it "
+          "stopped says that it is the model's memory that ran out and not the disk",
+          ("tools" in last, recs["state"], recs["summary"], recs["error"]),
+          (False, "stopped", "(Cut short: it ran out of room before it was finished. What it had by then:) hello.py "
+           "holds greet(), which builds the greeting. I did not get to the tests.",
+           "it ran out of room: the model on this machine holds only so much of one conversation, and the job had "
+           "read more than fits (this is the model's memory, not the disk)"))
+    has("and the report of it says so", ask(op="status", job=recs["id"])["text"],
+        "was stopped before it was finished", "What the worker found", "(Cut short: it ran out of room")
     work.CONTEXT_MAX = 48000
 
     print("== a question that takes reading through the code: a job that only reads, and reports")

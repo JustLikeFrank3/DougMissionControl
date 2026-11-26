@@ -1226,6 +1226,20 @@ handed over as somebody's text. `work-setup.sh` installs it (`apt install
 gh`); it uses the token in `work.env`, which for a private repository needs
 "Pull requests: Read-only" at least. A job still has no gh and no network.
 
+*Running out of room.* "Room" here is the model's memory of one
+conversation, not the disk: llama-server is started with `-c 32768
+--parallel 2`, which is 16,384 tokens for each of two conversations, and a
+job that reads file after file fills that in a few minutes on a large
+repository. A job now sizes itself to what the model holds: each answer of
+a tool is cut to a tenth of it and said to be cut, fewer of the last answers
+are kept whole, and older ones are cut down sooner. One that is still cut
+short (out of room, of time, of steps) is asked once more, with no tools,
+for what it had found or done by then, and that is its report, marked as cut
+short: a look no longer ends with "I have no report to give". Why it
+stopped says which it was, and that room means the model's memory. More
+room is a setting: a larger `-c` in `/etc/douglas/llama.env`, as far as the
+machine's memory allows, and `sudo systemctl restart llama-server`.
+
 *A gh that is too old.* Ubuntu 24.04's own gh (2.45) cannot print a pull
 request or an issue any more: it asks GitHub for a field that GitHub has
 taken away, and `gh pr view` answers "GraphQL: Projects (classic) is being
