@@ -55,7 +55,8 @@ State detection reuses exactly the probes the orchestrator already relies on
     icmp          -> the NIC has power, nothing more
 
 Requests from loopback (the kiosk browser) need no token. Requests from
-anywhere else need ?token= matching DECK_TOKEN in /etc/flightsim/boot.env,
+anywhere else need DECK_TOKEN from /etc/flightsim/boot.env, as ?token= or in
+an "Authorization: Bearer" header (which keeps it out of the address),
 same trust model as windows/boot-agent.ps1: fine behind a home router, not
 something to expose to the internet.
 """
@@ -2271,6 +2272,17 @@ class Handler(BaseHTTPRequestHandler):
     def _client(self) -> str:
         return self._proxied() or self.client_address[0]
 
+    def _token(self, query: dict) -> str:
+        """The token this request carries: ?token= where the address has
+        one, as a page in a browser sends it, and otherwise the one in an
+        "Authorization: Bearer" header, which is how an app sends it and
+        which no address bar, history or proxy log gets to keep."""
+        given = (query.get("token") or [""])[0]
+        if given:
+            return given
+        scheme, _, value = (self.headers.get("Authorization") or "").partition(" ")
+        return value.strip() if scheme.lower() == "bearer" else ""
+
     def _authorised(self, query: dict) -> bool:
         # The panel on this Pi needs no token: it is the only thing that
         # reaches this port from loopback of its own accord. A request a
@@ -2279,7 +2291,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         if not DECK_TOKEN:
             return False
-        return (query.get("token") or [""])[0] == DECK_TOKEN
+        return self._token(query) == DECK_TOKEN
 
     def _may_read(self, query: dict) -> bool:
         """For the one route that is a reading and nothing else: whoever may
@@ -2287,12 +2299,12 @@ class Handler(BaseHTTPRequestHandler):
         at here and nowhere else, so no other route can open to it."""
         if self._authorised(query):
             return True
-        given = (query.get("token") or [""])[0]
+        given = self._token(query)
         return bool(DECK_READ_TOKEN) and hmac.compare_digest(given.encode(), DECK_READ_TOKEN.encode())
 
     def _may_see(self, query: dict) -> bool:
         """Douglas's camera token, looked at here and nowhere else."""
-        given = (query.get("token") or [""])[0]
+        given = self._token(query)
         return bool(DECK_CAMERA_TOKEN) and hmac.compare_digest(given.encode(), DECK_CAMERA_TOKEN.encode())
 
     def _picture(self, role: str, body: dict) -> None:
