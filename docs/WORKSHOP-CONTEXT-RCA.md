@@ -105,25 +105,33 @@ Two things made it worse:
 
 In the voice pipeline (`douglas/douglas-voice.py`):
 
-- `job_brief`: a job whose words point back is made up before it starts. The
-  recommendations are looked for in the workshop's record of the last look
-  through that repository and in Douglas's replies in turns where the repo
-  tool was called, and nowhere else. They are listed as requirements, each
-  with what counts as done; a line not found in the source text is dropped
-  and said to be.
-- The list is read back and the job starts only on a yes, through the
-  existing hold (`HELD`, `job_made`), on the owner's own screens where a
-  typed yes does not count. A job Douglas thinks of himself is still refused.
-- Where nothing on record could be meant, no job starts and Douglas asks.
+- `job_brief`: a job whose words point back is written out by Douglas
+  himself before it starts. He is shown the conversation as he had it and
+  the last look's report from the workshop's record, and writes each change
+  by number with what counts as done, for a worker that was not there.
+- In the owner's own repository it starts at once, and the job as handed
+  over appears on the screens as it starts. A first version of this fix
+  listed the changes with a separate filter and asked for a yes every time;
+  that was more caution than the case needed and was taken out.
+- Turns in which the owner's records were read are not shown to him for
+  this, and a job Douglas thinks of himself is still refused.
+- Where he cannot tell what is meant, no job starts and he asks.
 - `before` now carries only the person's messages from turns about the
   repository. The whole message is the job, up to 2,000 characters.
 - `work_line`, the memory note and `job_shown` say what became of each
   requirement.
+- The conversation he keeps is no longer six exchanges with each lookup cut
+  to 300 characters. It is kept whole until it no longer fits the model's
+  window (`VOICE_HISTORY_CHARS`, 24,000 characters), and then the oldest
+  exchanges go.
 
 In the workshop (`douglas/douglas-work.py`):
 
 - `op_work` takes `needs` and `context`, cuts them to size and keeps them in
   the job's own record. `findings` returns the last look's report.
+- Where the repository is not the owner's own, `op_work` does not start
+  such a job: it reads the requirements back and starts on a yes to exactly
+  that list.
 - The worker is told where the work goes and that it makes no branch of its
   own, is handed the requirements and their source, must say of each whether
   it is done, outstanding or blocked, and is told to change nothing and say

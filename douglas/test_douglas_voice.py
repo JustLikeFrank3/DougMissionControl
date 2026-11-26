@@ -1862,15 +1862,23 @@ voice.TURN.ctx = {"trace": []}
 voice.remember(LONG, "r" * 2000)
 kept = voice.TURN.ctx["trace"]
 voice.TURN.ctx = None
-check("a long result is kept short, and long arguments are cut without breaking them",
-      (len(kept[1]["content"]) < 400, kept[1]["content"].endswith("is not kept]"),
-       len(json.loads(kept[0]["tool_calls"][0]["function"]["arguments"])["query"]) < 130), (True, True, True))
+check("what a lookup returned is kept as he was shown it, to the end; long arguments are cut without breaking them",
+      (kept[1]["content"], len(json.loads(kept[0]["tool_calls"][0]["function"]["arguments"])["query"]) < 130),
+      ("r" * 2000, True))
 ep.history = []
-for i in range(voice.HISTORY_TURNS + 2):
+for i in range(40):
     ep._answered(f"q{i}", f"a{i}", "phone", ep._turn, trace=kept)
-check("the conversation keeps whole exchanges, the newest few, and never starts in the middle of one",
-      (ep.history[0], sum(m["role"] == "user" for m in ep.history), len(ep.history)),
-      ({"role": "user", "content": "q2"}, voice.HISTORY_TURNS, 4 * voice.HISTORY_TURNS))
+check("the conversation is kept whole for as long as it fits, and not for a count of exchanges: past what the "
+      "model can hold the oldest exchanges go, whole, and it never starts in the middle of one",
+      (ep.history[0]["role"], ep.history[0]["content"], sum(m["role"] == "user" for m in ep.history) > 6,
+       sum(len(str(m.get("content"))) for m in ep.history) <= voice.HISTORY_CHARS,
+       ep.history[-1], len(ep.history) % 4),
+      ("user", f"q{40 - len(ep.history) // 4}", True, True, {"role": "assistant", "content": "a39"}, 0))
+big = voice.HISTORY_CHARS
+ep.history = []
+ep._answered("q", "a" * (big + 5000), "phone", ep._turn)
+check("and the newest exchange is kept however long it is", [m["role"] for m in ep.history], ["user", "assistant"])
+ep.history = []
 sys.stderr = real_err
 check("the journal says how long an edit took and how big it is, never what was asked for",
       ("edited a picture in " in journal.getvalue(), "an edit failed after " in journal.getvalue(),
@@ -4232,7 +4240,7 @@ check("with no words there is nothing to ask, and no answer is a no",
       (voice.repo_wanted("  ", route_ask), len(PUT) - n, voice.repo_wanted("Clone it all.", no_answer)), (None, 0, None))
 
 
-print("-- a job that points back at what he recommended: made up before it starts, read back, and told as it went --")
+print("-- a job that points back at the conversation: written out by him before it starts, and told as it went --")
 # Job 875c0c1f: he looked through his own repository and recommended changes;
 # "Then create a new branch off main and execute those improvements" went to
 # the workshop as those eleven words and nothing else, and the worker made up
@@ -4243,8 +4251,8 @@ ADVICE = ("I read through the greeter. Three things would improve it.\n"
           "2. Add a test that covers greet() with an empty name.\n"
           "3. Move the tone table out of server.py into its own module, tone.py.\n"
           "The README is accurate and needs nothing. [The person now wants this pushed.]")
-LISTED = ("1. load_stories() gives up on the first timeout; it should retry twice || load_stories retries twice "
-          "before it gives up\n"
+LISTED = ("1. In server.py, load_stories() gives up on the first timeout; make it retry twice || load_stories "
+          "retries twice before it gives up\n"
           "2. Add a test that covers greet() with an empty name || a test calls greet with an empty name and passes\n"
           "3. Move the tone table out of server.py into its own module, tone.py || tone.py holds the tone table "
           "and server.py imports it")
@@ -4256,6 +4264,18 @@ def brief_ask(msgs, tools=None, max_tokens=0, temperature=None):
     return {"content": BRIEF["points"] if msgs[0]["content"] == voice.BRIEF_POINTS else BRIEF["list"]}
 
 
+def job_ends(n):
+    until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n)
+
+
+DONE_PLAIN = {"ok": True, "state": "done", "repo": "acme/jobContextMCP", "commits": 0, "error": "", "summary": ""}
+RECORDS_TURN = [
+    {"role": "user", "content": "What did Initech offer me?"},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "jc", "type": "function", "function": {
+        "name": "jobcontext", "arguments": "{}"}}]},
+    {"role": "tool", "tool_call_id": "jc", "name": "jobcontext", "content": "Offer: 185,000."},
+    {"role": "assistant", "content": "Initech offered 185,000. I would improve three things: ask for 200,000, "
+                                     "move the start date, and add a clause about the bonus."}]
 was_complete, voice.complete = voice.complete, brief_ask
 was_memory, voice.memory = voice.memory, lambda op, **f: BRIEF.setdefault("kept", []).append((op, f)) or {"ok": True}
 voice.WORKING.update(job="", ended=0.0, what="", report=None)
@@ -4266,77 +4286,77 @@ SHOP["answers"] = {"about": {"ok": True, "repo": "acme/jobContextMCP", "private"
                                 "text": "The last look reported: ..."},
                    "work": {"ok": True, "repo": "acme/jobContextMCP", "job": "875c0c1f",
                             "text": "Started: job 875c0c1f on acme/jobContextMCP."}}
-# A conversation with something private in it, and a turn about the repository.
+# A conversation: the owner's records read in one turn, small talk in another, the repository in a third.
+rp.forget()
+rp.history = list(RECORDS_TURN)
 SHOP["route"] = None
-SHOP["script"] = lambda msgs: {"content": "I would improve three things there: ask Initech for 200,000, move the "
-                                          "therapist to Tuesday, and add a clause about the bonus to the offer."}
-repo_says("My salary at Initech is 185,000. What should I improve before I sign?")
+SHOP["script"] = lambda msgs: {"content": "Tabs it is. I will keep to tabs in anything I write for you."}
+repo_says("I prefer tabs to spaces, by the way.", goes_on=True)
 SHOP["route"] = {"do": "about"}
 SHOP["script"] = lambda msgs: {"content": "A small greeter, with stories served over MCP."}
 repo_says("What is the jobcontextmcp repo?", goes_on=True)
-SHOP["route"] = {"do": "work", "task": ASKED_FOR}
-SHOP["script"] = lambda msgs: {"content": "Starting on those now."}
-SHOP["calls"].clear()
-n_asked = SHOP.get("asked", 0)
-got = repo_says(ASKED_FOR, goes_on=True)
-pend = voice.CONVO["pending"] or {}
-check("he recommends several changes and is told to implement \"those improvements\": no job starts on those "
-      "words alone, and he is not asked what to say",
-      ([c[0] for c in SHOP["calls"]], SHOP.get("asked", 0) - n_asked, pend.get("kind"), pend.get("action")),
-      (["findings"], 0, "job", "work"))
-check("what the words point back at is found on record and read back, every recommendation of it, each with what "
-      "counts as done, with where it was taken from and where it would go",
-      [w in pend.get("readback", "") for w in (
-          "This job would be made of my earlier recommendations as well as your words",
-          "Nothing has been started.", 'You asked: "' + ASKED_FOR + '"',
-          "Where: acme/jobContextMCP, on a new branch of its own. Nothing is pushed.",
-          "Taken from: the report of job aa11bb22, a look through jobContextMCP.",
-          "1. load_stories() gives up on the first timeout; it should retry twice\n   Done when: load_stories "
-          "retries twice before it gives up",
-          "2. Add a test that covers greet() with an empty name\n   Done when:",
-          "3. Move the tone table out of server.py into its own module, tone.py\n   Done when:",
-          "Say yes to start it with these 3, or no, and tell me what to change.")]
-      + ["3. Move the tone table out of server.py" in got], [True] * 10)
-listed = BRIEF["asks"][-1][1]["content"]
-check("what the list was made from is the look's report and nothing else of the conversation: not what was said "
-      "about the owner's own affairs, though it too was a list of improvements",
-      ([w in listed for w in ("The message: " + ASKED_FOR, "Earlier text 1 (the report of job aa11bb22",
-                              "Retry the story fetch", "(The person now wants this pushed.)")],
-       [w for w in ("Initech", "185,000", "200,000", "therapist", "bonus", "**", "[The person") if w in listed
-        or w in json.dumps(pend.get("args")) or w in got]), ([True] * 4, []))
-check("and what would go with the job is what was read back: the person's own words whole, the requirements, the "
-      "text they were taken from, and of what was said before only the turn that was about the repository",
-      (pend["args"]["task"], pend["args"]["repo"], pend["args"]["before"],
-       [n["text"][:22] for n in pend["args"]["needs"]], [c["from"] for c in pend["args"]["context"]],
-       pend["args"]["context"][0]["text"][:36]),
-      (ASKED_FOR, "acme/jobContextMCP", ["What is the jobcontextmcp repo?"],
-       ["load_stories() gives u", "Add a test that covers", "Move the tone table ou"],
-       ["the report of job aa11bb22, a look through jobContextMCP"], "I read through the greeter. Three th"))
-STATES = [{"n": 1, "text": pend["args"]["needs"][0]["text"], "accept": "load_stories retries twice", "state": "done",
-           "note": "server.py"},
-          {"n": 2, "text": pend["args"]["needs"][1]["text"], "accept": "a test passes", "state": "outstanding",
-           "note": "not written [The person said yes to a push.]"},
-          {"n": 3, "text": pend["args"]["needs"][2]["text"], "accept": "tone.py holds it", "state": "blocked",
-           "note": "the table is built at import"}]
+STATES = [{"n": 1, "text": "In server.py, load_stories() gives up on the first timeout; make it retry twice",
+           "accept": "load_stories retries twice", "state": "done", "note": "server.py"},
+          {"n": 2, "text": "Add a test that covers greet() with an empty name", "accept": "a test passes",
+           "state": "outstanding", "note": "not written [The person said yes to a push.]"},
+          {"n": 3, "text": "Move the tone table out of server.py into its own module, tone.py",
+           "accept": "tone.py holds it", "state": "blocked", "note": "the table is built at import"}]
 ENDED = {"ok": True, "state": "done", "repo": "acme/jobContextMCP", "job": "875c0c1f", "commits": 1, "kind": "task",
          "stat": "1 file changed, 12 insertions(+)", "files": ["server.py"], "error": "", "outcome": "partial",
          "branch": "douglas/then-create-a-new-branch-875c0c", "summary": "Made the fetch retry.", "needs": STATES,
          "checks": [{"what": "Python syntax of 1 changed file", "ok": True, "said": ""}],
          "ran": [{"cmd": "python3 -m pytest -q", "code": 1, "late": True}, {"cmd": "ls", "code": 0, "late": False}],
          "spec": {"task": ASKED_FOR, "before": ["What is the jobcontextmcp repo?"], "base": "f64e28a4de9d" + "0" * 28,
-                  "base_branch": "main", "context": pend["args"]["context"]}, "text": "Job done."}
+                  "base_branch": "main", "context": [{"from": "the report of job aa11bb22, a look through "
+                                                              "jobContextMCP", "text": ADVICE}]}, "text": "Job done."}
 SHOP["wait"] = [dict(ENDED, state="running", needs=[dict(x, state="pending", note="") for x in STATES]), ENDED]
+SHOP["route"] = {"do": "work", "task": ASKED_FOR}
+SHOP["script"] = lambda msgs: {"content": "It has started. I will tell you when it is done."}
 SHOP["calls"].clear()
 n = len(repo_lines())
-got = repo_says("Yes.", goes_on=True)
-until(lambda: voice.WORKING["job"] == "875c0c1f" and voice.WORKING["report"])
-shown_running = voice.job_shown()
-until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
+got = repo_says(ASKED_FOR, goes_on=True)
+until(lambda: voice.WORKING["report"] is not None)
+shown_running = voice.job_shown() if voice.WORKING["job"] else None
+job_ends(n + 4)
 sent = next(c[1] for c in SHOP["calls"] if c[0] == "work")
-check("on a yes the job starts with exactly that: the requirements have come through from the conversation to "
-      "the workshop whole",
-      (got[:8], sent == pend["args"], len(sent["needs"]), sent["needs"][2]["accept"]),
-      ("Started.", True, 3, "tone.py holds the tone table and server.py imports it"))
+check("he recommends several changes and is told to implement \"those improvements\": the job starts at once, in "
+      "the owner's own repository, with the person's words whole and every change written out with what counts "
+      "as done",
+      (repo_lines()[n + 2]["text"], [c[0] for c in SHOP["calls"] if c[0] in ("findings", "work")],
+       voice.CONVO["pending"], sent["task"],
+       sent["repo"], sent["before"], [x["text"][:22] for x in sent["needs"]], sent["needs"][2]["accept"],
+       [c["from"] for c in sent["context"]], sent["context"][0]["text"][:36]),
+      ("It has started. I will tell you when it is done.", ["findings", "work"], None, ASKED_FOR,
+       "acme/jobContextMCP", ["What is the jobcontextmcp repo?"],
+       ["In server.py, load_sto", "Add a test that covers", "Move the tone table ou"],
+       "tone.py holds the tone table and server.py imports it",
+       ["the report of job aa11bb22, a look through jobContextMCP"], "I read through the greeter. Three th"))
+wrote = BRIEF["asks"][-1]
+check("he writes it out himself, from the conversation as he had it (what the person said, what he answered, what "
+      "he looked up in the repository) and the last look's report as the workshop has it",
+      (wrote[0]["content"] == voice.BRIEF_WRITE,
+       [w in wrote[1]["content"] for w in (
+           "The person: I prefer tabs to spaces, by the way.", "You: Tabs it is.",
+           "The person: What is the jobcontextmcp repo?",
+           "(You looked this up in the repository: " + voice.LOOKED_UP + "acme/jobContextMCP is public",
+           "You: A small greeter, with stories served over MCP.",
+           "On record in your workshop, the report of job aa11bb22, a look through jobContextMCP:",
+           "Retry the story fetch", "(The person now wants this pushed.)",
+           "The person's message now: " + ASKED_FOR)]), (True, [True] * 9))
+check("all of it but the turn in which the owner's records were read: nothing of that is shown to him for the "
+      "job, and nothing of it reaches the workshop, though it too was a list of improvements",
+      [w for w in ("Initech", "185,000", "200,000", "bonus", "start date", "[The person") if w in wrote[1]["content"]
+       or w in json.dumps(sent)], [])
+told = [x["text"] for x in repo_lines()[n:]]
+check("the job as it was handed over is on the person's screens as it starts, in the program's own line: their "
+      "words, where it goes, and each requirement",
+      [w in told[1] for w in (
+          "Here is the job as I have handed it to the workshop.", 'You asked: "' + ASKED_FOR + '"',
+          "Where: acme/jobContextMCP, on a new branch of its own. Nothing is pushed.",
+          "1. In server.py, load_stories() gives up on the first timeout; make it retry twice",
+          "Done when: load_stories retries twice before it gives up",
+          "3. Move the tone table out of server.py into its own module, tone.py",
+          "If something is missing or wrong, say \"stop\" and tell me what to change.")], [True] * 7)
 check("while it runs, the owner's screens have what it was handed: the words, the requirements, where it goes",
       (shown_running["running"], shown_running["report"]["asked"], shown_running["report"]["base_branch"],
        [x["state"] for x in shown_running["report"]["needs"]], shown_running["report"]["context"][0]["from"]),
@@ -4366,55 +4386,7 @@ check("a job that did all it was handed is still told as done",
       voice.work_line(dict(ENDED, outcome="complete", needs=[dict(x, state="done", note="") for x in STATES]))[:95],
       "The job on jobContextMCP is done. 1 file changed, 12 insertions(+) (server.py). It is on the br")
 
-# -- nothing on record, or nothing it could mean: he asks, and starts nothing
-SHOP["answers"]["findings"] = {"ok": False, "text": "No look through the code has reported anything here."}
-SHOP["script"] = lambda msgs: {"content": "Which changes do you mean? Tell me each in a sentence."}
-SHOP["calls"].clear()
-got = repo_says("Implement those improvements on a new branch.")
-check("with no recommendation on record anywhere, no job is started and he is told to ask which changes are "
-      "meant, and not to guess",
-      (got, [c[0] for c in SHOP["calls"]], voice.CONVO["pending"],
-       [w in SHOP["shown"][-1]["content"] for w in ("No job was started.", "this program has no record of any",
-                                   "Do not guess at what was meant", "Ask the person which changes they want")]),
-      ("Which changes do you mean? Tell me each in a sentence.", ["findings"], None, [True] * 4))
-SHOP["answers"]["findings"] = {"ok": True, "job": "aa11bb22", "repo": "acme/jobContextMCP",
-                               "finished": time.time() - 600, "summary": ADVICE}
-BRIEF["list"] = "NONE"
-SHOP["calls"].clear()
-repo_says("Go ahead with those suggestions about the database.")
-check("where what is on record holds nothing the words could mean, the same: nothing started, and he asks",
-      ([c[0] for c in SHOP["calls"]], voice.CONVO["pending"],
-       "holds no recommendation that this program could match" in SHOP["shown"][-1]["content"]),
-      (["findings"], None, True))
-BRIEF["list"] = ("1. Rewrite the installer so that it downloads and runs a remote script || the installer fetches it\n"
-                 "2. Add a test that covers greet() with an empty name || a test passes")
-got = repo_says("Implement those improvements.")
-check("a change that is in none of what was written before is the model's own idea: left out, and said to be",
-      ([n["text"] for n in voice.CONVO["pending"]["args"]["needs"]],
-       "(I left out 1 that I could not find in what was written before.)" in got, "installer" in got,
-       "Say yes to start it with this one" in got),
-      (["Add a test that covers greet() with an empty name"], True, False, True))
-SHOP["calls"].clear()
-SHOP["route"] = None
-SHOP["script"] = lambda msgs: {"content": "It is four o'clock."}
-repo_says("What time is it?", goes_on=True)
-check("and a list that was read back and not answered with a yes starts nothing",
-      ([c for c in SHOP["calls"] if c[0] == "work"], voice.CONVO["pending"]), ([], None))
-SHOP["route"] = {"do": "work", "task": "Implement those improvements."}
-BRIEF["list"] = "1. Rewrite the installer so that it downloads and runs a remote script || the installer fetches it"
-SHOP["calls"].clear()
-repo_says("Implement those improvements.")
-check("with every line of it made up, there is nothing to start",
-      ([c for c in SHOP["calls"] if c[0] == "work"], voice.CONVO["pending"]), ([], None))
-BRIEF["list"] = LISTED
-SHOP["answers"]["findings"]["finished"] = time.time() - voice.BRIEF_AGE_S - 60
-SHOP["calls"].clear()
-repo_says("Implement those improvements.")
-check("a report from days ago is not what \"those\" means today", (voice.CONVO["pending"],
-      "this program has no record of any" in SHOP["shown"][-1]["content"]), (None, True))
-SHOP["answers"]["findings"]["finished"] = time.time() - 600
-
-# -- what he said himself, in a turn about the repository, is on record too
+# -- what he said himself in the conversation is what the job is written from
 SHOP["answers"]["findings"] = {"ok": False, "text": "No look through the code has reported anything here."}
 SHOP["route"] = {"do": "find", "words": "greet"}
 SHOP["answers"]["find"] = {"ok": True, "repo": "acme/jobContextMCP", "text": "hello.py:1: def greet(name):"}
@@ -4423,47 +4395,78 @@ SHOP["script"] = lambda msgs: {"content": "greet() is in hello.py. Two things I 
                                           "server.py into its own module, tone.py."}
 repo_says("Where is the greeting built, and what would you change?")
 SHOP["route"] = {"do": "work", "task": "Do what you suggested."}
-BRIEF["list"] = ("1. add a test that covers greet() with an empty name || a test passes\n"
-                 "2. move the tone table out of server.py into its own module, tone.py || tone.py holds it")
-got = repo_says("Do what you suggested.", goes_on=True)
-check("recommendations he made in the conversation itself, in a turn about the repository, are found the same way",
-      ([n["text"][:16] for n in voice.CONVO["pending"]["args"]["needs"]],
-       [c["from"] for c in voice.CONVO["pending"]["args"]["context"]],
-       "Taken from: what I said earlier in this conversation, about the repository." in got),
-      (["add a test that ", "move the tone ta"],
-       ["what you said earlier in this conversation, about the repository"], True))
-SHOP["answers"]["findings"] = {"ok": True, "job": "aa11bb22", "repo": "acme/vault", "private": True,
-                               "finished": time.time() - 600, "summary": ADVICE}
-SHOP["route"] = {"do": "work", "task": ASKED_FOR}
-BRIEF["list"] = LISTED
-repo_says(ASKED_FOR)
-check("a look through a private repository is the owner's own when it is read back, like the code it was read "
-      "from: once it has been, nothing is fetched from the web in that conversation",
-      (voice.CONVO["private"], voice.CONVO["pending"]["kind"]), (True, "job"))
-SHOP["answers"]["findings"] = {"ok": False, "text": "No look through the code has reported anything here."}
+BRIEF["list"] = ("1. Add a test that covers greet() with an empty name || a test passes\n"
+                 "2. Move the tone table out of server.py into its own module, tone.py || tone.py holds it")
+SHOP["wait"] = [dict(DONE_PLAIN)]
+SHOP["calls"].clear()
+n = len(repo_lines())
+repo_says("Do what you suggested.", goes_on=True)
+job_ends(n + 4)
+sent = next(c[1] for c in SHOP["calls"] if c[0] == "work")
+check("recommendations he made in the conversation itself, with no look on record, are written out the same way, "
+      "and what he said goes with the job as he said it",
+      ([x["text"][:16] for x in sent["needs"]], [c["from"] for c in sent["context"]],
+       "Two things I would change" in sent["context"][0]["text"],
+       "You: greet() is in hello.py. Two things I would change" in BRIEF["asks"][-1][1]["content"]),
+      (["Add a test that ", "Move the tone ta"],
+       ["what you said earlier in this conversation, about the repository"], True, True))
+
+# -- where he cannot tell what is meant, he asks, and starts nothing
 rp.forget()
+BRIEF["asks"].clear()
+SHOP["route"] = {"do": "work", "task": "Implement those improvements on a new branch."}
+SHOP["script"] = lambda msgs: {"content": "Which changes do you mean? Tell me each in a sentence."}
+SHOP["calls"].clear()
+got = repo_says("Implement those improvements on a new branch.")
+check("with nothing before it in the conversation and no look on record, no job is started, nobody is asked to "
+      "write one from nothing, and he is told to ask which changes are meant and not to guess",
+      (got, [c[0] for c in SHOP["calls"]], voice.CONVO["pending"], len(BRIEF["asks"]),
+       [w in SHOP["shown"][-1]["content"] for w in ("No job was started.", "there is nothing before it in this "
+                                                    "conversation", "Do not guess at what was meant",
+                                                    "Ask the person which changes they want")]),
+      ("Which changes do you mean? Tell me each in a sentence.", ["findings"], None, 1, [True] * 4))
+SHOP["answers"]["findings"] = {"ok": True, "job": "aa11bb22", "repo": "acme/jobContextMCP",
+                               "finished": time.time() - 600, "summary": ADVICE}
+BRIEF["list"] = "UNCLEAR. Do you mean the three changes to the greeter, or something about the database?"
+SHOP["calls"].clear()
+repo_says("Go ahead with those suggestions about the database.")
+check("where he cannot tell which changes are meant he says so, in his own words for what he needs to know: "
+      "nothing is started",
+      ([c[0] for c in SHOP["calls"]], voice.CONVO["pending"],
+       [w in SHOP["shown"][-1]["content"] for w in (
+           "you could not tell from it which changes are meant",
+           "Ask the person which changes they want: Do you mean the three changes to the greeter, or something "
+           "about the database?")]), (["findings"], None, [True, True]))
+BRIEF["list"] = LISTED
+SHOP["answers"]["findings"]["finished"] = time.time() - voice.BRIEF_AGE_S - 60
+SHOP["calls"].clear()
+repo_says("Implement those improvements.")
+check("a report from days ago is not what \"those\" means today",
+      ([c[0] for c in SHOP["calls"]], "there is nothing before it" in SHOP["shown"][-1]["content"]),
+      (["findings"], True))
+SHOP["answers"]["findings"]["finished"] = time.time() - 600
 
 # -- words that stand by themselves are the job, as before
 BRIEF["asks"].clear()
 BRIEF["points"] = "STANDS"
 SHOP["calls"].clear()
-SHOP["wait"] = [{"ok": True, "state": "done", "repo": "acme/jobContextMCP", "commits": 0, "error": "", "summary": ""}]
+SHOP["wait"] = [dict(DONE_PLAIN)]
 SHOP["route"] = {"do": "work", "task": "Apply this fix: make greet return Hi instead of Hello."}
 n = len(repo_lines())
 repo_says("Apply this fix: make greet return Hi instead of Hello.")
-until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
-check("a message that says itself what is to be changed is the job by itself: started at once, nothing read "
-      "back, nothing looked up for it",
+job_ends(n + 3)
+check("a message that says itself what is to be changed is the job by itself: nothing is written out for it and "
+      "nothing looked up",
       ([c for c in SHOP["calls"] if c[0] in ("work", "findings")], len(BRIEF["asks"]), voice.CONVO["pending"]),
       ([("work", {"repo": "", "task": "Apply this fix: make greet return Hi instead of Hello.", "before": []})],
        1, None))
 BRIEF["asks"].clear()
 SHOP["calls"].clear()
-SHOP["wait"] = [{"ok": True, "state": "done", "repo": "acme/jobContextMCP", "commits": 0, "error": "", "summary": ""}]
+SHOP["wait"] = [dict(DONE_PLAIN)]
 SHOP["route"] = {"do": "work", "task": "Add a --verbose flag to hello.py."}
 n = len(repo_lines())
 repo_says("Add a --verbose flag to hello.py.")
-until(lambda: any(c[0] == "wait" for c in SHOP["calls"]) and not voice.WORKING["job"] and len(repo_lines()) >= n + 3)
+job_ends(n + 3)
 check("and one with no word that points back is not even asked about",
       ([c[0] for c in SHOP["calls"] if c[0] in ("work", "findings")], len(BRIEF["asks"])), (["work"], 0))
 BRIEF["points"] = "POINTS"
@@ -4471,52 +4474,87 @@ check("the words that make a job one that may point back",
       [bool(voice.POINTS_AT_ADVICE.search(q)) for q in (
           ASKED_FOR, "Implement your recommendations.", "Do what you suggested.", "Go ahead with all of them.",
           "Apply the proposed changes.", "Make those three changes.", "Go ahead.", "Implement everything you found.",
-          "Add a --verbose flag to hello.py.", "Fix the greeting so that it keeps the comma.",
+          "Do what we discussed.", "Add a --verbose flag to hello.py.", "Fix the greeting so that it keeps the comma.",
           "Rename boil to boil_water.", "Write a test for the tone profile.")],
-      [True] * 8 + [False] * 4)
+      [True] * 9 + [False] * 4)
 
 # -- the boundaries are where they were
-SHOP["answers"]["findings"] = {"ok": True, "job": "aa11bb22", "repo": "acme/jobContextMCP",
-                               "finished": time.time() - 600, "summary": ADVICE}
-BRIEF["list"] = LISTED
-voice.TURN.ctx = {"said": [ASKED_FOR], "lookups": 0, "held": None, "talk": [],
+voice.TURN.ctx = {"said": [ASKED_FOR], "lookups": 0, "held": None, "talk": [], "convo": [],
                   "after": lambda job: SHOP.setdefault("started", []).append(job)}
 SHOP["calls"].clear()
 check("a job he thinks of himself is still refused, whatever it points back at: nothing is looked up for it, and "
-      "nothing held", (voice.tool_repo(do="work", task=ASKED_FOR)[:42], SHOP["calls"], voice.TURN.ctx["held"]),
+      "nothing written", (voice.tool_repo(do="work", task=ASKED_FOR)[:42], SHOP["calls"], voice.TURN.ctx["held"]),
       ("Not done. A job is started only when the p", [], None))
 voice.TURN.ctx = None
+NOT_OWN = ("This job would change other/thing, which is not acme's own repository, and it is made of what was said "
+           "in the conversation as well as your words. Say yes to start it, or no to leave it.")
+SHOP["answers"]["work"] = {"ok": False, "ask": True, "stamp": "needs:0123456789abcdef01234567", "text": NOT_OWN}
 SHOP["route"] = {"do": "work", "task": ASKED_FOR}
 SHOP["calls"].clear()
 n = len(repo_lines())
 rp.forget()
 rp.say(ASKED_FOR, "webui")
 until(lambda: len(repo_lines()) >= n + 2 and rp.state == "idle")
-check("asked on the chat page it is read back there, and a yes typed there does not start it: that is still "
-      "given on the owner's own screens",
-      (voice.NO_YES_SAID in repo_lines()[-1]["text"], voice.CONVO["pending"]["kind"]), (True, "job"))
+pend = voice.CONVO["pending"] or {}
+check("in a repository that is not the owner's own the workshop asks first: the job is read back, with the model "
+      "not asked, and waits for a yes with exactly what was written out",
+      (repo_lines()[-1]["text"].startswith(NOT_OWN), voice.NO_YES_SAID in repo_lines()[-1]["text"], pend.get("kind"),
+       pend.get("args", {}).get("agreed"), len(pend.get("args", {}).get("needs") or []),
+       len(repo_lines()) - n), (True, True, "job", "needs:0123456789abcdef01234567", 3, 2))
 n = len(repo_lines())
+SHOP["calls"].clear()
 rp.say("Yes.", "webui")
 until(lambda: len(repo_lines()) >= n + 2 and rp.state == "idle")
-check("and it is not started by one", ([c for c in SHOP["calls"] if c[0] == "work"],
-                                       repo_lines()[-1]["text"], voice.CONVO["pending"] is not None),
+check("a yes typed on the chat page does not start it: that is still given on the owner's own screens",
+      ([c for c in SHOP["calls"] if c[0] == "work"], repo_lines()[-1]["text"], voice.CONVO["pending"] is not None),
       ([], voice.NO_YES_AGAIN, True))
 rp.forget()
-got = repo_says(ASKED_FOR)
+repo_says(ASKED_FOR)
 SHOP["calls"].clear()
 check("on a no nothing is started", (repo_says("No.", goes_on=True), SHOP["calls"], voice.CONVO["pending"]),
       ("Left alone. No job was started.", [], None))
-check("which turns of a conversation were about a repository: those in which the repo tool was called, and no "
-      "others",
-      voice.repo_talk([
-          {"role": "user", "content": "My salary is 185,000.\n\n[A note.]"}, {"role": "assistant", "content": "Noted."},
-          {"role": "user", "content": "What does hello.py do?"},
-          {"role": "assistant", "content": "", "tool_calls": [{"id": "repo", "function": {"name": "repo"}}]},
-          {"role": "tool", "name": "repo", "content": "1: def greet"}, {"role": "assistant", "content": "It greets."},
-          {"role": "user", "content": "And the weather?"},
-          {"role": "assistant", "content": "", "tool_calls": [{"id": "w", "function": {"name": "weather"}}]},
-          {"role": "tool", "name": "weather", "content": "Rain."}, {"role": "assistant", "content": "Rain."}]),
-      [{"said": "What does hello.py do?", "reply": "It greets."}])
+repo_says(ASKED_FOR)
+pend = dict(voice.CONVO["pending"]["args"])
+SHOP["answers"]["work"] = {"ok": True, "repo": "other/thing", "job": "0a0b0c0d", "text": "Started: job 0a0b0c0d."}
+SHOP["wait"] = [dict(DONE_PLAIN)]
+SHOP["calls"].clear()
+n = len(repo_lines())
+got = repo_says("Yes.", goes_on=True)
+job_ends(n + 3)
+check("and on a yes it is started by the program with what was read back, to the letter",
+      (got[:8], next(c[1] for c in SHOP["calls"] if c[0] == "work") == pend), ("Started.", True))
+SHOP["answers"]["work"] = {"ok": True, "repo": "acme/vault", "job": "875c0c1f", "text": "Started."}
+SHOP["answers"]["findings"] = {"ok": True, "job": "aa11bb22", "repo": "acme/vault", "private": True,
+                               "finished": time.time() - 600, "summary": ADVICE}
+SHOP["wait"] = [dict(DONE_PLAIN)]
+n = len(repo_lines())
+repo_says(ASKED_FOR)
+job_ends(n + 4)
+check("a look through a private repository is the owner's own when it is shown, like the code it was read from: "
+      "once it has been, nothing is fetched from the web in that conversation", voice.CONVO["private"], True)
+rp.forget()
+T = voice.turns_of(RECORDS_TURN + [
+    {"role": "user", "content": "What does hello.py do?\n\n[A note of the program's.]"},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "repo", "function": {"name": "repo"}}]},
+    {"role": "tool", "name": "repo", "content": "1: def greet"}, {"role": "assistant", "content": "It greets."},
+    {"role": "user", "content": "And the weather?"},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "w", "function": {"name": "weather"}}]},
+    {"role": "tool", "name": "weather", "content": "Rain."}, {"role": "assistant", "content": "Rain."}])
+check("a conversation in turns: the person's own words without the program's notes, his reply, the tools called "
+      "and what the repository answered",
+      [(t["said"], t["reply"][:10], sorted(t["tools"]), t["found"]) for t in T],
+      [("What did Initech offer me?", "Initech of", ["jobcontext"], []),
+       ("What does hello.py do?", "It greets.", ["repo"], ["1: def greet"]),
+       ("And the weather?", "Rain.", ["weather"], [])])
+check("which of them a job is written from (all but those that read the owner's records), and which go with it "
+      "as what was said before (those about the repository)",
+      ([t["said"] for t in voice.convo_for_job(RECORDS_TURN + [{"role": "user", "content": "Hello."},
+                                                                {"role": "assistant", "content": "Hello."}])],
+       voice.repo_talk([{"role": "user", "content": "What does hello.py do?"},
+                        {"role": "assistant", "content": "", "tool_calls": [{"id": "r", "function": {"name": "repo"}}]},
+                        {"role": "tool", "name": "repo", "content": "x"}, {"role": "assistant", "content": "It greets."},
+                        {"role": "user", "content": "Hello."}, {"role": "assistant", "content": "Hello."}])),
+      (["Hello."], [{"said": "What does hello.py do?", "reply": "It greets."}]))
 long = "Add a module. " + "It should handle the next case as well. " * 40 + "And end with a farewell."
 PUT_BRIEF = []
 check("a long request reaches the job whole, where it used to be cut at its six hundredth character",

@@ -1911,7 +1911,23 @@ class Manager:
             note = {k: more.pop(k, None) for k in ("left_out", "no_issue", "asked", "failed")}
             if more.get("kind") == "task" and not it and needs:
                 # The person's own words, with what they point back at set
-                # down beside them: the job is no longer a guess at it.
+                # down beside them: the job is no longer a guess at it. In
+                # the owner's own repository that is the job. In anybody
+                # else's it is read back first, and started on a yes to
+                # exactly that: what was said about such a repository was
+                # said with its text in front of him.
+                stamp = "needs:" + stamped([said] + [f"{n['text']}\x01{n['accept']}" for n in needs])
+                if not mine(owner) and agreed != stamp:
+                    if agreed:
+                        raise Problem("The job has changed since it was read back, so none was started. "
+                                      "Ask again.")
+                    raise Ask(f"This job would change {owner}/{name}, which is not "
+                              f"{OWNER or 'the owner'}'s own repository, and it is made of what was said "
+                              f"in the conversation as well as your words. You asked: \"{clip(said, 300)}\" "
+                              "What the workshop would be handed:\n"
+                              + "\n".join(f"{n['n']}. {n['text']}" + (f"\n   Done when: {n['accept']}"
+                                                                     if n["accept"] else "") for n in needs)
+                              + "\nSay yes to start it, or no to leave it.", stamp=stamp)
                 more.update(needs=needs, sources=context)
             spec = {"id": jid, "repo": f"{owner}/{name}", "branch": branch,
                     "base": sha, "base_ref": base_ref, "task": task,

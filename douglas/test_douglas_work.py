@@ -1953,6 +1953,21 @@ else:
           (True, recq["id"], "acme/jobContextMCP", recq["summary"], "Trace how the greeting is built in hello.py."))
     has("and where no look has reported, there is nothing to take requirements from",
         ask(op="findings", repo="kettle")["text"], "No look through the code has reported anything here.")
+    was_owner, work.OWNER = work.OWNER, "somebody-else"
+    r = ask(op="work", repo="jobContextMCP", task=ASKED, needs=NEEDS[:2], context=CONTEXT)
+    has("in a repository that is not the owner's own, a job made of what was said in the conversation is not "
+        "started: it is read back first, requirement by requirement", f"{r['ok']} {r.get('ask')} " + r["text"],
+        "False True ", "This job would change acme/jobContextMCP, which is not somebody-else's own repository",
+        "1. Add a farewell.py module with a farewell(name) function", "Done when: tests/test_farewell.py asserts",
+        "Say yes to start it, or no to leave it.")
+    check("no job is under way for it, and a yes to one list is not a yes to another",
+          (list(m.jobs), ask(op="work", repo="jobContextMCP", task=ASKED, needs=NEEDS[:1], agreed=r["stamp"])["text"]),
+          ([], "The job has changed since it was read back, so none was started. Ask again."))
+    rec = run_job([says("", ("done", {"summary": "Nothing done.", "requirements": [
+        {"number": 1, "state": "blocked", "note": "x"}, {"number": 2, "state": "blocked", "note": "y"}]}))],
+        repo="jobContextMCP", task=ASKED, needs=NEEDS[:2], context=CONTEXT, agreed=r["stamp"])
+    check("with the yes to exactly that list it starts", (rec["state"], len(rec["needs"])), ("done", 2))
+    work.OWNER = was_owner
     srv.may = {12345}
     check("that record is behind the same door as the rest: a caller it does not know is told nothing",
           door(b'{"op": "findings", "repo": "jobContextMCP"}'),
