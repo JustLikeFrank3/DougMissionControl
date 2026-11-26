@@ -67,6 +67,8 @@ internal sealed class SimBridge : IDisposable
     private string _requestedDestination = "";
     private readonly List<RunwayFacilityRaw> _facilityRunways = [];
     private DateTime _nextFlightPlanPoll = DateTime.MinValue;
+    private static readonly TimeSpan FacilityRetryInterval = TimeSpan.FromSeconds(30);
+    private DateTime _facilityRetryAt = DateTime.MinValue;
 
     /// <summary>Raised on the pump thread each time a fresh state frame lands.</summary>
     public event Action<SimStateRaw, SimCapsRaw, SimGpsRaw, string,
@@ -367,11 +369,37 @@ internal sealed class SimBridge : IDisposable
         }
         if (plan.Destination.Length == 0 || plan.RunwayNumber == 0) return;
         _pendingFlightPlan = plan;
-        if (_requestedDestination == plan.Destination) return;
+        if (_requestedDestination == plan.Destination)
+        {
+            // Same airport as the runways already held, but the plan itself may
+            // have moved on since they arrived: MSFS rewrites the .PLN as the
+            // arrival runway and pattern are picked on the world map. Building
+            // only when the facility data lands froze the route at whatever
+            // the file said in that one instant - a runway chosen a moment
+            // later never matched, and NAV got no plan for the whole flight.
+            if (_facilityRunways.Count > 0) { ApplyVisualPattern(); return; }
+            // No runways at all after a fair wait means the request was lost
+            // (sim still loading, exception) - ask again instead of never.
+            if (DateTime.UtcNow < _facilityRetryAt) return;
+        }
         _requestedDestination = plan.Destination;
         _facilityRunways.Clear();
+        _facilityRetryAt = DateTime.UtcNow + FacilityRetryInterval;
         sender.RequestFacilityData(FacilityDefinition.Airport, Request.Facility,
             plan.Destination, "");
+    }
+
+    private void ApplyVisualPattern()
+    {
+        if (_pendingFlightPlan is null) return;
+        foreach (var runway in _facilityRunways)
+        {
+            var route = FlightPlan.BuildVisualPattern(_pendingFlightPlan, runway);
+            if (route.Count == 0) continue;
+            _flightPlan = route;
+            _flightPlanSource = "visual_pattern";
+            return;
+        }
     }
 
     private void OnFacilityData(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA data)
@@ -384,15 +412,8 @@ internal sealed class SimBridge : IDisposable
 
     private void OnFacilityDataEnd(SimConnect sender, SIMCONNECT_RECV_FACILITY_DATA_END data)
     {
-        if ((Request)data.RequestId != Request.Facility || _pendingFlightPlan is null) return;
-        foreach (var runway in _facilityRunways)
-        {
-            var route = FlightPlan.BuildVisualPattern(_pendingFlightPlan, runway);
-            if (route.Count == 0) continue;
-            _flightPlan = route;
-            _flightPlanSource = "visual_pattern";
-            return;
-        }
+        if ((Request)data.RequestId != Request.Facility) return;
+        ApplyVisualPattern();
     }
 
     private void DrainCommands(bool connected)
