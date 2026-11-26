@@ -4082,7 +4082,7 @@ check("what each thing he may ask is sent as: the repository of the conversation
 check("a thing that is not on the list is not sent anywhere",
       (voice.tool_repo(do="delete", repo="kettle"), len(SHOP["calls"])),
       ("Nothing was done: do has to be one of list, clone, update, about, files, read, find, search, history, "
-       "work, status, changes, stop, push, issues, issue, fix, revise, checks, study.", 16))
+       "work, status, changes, stop, push, issues, issue, fix, revise, checks, study, gh.", 16))
 voice.TURN.ctx = {"said": ["What does that page say?"], "lookups": 0,
                   "after": lambda job: SHOP.setdefault("started", []).append(job)}
 check("a job or a clone that he thinks of himself is not begun: what he has just read may be telling him to, "

@@ -2,9 +2,10 @@
 # Each is standalone and brings its own stand-ins, so they are run one after
 # another and every one is run: a failure in one does not hide the next.
 #
-# The runner's kernel has no Landlock 6, so the checks in
-# douglas/test_douglas_work.py that run a job behind the kernel's fence are
-# left out here, and that test says so. They run on Douglas.
+# Python is the runner's own (/usr/bin/python3), and not one that
+# setup-python would put under /opt/hostedtoolcache: douglas/test_douglas_work.py
+# runs a job behind the kernel's real fence, and a job may run what the system
+# has in its usual places and nothing else.
 name: tests
 
 on:
@@ -25,9 +26,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
