@@ -1,0 +1,49 @@
+{
+  "name": "doug-phone",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "expo": "~58.1.0",
+    "expo-asset": "~58.0.21",
+    "expo-audio": "~58.0.12",
+    "expo-camera": "~58.0.14",
+    "expo-constants": "~58.0.16",
+    "expo-crypto": "~58.0.9",
+    "expo-dev-client": "~58.0.22",
+    "expo-device": "~58.0.5",
+    "expo-file-system": "~58.0.15",
+    "expo-haptics": "~58.0.8",
+    "expo-image": "~58.0.19",
+    "expo-image-manipulator": "~58.0.16",
+    "expo-image-picker": "~58.0.10",
+    "expo-linking": "~58.0.17",
+    "expo-notifications": "~58.1.10",
+    "expo-secure-store": "~58.0.3",
+    "expo-share-intent": "^9.0.0",
+    "expo-status-bar": "~58.0.5",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1"
+  },
+  "devDependencies": {
+    "@types/jest": "30.0.0",
+    "@types/react": "~19.3.0",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.16",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "device": "expo run:ios --device",
+    "typecheck": "tsc --noEmit",
+    "test": "jest"
+  },
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "testMatch": [
+      "**/__tests__/**/*.test.ts"
+    ]
+  }
+}

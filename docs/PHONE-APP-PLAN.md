@@ -161,11 +161,23 @@ Each one ends with something usable on the phone.
 
 Phases 1 and 2 are worth installing before the rest is built.
 
-## Not decided yet
+## Decided since
 
-- Push notifications for a notice or an approval. The paid account allows
-  them; deck-api has nothing that sends one.
-- Whether the share sheet should send without opening the app. That needs a
-  share extension with its own screen and the token shared through an App
-  Group, which is more work than phase 5 as written.
-- Whether `ptt` (DougVoice listening) stays in the app.
+- **Push notifications: yes.** deck-api sends them itself, through Apple's
+  push service, with a key from the developer account
+  (`pi/push-setup.sh`): a new warning or critical notice, a change waiting
+  for a yes, a machine that has stopped answering. It signs with `openssl`
+  and sends with `curl`, so nothing is installed on the Pi and no Expo
+  service is involved. The routes are `/api/push`, `/api/push/register`,
+  `/api/push/forget` and `/api/push/test`.
+- **The share sheet opens the app.** The sheet there shows what was shared
+  and a note already filled in with "What can you tell me about this?", so
+  sending is one touch and the question can be changed first. No separate
+  share extension screen and no token in an App Group.
+- **`ptt` stays.** The app has two buttons: HOLD TO TALK through the phone,
+  and a smaller one that has DougVoice listen in the house.
+
+## Built
+
+`phone/` holds the app; `phone/README.md` has the build, install and push
+setup. All five phases are written.

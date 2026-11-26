@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "Doug",
+    "slug": "doug-mission-control",
+    "scheme": "dougdeck",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.dougmissioncontrol.phone",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "appleTeamId": "5CRJ9JLDUM"
+    },
+    "plugins": [
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-image",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Hold to talk records what you say and sends it to Douglas, at home."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The camera scans the link node1 prints, and takes photos to show Douglas.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "A photo you pick is shrunk and sent to Douglas, at home.",
+          "cameraPermission": "The camera scans the link node1 prints, and takes photos to show Douglas.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-notifications",
+      [
+        "expo-share-intent",
+        {
+          "iosShareExtensionName": "Ask Douglas",
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsText": true,
+            "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
+            "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
+            "NSExtensionActivationSupportsImageWithMaxCount": 1,
+            "NSExtensionActivationSupportsMovieWithMaxCount": 1,
+            "NSExtensionActivationSupportsFileWithMaxCount": 1
+          },
+          "disableAndroid": true
+        }
+      ],
+      "expo-asset"
+    ]
+  }
+}
