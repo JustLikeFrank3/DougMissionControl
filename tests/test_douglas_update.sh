@@ -79,4 +79,23 @@ for f in douglas-voice.py douglas-tts.py douglas-voice.service work-setup.sh set
 done
 grep -Eq 'provision\.sh"|llama\.cpp/build|pip install|apt-get' "$up" && fail "it reaches for the whole build"
 
+# work-setup.sh: which gh it takes for too old (Ubuntu 24.04's cannot print a pull request any more).
+setup="$repo_dir/douglas/work-setup.sh"
+bash -n "$setup" || fail "work-setup.sh does not parse"
+mkdir "$tmpdir/bin"
+old_or_not() {      # the version a stand-in gh says it is -> "old" or "new"
+    printf '#!/bin/sh\necho "%s"\n' "$1" > "$tmpdir/bin/gh"; chmod +x "$tmpdir/bin/gh"
+    ( PATH="$tmpdir/bin:$PATH"; eval "$(sed -n '/^GH_WANT=/p; /^gh_version()/p; /^gh_old()/p' "$setup")"
+      if gh_old; then echo old; else echo new; fi )
+}
+[ "$(old_or_not 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)')" = old ] || fail "Ubuntu's gh 2.45 was not taken for old"
+[ "$(old_or_not 'gh version 2.9.0 (2022-04-01)')" = old ] || fail "2.9 was read as newer than 2.70"
+[ "$(old_or_not 'gh version 2.83.1 (2026-10-01)')" = new ] || fail "a current gh was taken for old"
+[ "$(old_or_not 'something else entirely')" = old ] || fail "a gh that does not say its version was taken for current"
+rm "$tmpdir/bin/gh"
+for tool in sed dpkg; do ln -s "$(command -v "$tool")" "$tmpdir/bin/$tool"; done     # a PATH with those and no gh
+[ "$( ( PATH="$tmpdir/bin"; eval "$(sed -n '/^GH_WANT=/p; /^gh_version()/p; /^gh_old()/p' "$setup")"
+        if gh_old; then echo old; else echo new; fi ) )" = old ] || fail "no gh at all was not taken as one to install"
+grep -q 'cli.github.com/packages' "$setup" || fail "work-setup.sh no longer gets gh from GitHub's own source"
+
 echo "douglas update tests passed"

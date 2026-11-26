@@ -48,9 +48,39 @@ id douglas >/dev/null 2>&1 || { echo "there is no douglas user yet: run provisio
 # them, its diff, what was written on it). The manager runs it, with the
 # token from work.env, to read and for nothing else. Without it the rest
 # works as before, and he says that gh is not installed.
-if ! command -v gh >/dev/null; then
-    apt-get install -y gh >/dev/null 2>&1 \
-        || echo "gh could not be installed (apt install gh): he will not be able to read pull requests with it"
+#
+# From GitHub's own package source, not Ubuntu's: 24.04 ships gh 2.45, which
+# cannot print a pull request or an issue any more. It asks GitHub for a
+# field GitHub has taken away, and "gh pr view" answers "Projects (classic)
+# is being deprecated" and nothing else. Any gh older than GH_WANT is
+# replaced; the number is a floor well past that fault, not the release that
+# fixed it. If GitHub's source cannot be reached, what apt has is kept or
+# installed, and the manager reads a pull request field by field instead.
+GH_WANT=2.70.0
+gh_version() { { gh --version 2>/dev/null || true; } | sed -n '1s/^gh version \([0-9][0-9.]*\).*/\1/p'; }
+gh_old() { local v; v="$(gh_version)"; [ -z "$v" ] || dpkg --compare-versions "$v" lt "$GH_WANT"; }
+if gh_old; then
+    was="$(gh_version)"
+    key=/etc/apt/keyrings/githubcli-archive-keyring.gpg
+    list=/etc/apt/sources.list.d/github-cli.list
+    if install -d -m 755 /etc/apt/keyrings \
+        && curl -fsSL -m 60 https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$key.part" \
+        && [ -s "$key.part" ] && mv "$key.part" "$key" && chmod 644 "$key" \
+        && echo "deb [arch=$(dpkg --print-architecture) signed-by=$key] https://cli.github.com/packages stable main" > "$list" \
+        && apt-get update -o Dir::Etc::sourcelist="$list" -o Dir::Etc::sourceparts=- \
+               -o APT::Get::List-Cleanup=0 >/dev/null 2>&1 \
+        && apt-get install -y gh >/dev/null 2>&1 && ! gh_old; then
+        echo "gh ${was:-was not installed}: $(gh_version) is installed now, from GitHub's own package source"
+    else
+        rm -f "$key.part"
+        command -v gh >/dev/null || apt-get install -y gh >/dev/null 2>&1 || true
+        if command -v gh >/dev/null; then
+            echo "gh could not be brought up to date from cli.github.com: $(gh_version) stays. It is too old to"
+            echo "print a pull request whole, so he reads one field by field. Run this again when the network allows."
+        else
+            echo "gh could not be installed: he will not be able to read pull requests with it"
+        fi
+    fi
 fi
 # A job is fenced in by the kernel (Landlock 6 or later: Linux 6.12).
 python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None).syscall(444, None, 0, 1) >= 6 else 1)' \

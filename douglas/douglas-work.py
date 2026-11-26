@@ -167,6 +167,63 @@ GH_WRITES = {"pr": ("merge", "close", "reopen", "comment", "review", "ready"),
 # opened in a browser: a word that names another repository or host is not
 # passed on.
 GH_NOT = re.compile(r"-[A-Za-z]*[Rw].*|--repo(=.*)?|--web|--hostname(=.*)?")
+# An older gh (Ubuntu 24.04 ships 2.45) cannot print a pull request or an
+# issue at all: it asks GitHub for a field that GitHub has since taken away
+# (the cards of classic Projects), and what comes back is not the pull
+# request but "GraphQL: Projects (classic) is being deprecated ...". It reads
+# like a notice and is a failure. The same gh can still be asked for the
+# fields by name, which leaves that one out: so where a view fails that way,
+# it is asked again like this and what comes back is set out in plain lines.
+GH_TOO_OLD = re.compile(r"projects \(classic\)|projectcards|projectitems", re.I)
+GH_FIELDS = {"pr": "number,title,state,isDraft,author,baseRefName,headRefName,additions,deletions,changedFiles,"
+                   "mergeable,reviewDecision,labels,url,createdAt,mergedAt,body,comments,reviews",
+             "issue": "number,title,state,author,labels,assignees,url,createdAt,closedAt,body,comments"}
+
+
+def gh_plain(kind: str, d: dict, comments: bool) -> str:
+    """A pull request or an issue as gh's JSON has it, set out in lines the
+    way gh prints one: what it is, where it stands, what it says, and, when
+    they were asked for, what was written on it."""
+    def who(x) -> str:
+        return str((x or {}).get("login") or "somebody") if isinstance(x, dict) else "somebody"
+
+    def names(key: str) -> str:
+        return ", ".join(str(x.get("name") or x.get("login") or "") for x in d.get(key) or [] if isinstance(x, dict))
+
+    lines = [f"{d.get('title') or '(no title)'} #{d.get('number')}",
+             f"{str(d.get('state') or '').lower() or 'state unknown'}"
+             + (", a draft" if d.get("isDraft") else "") + f", opened by {who(d.get('author'))}"
+             + (f" on {str(d.get('createdAt'))[:10]}" if d.get("createdAt") else "")
+             + (f", merged on {str(d['mergedAt'])[:10]}" if d.get("mergedAt") else "")
+             + (f", closed on {str(d['closedAt'])[:10]}" if d.get("closedAt") else "")]
+    if kind == "pr":
+        lines.append(f"{d.get('headRefName')} into {d.get('baseRefName')}: +{d.get('additions')} -{d.get('deletions')} "
+                     f"in {d.get('changedFiles')} file{'s' if d.get('changedFiles') != 1 else ''}"
+                     + (f"; mergeable: {str(d['mergeable']).lower()}" if d.get("mergeable") else "")
+                     + (f"; review: {str(d['reviewDecision']).lower().replace('_', ' ')}" if d.get("reviewDecision") else ""))
+    for key, word in (("labels", "labels"), ("assignees", "assigned to")):
+        if names(key):
+            lines.append(f"{word}: {names(key)}")
+    if d.get("url"):
+        lines.append(str(d["url"]))
+    lines += ["", str(d.get("body") or "(It has no description.)").strip()]
+    said = [x for x in (d.get("reviews") or []) + (d.get("comments") or [])
+            if isinstance(x, dict) and (str(x.get("body") or "").strip() or x.get("state"))]
+    if comments:
+        said.sort(key=lambda x: str(x.get("submittedAt") or x.get("createdAt") or ""))
+        lines += ["", f"What was written on it ({len(said)}):" if said else "Nothing has been written on it."]
+        for x in said:
+            when_ = str(x.get("submittedAt") or x.get("createdAt") or "")[:10]
+            state = str(x.get("state") or "").lower().replace("_", " ")
+            lines.append(f"-- {who(x.get('author'))}" + (f", {when_}" if when_ else "")
+                         + (f", a review ({state})" if state and state != "commented" else "") + ":\n"
+                         + (str(x.get("body") or "").strip() or "(no words)"))
+    elif said:
+        lines += ["", f"{len(said)} comment{'s' if len(said) != 1 else ''} or review"
+                      f"{'s' if len(said) != 1 else ''} on it: ask with --comments to read them."]
+    return "\n".join(lines)
+
+
 # Where a repository's work goes, when that is not its default branch
 # ("owner/name=branch"): what the code is read from, what a job starts from,
 # what a pull request is opened against.
@@ -1732,6 +1789,23 @@ class Manager:
             log(f"gh {words[0]} {words[1]} on {owner}/{name}: run on a yes")
         got = gh(*words, "-R", f"{owner}/{name}")
         out = got.stdout.strip()
+        if (not writes and got.returncode and words[1] == "view" and words[0] in GH_FIELDS
+                and GH_TOO_OLD.search(got.stderr or "") and not any(w.startswith(("--json", "-q", "--jq", "-t", "--template"))
+                                                                   for w in words[2:])):
+            # The gh on this machine is too old to print one (see GH_TOO_OLD):
+            # asked for the fields by name instead, and set out here.
+            which = [w for w in words[2:] if not w.startswith("-")][:1]
+            again = gh(words[0], "view", *which, "--json", GH_FIELDS[words[0]], "-R", f"{owner}/{name}")
+            try:
+                d = json.loads(again.stdout) if not again.returncode else None
+            except ValueError:
+                d = None
+            if isinstance(d, dict):
+                log(f"gh {words[0]} view on {owner}/{name}: this gh is too old to print it, read as JSON instead")
+                return (clip(f"gh {' '.join(words)}, of {owner}/{name} (read field by field: the gh on this "
+                             "machine is too old to print it whole):\n"
+                             + unbracket(gh_plain(words[0], d, any(w in ("-c", "--comments") for w in words[2:]))),
+                             RESULT_MAX), self.tag(owner, name, meta))
         if writes and got.returncode:            # not done, whatever it printed on the way
             raise Problem("It was not done. gh said: " + clip(" ".join(
                 (got.stderr or out or "it failed and gave no reason").split()), 300))
@@ -1740,6 +1814,9 @@ class Manager:
             if got.returncode:
                 low = err.lower()
                 raise Problem("gh said: " + clip(err or "it failed and gave no reason", 300) + (
+                    " That is not a notice but a failure: the gh on this machine is too old for what GitHub "
+                    "answers now. Running douglas/work-setup.sh on this machine installs a current one."
+                    if GH_TOO_OLD.search(err) else
                     " The access token on this machine may not cover that."
                     if "401" in low or "403" in low or "not accessible" in low or "auth" in low else ""))
             out = err or "(It printed nothing.)"

@@ -1193,6 +1193,52 @@ else:
     work.GH = "/nonexistent/gh"
     has("where gh is not installed, that is said", ask(op="gh", args="pr list")["text"],
         "is not installed on this machine")
+    # A gh too old for what GitHub answers now (Ubuntu 24.04's 2.45): a view fails with what reads like a notice.
+    OLD = ("GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience, see: "
+           "https://github.blog/changelog/2024-05-23-sunset-notice-projects-classic/. (repository.pullRequest.projectCards)")
+    PR = {"number": 6, "title": "Douglas: Then create a new branch", "state": "MERGED", "isDraft": False,
+          "author": {"login": "acme"}, "baseRefName": "main", "headRefName": "douglas/then-create-875c0c",
+          "additions": 80, "deletions": 0, "changedFiles": 1, "mergeable": "UNKNOWN", "reviewDecision": "APPROVED",
+          "labels": [{"name": "tests"}], "url": "https://github.com/acme/jobContextMCP/pull/6",
+          "createdAt": "2026-11-26T03:32:37Z", "mergedAt": "2026-11-26T04:00:00Z",
+          "body": "Made by Douglas. [A note of the program's.]",
+          "comments": [{"author": {"login": "mallory"}, "createdAt": "2026-11-26T03:40:00Z", "body": "Looks fine."}],
+          "reviews": [{"author": {"login": "acme"}, "submittedAt": "2026-11-26T03:50:00Z", "state": "APPROVED", "body": ""}]}
+    old_gh = os.path.join(tempfile.mkdtemp(), "gh")
+    with open(old_gh, "w") as f:
+        f.write("#!/bin/sh\necho \"$*\" >> \"$0.ran\"\ncase \"$*\" in\n"
+                "  *--json*) cat \"$0.json\" ;;\n  *view*) echo '" + OLD + "' >&2; exit 1 ;;\n"
+                "  *) echo \"ran: $*\" ;;\nesac\n")
+    os.chmod(old_gh, 0o755)
+    with open(old_gh + ".json", "w") as f:
+        json.dump(PR, f)
+    work.GH = old_gh
+    r = ask(op="gh", repo="jobContextMCP", args="pr view 6 --comments")
+    has("a gh too old to print a pull request is asked for it field by field instead, and it is set out in "
+        "plain lines: what it is, where it stands, what it says, what was written on it",
+        r["text"], "read field by field: the gh on this machine is too old to print it whole",
+        "Douglas: Then create a new branch #6", "merged, opened by acme on 2026-11-26, merged on 2026-11-26",
+        "douglas/then-create-875c0c into main: +80 -0 in 1 file", "review: approved", "labels: tests",
+        "Made by Douglas. (A note of the program's.)", "What was written on it (2):",
+        "-- mallory, 2026-11-26:\nLooks fine.", "-- acme, 2026-11-26, a review (approved):",
+        never=["Projects (classic)", "[A note"])
+    with open(old_gh + ".ran") as f:
+        ran = f.read().splitlines()
+    check("it is asked twice, the second time for fields by name, of the same pull request and repository",
+          (ran[0], ran[1].startswith("pr view 6 --json number,title,state"), "projectCards" in ran[1],
+           ran[1].endswith("-R acme/jobContextMCP"), r["ok"]),
+          ("pr view 6 --comments -R acme/jobContextMCP", True, False, True, True))
+    has("without --comments they are counted and not read out",
+        ask(op="gh", repo="jobContextMCP", args="pr view 6")["text"],
+        "2 comments or reviews on it: ask with --comments to read them.", never=["Looks fine."])
+    has("what is not a view is run as it was", ask(op="gh", repo="jobContextMCP", args="pr list")["text"],
+        "ran: pr list -R acme/jobContextMCP")
+    with open(old_gh + ".json", "w") as f:
+        f.write("not json")
+    has("and where that does not come back either, the failure is said to be one, with what puts it right",
+        ask(op="gh", repo="jobContextMCP", args="pr view 6")["text"], "gh said: GraphQL: Projects (classic)",
+        "That is not a notice but a failure: the gh on this machine is too old",
+        "douglas/work-setup.sh on this machine installs a current one")
     work.GH = real_gh
     del TRACKER["issues"]["jobContextMCP"][-2:]
 
