@@ -385,7 +385,7 @@ TTS_PORT=10210
 #TTS_VOICE=
 TTS_FALLBACK_PORT=10200
 LLM_URL=http://127.0.0.1:8081
-LLM_MAX_TOKENS=400
+LLM_MAX_TOKENS=1500
 # Lookups (weather, news, Wikipedia, reading a web page) are on. Each one
 # sends its own words to a public service; DOUGLAS_TOOLS=0 turns them off.
 #DOUGLAS_TOOLS=0
@@ -430,7 +430,7 @@ LLM_MAX_TOKENS=400
 #DOUGLAS_SYSTEM_PROMPT=You are Douglas, ...
 VOICE_MAX_LISTEN_S=20
 VOICE_HISTORY_CHARS=24000
-VOICE_HISTORY_IDLE_S=300
+VOICE_HISTORY_IDLE_S=3600
 VOICE_STATE_FILE=/run/douglas/voice.json
 TRANSCRIPT_FILE=/var/lib/douglas/transcript.jsonl
 CONF

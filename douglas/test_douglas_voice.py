@@ -4560,6 +4560,32 @@ PUT_BRIEF = []
 check("a long request reaches the job whole, where it used to be cut at its six hundredth character",
       (voice.repo_wanted(long, lambda m, *a: PUT_BRIEF.append(len(m[1]["content"])) or {"content": "WORK"})
        == {"do": "work", "task": long}, len(long) > 1600, PUT_BRIEF[0] < 640), (True, True, True))
+# -- a job keeps the conversation it was asked in, however long it takes
+SHOP["answers"] = {"work": {"ok": True, "repo": "acme/jobContextMCP", "job": "875c0c1f", "text": "Started."}}
+SHOP["route"] = {"do": "work", "task": "Add a --verbose flag to hello.py."}
+SHOP["script"] = lambda msgs: {"content": "Started."}
+SHOP["wait"] = [dict(DONE_PLAIN)]
+n = len(repo_lines())
+repo_says("Add a --verbose flag to hello.py.")
+rp.last_exchange = time.time() - voice.HISTORY_IDLE_S - 60       # as if it had run for longer than the quiet allowed
+job_ends(n + 3)
+SHOP["route"] = None
+SHOP["script"] = lambda msgs: {"content": "It added the flag."}
+repo_says("What did it do?", goes_on=True)
+check("a job that ran for longer than a conversation is kept does not come back to one that has been forgotten: "
+      "its end is part of the conversation, which goes on from there",
+      (any("Add a --verbose flag to hello.py." in str(m.get("content")) for m in SHOP["shown"]),
+       time.time() - rp.last_exchange < 30, voice.HISTORY_IDLE_S, voice.LLM_MAX_TOKENS), (True, True, 3600.0, 1500))
+voice.WORKING["job"] = "875c0c1f"
+rp.last_exchange = time.time() - voice.HISTORY_IDLE_S - 60
+repo_says("And how long has it been?", goes_on=True)
+check("nor is it forgotten while a job is still under way",
+      any("What did it do?" in str(m.get("content")) for m in SHOP["shown"]), True)
+voice.WORKING["job"] = ""
+rp.last_exchange = time.time() - voice.HISTORY_IDLE_S - 60
+repo_says("Still there?", goes_on=True)
+check("with nothing under way and an hour of quiet it is, as before",
+      any("What did it do?" in str(m.get("content")) for m in SHOP["shown"]), False)
 voice.complete, voice.memory = was_complete, was_memory
 SHOP["answers"], SHOP["wait"], SHOP["route"] = {}, [], None
 voice.WORKING.update(job="", ended=0.0, what="", report=None)
@@ -5749,6 +5775,7 @@ check("the model is shown the person's lines whole and his own cut short, told w
 MEM["calls"].clear()
 MEM["answers"]["cursor"] = {"ok": True, "value": None}
 voice.TRANSCRIPT_FILE, real_tf = t_file, voice.TRANSCRIPT_FILE
+voice.HISTORY_IDLE_S = 300.0     # the times in this record are laid out for five minutes of quiet
 check("the first time, nothing that was said before there was a memory is gone through: it starts from where "
       "the record stands",
       (voice.memory_pass(mp, gone_ask, now=T0 + 3100), MEM["calls"][-1]),

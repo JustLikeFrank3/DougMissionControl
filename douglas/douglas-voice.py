@@ -113,8 +113,11 @@ TTS_FALLBACK_HOST = E("TTS_FALLBACK_HOST", TTS_HOST)
 TTS_FALLBACK_PORT = int(E("TTS_FALLBACK_PORT", "0"))
 LLM_URL = E("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
 LLM_MODEL = E("LLM_MODEL", "douglas")
-LLM_MAX_TOKENS = int(E("LLM_MAX_TOKENS", "400"))
-LLM_TIMEOUT_S = float(E("LLM_TIMEOUT_S", "120"))
+# Room for a whole answer: at 400 a long one stopped in the middle of a
+# sentence. How short a spoken reply should be is said to him with the
+# message, not enforced by cutting it. The wait is sized to go with it.
+LLM_MAX_TOKENS = int(E("LLM_MAX_TOKENS", "1500"))
+LLM_TIMEOUT_S = float(E("LLM_TIMEOUT_S", "300"))
 # Who Douglas is and, as importantly, what he cannot know. The first version
 # said only "you are the household's assistant" and the model filled the gap
 # with a living room, a sofa and a dog that do not exist: with no sensors and
@@ -395,7 +398,11 @@ SOURCES = {
 # oldest exchanges go, whole. There is no count of exchanges any more, and
 # what a lookup returned is kept as he was shown it.
 HISTORY_CHARS = int(E("VOICE_HISTORY_CHARS", "24000"))
-HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "300"))  # forget after quiet
+# Forgotten after this long with nothing said. An hour, where it was five
+# minutes: a look through a repository takes longer than five, and its
+# report came back to a conversation that was already gone. A job under way
+# keeps the conversation it was asked in, however long it takes.
+HISTORY_IDLE_S = float(E("VOICE_HISTORY_IDLE_S", "3600"))
 MAX_LISTEN_S = float(E("VOICE_MAX_LISTEN_S", "20"))
 MAX_SAY_CHARS = int(E("VOICE_MAX_SAY_CHARS", "2000"))   # one typed turn
 MIN_LISTEN_S = float(E("VOICE_MIN_LISTEN_S", "0.3"))
@@ -6463,7 +6470,7 @@ class Pipeline:
         asked = said            # the person's own words, before anything is added to them
         if not self._current(turn):
             return None         # cancelled already: it settles nothing
-        if time.time() - self.last_exchange > HISTORY_IDLE_S:
+        if time.time() - self.last_exchange > HISTORY_IDLE_S and not WORKING["job"]:
             self.forget()
         if not image and is_reset(said) and via not in APART:     # the house's conversation is not theirs to end
             self.forget()
@@ -6989,6 +6996,9 @@ class Pipeline:
         self.tr.append("douglas", line, via)
         with self._floor():                      # the house's conversation, not a guest's
             if CONVO["epoch"] == epoch:          # the conversation that asked is still going
+                # And goes on from here: what the job found is what the
+                # person will speak of next, however long it took.
+                self.last_exchange = time.time()
                 # The account in that line is the worker's, written with a
                 # repository's text in front of it: he is handed it as
                 # information, like a lookup, and it cannot close this note.
