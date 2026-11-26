@@ -77,6 +77,8 @@ douglas/douglas-agent.py :9111 on Douglas — metrics, voice state, transcript a
 douglas/provision.sh     fresh Ubuntu 24.04 → Douglas: tailnet, GTT limit, llama.cpp
                          (Vulkan) :8081, Open WebUI :8080, Wyoming STT/TTS, voice
 douglas/douglas-voice.py :10800 — DougVoice's pipeline: satellite → STT → Douglas → TTS
+douglas/update.sh        after a `git pull` on Douglas: his own programs brought up to the
+                         checkout and restarted, without the whole build
 douglas/douglas-work.py  Douglas's workshop: repositories he may clone from GitHub, read
                          the code of and have a job done on, the job fenced in
                          (douglas/work-setup.sh installs it)
@@ -2160,6 +2162,29 @@ plain look took 9. One test picture still gets a made-up name: marks on a
 pipe that an image model drew in place of letters are read as a famous
 maker's, a different one by each look.
 
+
+#### Updating Douglas
+
+Nothing deploys itself: each machine has a checkout, and its programs are
+copied out of it by a script run there with `sudo`. After a `git pull` on
+Douglas:
+
+```
+sudo ./douglas/update.sh
+```
+
+It installs the voice pipeline and his voice, runs the installers of the
+workshop, the agent, his memory and the switches where those are installed
+already, brings old defaults in `/etc/douglas/voice.env` up to date (only a
+value that is still the old default, and it says each change), restarts
+`douglas-voice` once, and says what is up. It will not run while a job is
+under way or someone is talking to him, unless `FORCE=1`. It is not
+`provision.sh`, which is the whole build and on a re-run also fetches and
+rebuilds llama.cpp and upgrades Open WebUI and the speech packages.
+
+The panel and the phone page are the Pi's: after a `git pull` there,
+`sudo ./pi/setup-deck.sh`.
+
 ### DougVoice — Douglas's ears
 
 DougVoice is a Raspberry Pi Zero 2 W wearing a PiSugar Whisplay HAT (WM8960
@@ -2334,6 +2359,7 @@ python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
 | `tests/test_efi_utils.sh` | finding the Windows and GRUB entries in `efibootmgr` output — by description, by loader path, and via the generic `UEFI OS` label — and that reordering the boot list keeps every other entry |
 | `tests/test_media_agent.sh` | `ddcutil` parsing against the layouts it really emits, that an empty monitor list explains itself, and that each SCREENS card commands its own panel rather than its neighbour |
 | `tests/test_deck_ui.sh` | the panel's pure logic in node — formatting, map arithmetic, the teleport threshold, and the rolling telemetry window; and the wording of what Douglas remembers, what the machines report and what the watch raised, where "could not be read" is never shown as "none" |
+| `tests/test_douglas_update.sh` | `douglas/update.sh`: old defaults in a settings file brought up to date and each change said once, nothing changed or said on a second run, the owner's own values left alone, the file's mode kept and no token printed; an argument it does not know refused; not run except as root on a machine that is set up; and that it names only files the checkout has and never reaches for the whole build |
 | `tests/test_sim_agent.sh` | which sim event each Flight Deck command resolves to and with what parameter, and that every autopilot bug publishes the mode that reads it |
 | `tests/test_pin_fleet.sh` | `pi/pin-fleet.sh` against throwaway files and a stand-in `tailscale`: both names pinned once, at the address Tailscale gives; a second run and `off` leaving the files as they should be, to the byte; cloud-init's template written only where it is in use; and nothing changed when a machine is unknown, its address is not a tailnet one, or half a pin is already there |
 | `pi/deck-api/test_phases.py` | phase mapping against the orchestrator's real log lines |
