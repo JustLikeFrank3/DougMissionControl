@@ -177,9 +177,11 @@ Its account is wrong in two places: the branch
 `douglas/sim-agent-pattern-coverage` was never created, and `f64e28a` is not
 "the last job's" commit.
 
-Pull request 6 is open and untouched. It is a small, plausible addition of
-tests that should be judged as that, after a build on a machine with the .NET
-SDK, and not as the implementation of the recommendations.
+Pull request 6 was left untouched by this work, and has since been merged
+into main by the owner. It is a small, plausible addition of tests, and
+should be read as that: it is not the implementation of the recommendations,
+and its two tests have still not been built or run on a machine with the
+.NET SDK.
 
 ## What is still open
 
