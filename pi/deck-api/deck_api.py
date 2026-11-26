@@ -656,17 +656,73 @@ def fetch_mini() -> dict:
                 DECK.state.get("mini", {}).get("last_alive")}
 
 
+# A name looked up once and kept. A Bonjour name is answered over multicast,
+# and on this LAN that answer has taken five to twenty seconds to come: far
+# longer than the ping it is for, which takes ten milliseconds. Asked for on
+# every look, the lookup alone outran the five seconds a ping is given, and a
+# laptop that was on the desk and answering read as AWAY, on and off, for an
+# afternoon. It also held up everything probed after it in the same look.
+#
+# So the lookup is done apart from the look, which waits for it only briefly
+# and otherwise goes on what it knew. The address is used until it stops
+# answering (a laptop's lease moves) or has been kept a good while.
+ADDR_KEEP_S = 600.0
+ADDR_WAIT_S = 2.0
+_addr_kept: dict[str, dict] = {}
+_addr_lock = threading.Lock()
+
+
+def _look_up(host: str) -> None:
+    try:
+        ip = socket.gethostbyname(host)
+    except OSError:
+        ip = ""
+    with _addr_lock:
+        k = _addr_kept.setdefault(host, {"ip": "", "at": -1e9})
+        if ip:
+            k.update(ip=ip, at=time.monotonic())
+        k["asking"] = None
+
+
+def address_of(host: str) -> str:
+    """The address a name was last seen at, or "" when it is not known yet.
+    Never waits longer than ADDR_WAIT_S, however slow the lookup is."""
+    with _addr_lock:
+        k = _addr_kept.setdefault(host, {"ip": "", "at": -1e9})
+        if k["ip"] and time.monotonic() - k["at"] < ADDR_KEEP_S:
+            return k["ip"]
+        asking = k.get("asking")
+        if asking is None:                        # one lookup at a time for a name
+            asking = k["asking"] = threading.Thread(target=_look_up, args=(host,), daemon=True)
+            asking.start()
+    asking.join(ADDR_WAIT_S)
+    with _addr_lock:
+        return k["ip"]
+
+
+def address_gone(host: str) -> None:
+    """The address kept for a name stopped answering: look it up afresh next
+    time, and until that comes back go on trying the old one."""
+    with _addr_lock:
+        if host in _addr_kept:
+            _addr_kept[host]["at"] = -1e9
+
+
 def fetch_mobile() -> dict:
     """The MacBook's card, on the mini's contract: liveness and open doors.
 
-    Probed by mDNS name (see MOBILE_HOST) because the address moves. A sleeping
+    Found by mDNS name (see MOBILE_HOST) because the address moves, and then
+    probed at the address that name gave (see address_of). A sleeping
     laptop's Bonjour records may outlive it on the LAN's sleep proxy, but the
     proxy answers mDNS, not ICMP — so ping stays an honest liveness signal.
     """
-    up = pingable(MOBILE_HOST)
+    at = address_of(MOBILE_HOST)
+    up = bool(at) and pingable(at)
+    if at and not up:
+        address_gone(MOBILE_HOST)
     return {"up": up,
-            "ssh": up and tcp_open(MOBILE_HOST, 22),
-            "screen": up and tcp_open(MOBILE_HOST, 5900),
+            "ssh": up and tcp_open(at, 22),
+            "screen": up and tcp_open(at, 5900),
             "host": MOBILE_HOST,
             "last_alive": time.time() if up else
                 DECK.state.get("mobile", {}).get("last_alive")}

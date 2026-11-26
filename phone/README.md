@@ -139,8 +139,10 @@ taken by Douglas and shown in the log.
 Installed on an iPhone 16 Pro as a `Release` build, where the owner reports
 that it works.
 
-Not yet run: push. It needs the key from `pi/push-setup.sh` on node1, and a
-deck-api there that has the `/api/push` routes.
+Push: the key was installed on node1 with `pi/push-setup.sh`, the phone
+registered itself, and SEND A TEST arrived on it. Not yet seen: a
+notification raised by a real notice, by a change waiting for a yes, or by a
+machine that stopped answering.
 
 A device build from the command line needs Xcode to be allowed to make the
 provisioning profiles the first time, which `expo run:ios` does not ask for:

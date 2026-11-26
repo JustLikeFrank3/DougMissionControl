@@ -2407,6 +2407,7 @@ bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
 python3 pi/deck-api/test_push.py        # push to the phone app: which notices are news, the token for Apple, what stays out of the journal
+python3 pi/deck-api/test_mobile.py      # the laptop's card: a name that is slow to look up is not a laptop that is away
 python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
 python3 pi/deck-api/test_linux_route.py # where the Linux boot is dialled: its LAN address, or the direct link when only that answers
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
