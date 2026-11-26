@@ -99,6 +99,8 @@ douglas/chatgpt-line.sh  has ChatGPT's connector talk to Douglas himself, on a l
 dougvoice/setup.sh       Pi Zero 2 W + Whisplay HAT → DougVoice, Douglas's satellite
 dougvoice/dougvoice.py   :10700 Wyoming satellite launcher, and the LCD/LED/button face
 tests/                   shell tests for the above — `bash tests/test_*.sh`
+phone/                   the deck as an iOS app (Expo, TypeScript) — phone/README.md
+pi/push-setup.sh         gives deck-api the key for Apple's push service, for the app's notifications
 
 Flight Deck — the touchscreen front-end (v0.1):
 pi/display-check.sh      read-only: is the XENEON Edge's video + touch sound?
@@ -411,6 +413,16 @@ earpiece at call volume, so the recording has an audio context of its own
 that is closed when the button is let go, and the reply is played by an
 ordinary media element with the page's audio session set to playback. `sudo ./pi/mobile-https.sh off` undoes
 it.
+
+**As an app.** `phone/` is the same deck as an iOS app, built with Expo on a
+Mac and installed straight onto the phone ([phone/README.md](phone/README.md)).
+It is a second client of the same routes, with the token in the Keychain and
+sent in an `Authorization` header. It talks through the phone's own
+microphone and speaker with no HTTPS page in between, takes a photo, a link
+or text from any other app's share sheet ("Ask Douglas"), and is told about a
+notice or a waiting yes when it is closed: deck-api sends those through
+Apple's push service once `sudo ./pi/push-setup.sh` has given it a key. `/m`
+stays as the fallback from any browser.
 
 **IDLE** — the resting state, and the default surface: a clock, the boot
 tiles, and the fleet's status cards. The panel spends most of its life with nothing
@@ -2394,6 +2406,7 @@ fauxmo — see the WOL note in Troubleshooting.
 bash tests/test_*.sh          # all of them; each is standalone
 python3 pi/deck-api/test_phases.py
 python3 pi/deck-api/test_douglas_routes.py   # deck-api's Douglas routes, with stand-ins
+python3 pi/deck-api/test_push.py        # push to the phone app: which notices are news, the token for Apple, what stays out of the journal
 python3 pi/deck-api/test_fleet.py       # the fleet as a reading, the token that opens it and nothing else, who is gone
 python3 pi/deck-api/test_linux_route.py # where the Linux boot is dialled: its LAN address, or the direct link when only that answers
 python3 douglas/test_douglas_agent.py   # fake /proc, /sys and llama.cpp; the real memory service; the watch's rules
@@ -2406,6 +2419,7 @@ python3 douglas/test_douglas_tts.py     # the Kokoro voice service, with a stand
 python3 douglas/test_douglas_chatgpt.py # ChatGPT's line to Douglas: the secret path, the exchange, the persona, and Douglas himself
 python3 douglas/test_douglas_work.py    # his workshop: a stand-in GitHub and model, and the kernel's real fence
 python3 dougvoice/test_dougvoice.py     # no Pi, HAT or Douglas needed
+(cd phone && npm ci && npm run typecheck && npm test)   # the phone app: its types and its pure logic
 ```
 
 | Suite | Covers |

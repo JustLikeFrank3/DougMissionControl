@@ -15,5 +15,7 @@ tmp-*
 # never vendored. The tool is documentation, not a dependency.
 node_modules/
 package-lock.json
+# The phone app is a dependency tree worth pinning: its lock file is kept.
+!phone/package-lock.json
 __pycache__/
 *.pyc

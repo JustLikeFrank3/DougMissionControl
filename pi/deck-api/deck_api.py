@@ -42,6 +42,10 @@ following its journald output. flightsim-boot.sh is unmodified.
     POST /api/eyes/image         {"camera":"<id or name>"}: a picture for him to
                                  look at (DECK_CAMERA_TOKEN); X-Observation says
                                  which camera, when, and how old
+    GET  /api/push               whether notices can be pushed to a phone, and to how many
+    POST /api/push/register      {"token":"<Apple's device token>","env":"development|production"}
+    POST /api/push/forget        {"token":"..."}
+    POST /api/push/test          one notification to every registered phone
     GET  /                       the deck UI (the 2560x720 panel)
     GET  /m                      the same deck for a phone, over the tailnet
 
@@ -63,6 +67,7 @@ something to expose to the internet.
 
 from __future__ import annotations
 
+import base64
 import hmac
 import json
 import math
@@ -760,6 +765,9 @@ def gone_or_back(name: str, up: bool) -> None:
         if k["misses"] >= 3:
             k["gone"] = True
             DECK.event("probe", f"{name}: not answering", "warn")
+            # The one notice Douglas cannot raise himself. To a phone too.
+            push_soon(f"{name} is not answering", "Three looks in a row from node1 got no answer.",
+                      "probe", f"gone-{name}"[:60])
 
 
 def who_is_gone(douglas: dict, voice: dict) -> None:
@@ -2240,6 +2248,294 @@ def cameras_change(body: dict) -> tuple[int, dict]:
                          {"name": str(body.get("name") or "")[:40]} if op == "name" else {})
 
 
+# -- push: a notice or a waiting yes, on a phone whose app is closed ---------
+#
+# The screens show a notice for as long as somebody is looking at them. The
+# phone app (phone/) can be told when nobody is: it hands this Pi the token
+# Apple gave it, and the Pi sends a notification through Apple's push service
+# for each new warning or critical notice, for a change of Douglas's that is
+# waiting for a yes, and for a machine that has stopped answering.
+#
+# Apple wants two things the standard library has not got: a token signed
+# with ES256, and HTTP/2. Both are on the Pi already as programs, openssl and
+# curl, so this installs nothing. The key is the .p8 from the developer
+# account (pi/push-setup.sh puts it in place); without it none of this runs
+# and /api/push says so.
+#
+# What goes through Apple is the notice's own sentence. Of a change waiting
+# for a yes only its kind goes, never the words read back: those are read in
+# the app, where the yes is given.
+APNS_KEY_FILE = cfg("APNS_KEY_FILE", "")
+APNS_KEY_ID = cfg("APNS_KEY_ID", "")
+APNS_TEAM_ID = cfg("APNS_TEAM_ID", "")
+APNS_TOPIC = cfg("APNS_TOPIC", "")                # the app's bundle identifier
+PUSH_FILE = Path(cfg("DECK_PUSH_FILE", "/var/lib/flightdeck/push.json"))
+PUSH_EVERY_S = float(cfg("DECK_PUSH_EVERY", "20"))
+APNS_HOSTS = {"production": "api.push.apple.com", "development": "api.sandbox.push.apple.com"}
+DEVICE_TOKEN = re.compile(r"[0-9a-f]{64,200}")
+PUSH_DEVICES_MAX = 8
+_push_lock = threading.Lock()
+_apns_jwt: dict = {"at": -1e9, "value": None}
+
+PUSH_WHAT = {"push": "A push", "job": "A job", "forget": "Forgetting", "records": "A change to your records"}
+PUSH_WHERE = {"webui": "the chat page", "phone": "the phone", "deck": "the panel", "voice": "by voice",
+              "chat": "a chat window"}
+
+
+def push_why() -> str:
+    """Why nothing can be pushed, or "" when it can."""
+    missing = [k for k, v in (("APNS_KEY_FILE", APNS_KEY_FILE), ("APNS_KEY_ID", APNS_KEY_ID),
+                              ("APNS_TEAM_ID", APNS_TEAM_ID), ("APNS_TOPIC", APNS_TOPIC)) if not v]
+    if missing:
+        return f"{', '.join(missing)} unset in boot.env (pi/push-setup.sh)"
+    if not Path(APNS_KEY_FILE).is_file():
+        return f"{APNS_KEY_FILE} is not there, or deck-api may not read it"
+    for tool in ("openssl", "curl"):
+        if not shutil.which(tool):
+            return f"{tool} is not installed on node1"
+    return ""
+
+
+def push_devices() -> list[dict]:
+    try:
+        data = json.loads(PUSH_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+    rows = data.get("devices") if isinstance(data, dict) else None
+    return [r for r in rows or [] if isinstance(r, dict) and DEVICE_TOKEN.fullmatch(str(r.get("token") or ""))]
+
+
+def _store_devices(rows: list[dict]) -> bool:
+    try:
+        PUSH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PUSH_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"devices": rows}))
+        os.chmod(tmp, 0o600)                      # a device token is an address, and nobody else's to read
+        tmp.replace(PUSH_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def push_register(body: dict) -> tuple[int, dict]:
+    """A phone hands over the token Apple gave it. The same phone again
+    replaces its line; the oldest goes when there are too many."""
+    token = str(body.get("token") or "").lower()
+    if not DEVICE_TOKEN.fullmatch(token):
+        return 400, {"ok": False, "message": "a device is registered by the token Apple gave it"}
+    env = body.get("env") if body.get("env") in APNS_HOSTS else "development"
+    model = " ".join(str(body.get("model") or "").split())[:40]
+    with _push_lock:
+        rows = [r for r in push_devices() if r["token"] != token]
+        rows.append({"token": token, "env": env, "model": model, "since": int(time.time())})
+        ok = _store_devices(rows[-PUSH_DEVICES_MAX:])
+    if not ok:
+        return 500, {"ok": False, "message": f"could not write {PUSH_FILE}"}
+    return 200, {"ok": True, "configured": not push_why(), "why": push_why()}
+
+
+def push_forget(body: dict) -> tuple[int, dict]:
+    token = str(body.get("token") or "").lower()
+    with _push_lock:
+        rows = push_devices()
+        kept = [r for r in rows if r["token"] != token]
+        if len(kept) != len(rows) and not _store_devices(kept):
+            return 500, {"ok": False, "message": f"could not write {PUSH_FILE}"}
+    return 200, {"ok": True}
+
+
+def push_view(token: str = "") -> dict:
+    """For the app's own card: whether node1 can push at all, to how many
+    phones, and whether the one asking is among them."""
+    rows, why = push_devices(), push_why()
+    return {"ok": True, "configured": not why, "why": why, "devices": len(rows),
+            "here": any(r["token"] == token.lower() for r in rows)}
+
+
+def der_to_raw(der: bytes) -> bytes | None:
+    """An ECDSA signature as openssl writes it (two integers in DER) as the
+    64 bytes a JWT carries: r then s, each padded to 32."""
+    def length(at: int) -> tuple[int, int]:
+        n = der[at]
+        if n < 0x80:
+            return n, at + 1
+        k = n & 0x7F
+        return int.from_bytes(der[at + 1:at + 1 + k], "big"), at + 1 + k
+    try:
+        if der[0] != 0x30:
+            return None
+        _, at = length(1)
+        out = b""
+        for _ in range(2):
+            if der[at] != 0x02:
+                return None
+            n, at = length(at + 1)
+            part = der[at:at + n].lstrip(b"\x00")
+            if len(part) > 32:
+                return None
+            out += part.rjust(32, b"\x00")
+            at += n
+        return out
+    except IndexError:
+        return None
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def apns_jwt() -> str | None:
+    """The token Apple's service is spoken to with: signed with the key from
+    the developer account, and good for an hour. Made again every forty
+    minutes, which is inside what Apple allows (not more often than every
+    twenty, not older than sixty)."""
+    if time.monotonic() - _apns_jwt["at"] < 2400 and _apns_jwt["value"]:
+        return _apns_jwt["value"]
+    head = _b64url(json.dumps({"alg": "ES256", "kid": APNS_KEY_ID}, separators=(",", ":")).encode())
+    claims = _b64url(json.dumps({"iss": APNS_TEAM_ID, "iat": int(time.time())}, separators=(",", ":")).encode())
+    signing = f"{head}.{claims}".encode()
+    try:
+        got = subprocess.run(["openssl", "dgst", "-sha256", "-sign", APNS_KEY_FILE],
+                             input=signing, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    raw = der_to_raw(got.stdout) if got.returncode == 0 else None
+    if not raw:
+        return None
+    value = f"{head}.{claims}.{_b64url(raw)}"
+    _apns_jwt.update(at=time.monotonic(), value=value)
+    return value
+
+
+def _curl_quoted(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def apns_send(token: str, env: str, payload: dict, collapse: str = "") -> tuple[int, str]:
+    """One notification to one phone: (HTTP status, Apple's reason). Status
+    0 when Apple was not reached at all. Everything curl is told, the signed
+    token included, goes to it on stdin and so is on no command line."""
+    jwt = apns_jwt()
+    if not jwt:
+        return 0, "the key did not sign"
+    lines = [f"url = {_curl_quoted(f'https://{APNS_HOSTS[env]}/3/device/{token}')}",
+             "http2", "silent", "max-time = 15", 'request = "POST"',
+             f"header = {_curl_quoted('authorization: bearer ' + jwt)}",
+             f"header = {_curl_quoted('apns-topic: ' + APNS_TOPIC)}",
+             'header = "apns-push-type: alert"', 'header = "apns-priority: 10"',
+             f"data-binary = {_curl_quoted(json.dumps(payload))}",
+             'write-out = "\\n%{http_code}"']
+    if collapse:
+        lines.append(f"header = {_curl_quoted('apns-collapse-id: ' + collapse[:60])}")
+    try:
+        got = subprocess.run(["curl", "--config", "-"], input="\n".join(lines).encode(),
+                             capture_output=True, timeout=25)
+    except (OSError, subprocess.SubprocessError):
+        return 0, "curl did not run"
+    said, _, code = got.stdout.decode("utf-8", "replace").rpartition("\n")
+    if got.returncode != 0 or not code.strip().isdigit():
+        return 0, f"curl exit {got.returncode}"
+    try:
+        reason = str((json.loads(said or "{}") or {}).get("reason") or "")
+    except ValueError:
+        reason = ""
+    return int(code), reason
+
+
+def push(title: str, text: str, kind: str, collapse: str = "") -> dict:
+    """One notification to every registered phone: {sent, failed, why}.
+    A phone Apple says is gone is dropped. A phone built for the other of
+    Apple's two services (a build from Xcode uses the sandbox) is found by
+    trying that one, and remembered."""
+    why = push_why()
+    rows = push_devices()
+    if why or not rows:
+        return {"sent": 0, "failed": 0, "why": why or "no phone is registered"}
+    payload = {"aps": {"alert": {"title": title[:120], "body": text[:600]}, "sound": "default"}, "kind": kind}
+    sent, failed, last = 0, 0, ""
+    gone: set = set()                             # phones Apple says no longer have the app
+    moved: dict = {}                              # phones found on the other of Apple's two services
+    for r in rows:
+        env = r.get("env") if r.get("env") in APNS_HOSTS else "development"
+        code, reason = apns_send(r["token"], env, payload, collapse)
+        if code == 400 and reason == "BadDeviceToken":
+            other = "production" if env == "development" else "development"
+            code, reason = apns_send(r["token"], other, payload, collapse)
+            if code == 200:
+                moved[r["token"]] = other
+        if code == 200:
+            sent += 1
+        else:
+            failed += 1
+            last = reason or (f"HTTP {code}" if code else "Apple was not reached")
+        if code == 410 or (code == 400 and reason == "BadDeviceToken"):
+            gone.add(r["token"])
+    if gone or moved:
+        # From the file as it is now: a phone registered while this was
+        # sending is kept.
+        with _push_lock:
+            _store_devices([dict(r, env=moved.get(r["token"], r.get("env"))) for r in push_devices()
+                            if r["token"] not in gone])
+    print(f"push: {kind} to {sent} of {len(rows)}" + (f", last refusal: {last}" if failed else ""),
+          file=sys.stderr, flush=True)
+    return {"sent": sent, "failed": failed, "why": last}
+
+
+def push_soon(title: str, text: str, kind: str, collapse: str = "") -> None:
+    """The same, from a thread that must not wait on Apple."""
+    if push_why() or not push_devices():
+        return
+    threading.Thread(target=push, args=(title, text, kind, collapse), daemon=True).start()
+
+
+def push_due(rows: list, seen: set | None) -> tuple[list[dict], set]:
+    """Which open notices have not been pushed yet, and the set to remember.
+    Warnings and worse that nobody has marked as seen, each once. The first
+    look (seen is None) only remembers: a phone that has just been
+    registered, or a deck-api that has just started, is not sent the
+    backlog. A notice that is over is forgotten, so one that comes back is
+    news again."""
+    open_now = [n for n in rows if isinstance(n, dict) and n.get("id") is not None]
+    ids = {n["id"] for n in open_now}
+    if seen is None:
+        return [], ids
+    due = [n for n in open_now if n["id"] not in seen and not n.get("acked")
+           and n.get("severity") in ("warning", "critical")]
+    return due, ids
+
+
+def push_watch() -> None:
+    """Looks at Douglas's notices and at what is waiting for a yes, and
+    pushes what is new. Only while there is a phone to push to."""
+    seen: set | None = None
+    asked: set = set()
+    while True:
+        time.sleep(PUSH_EVERY_S)
+        try:
+            if push_why() or not push_devices() or not DOUGLAS_AGENT_TOKEN:
+                seen = None
+                continue
+            got = _ws_json(f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/memory?token={DOUGLAS_AGENT_TOKEN}"
+                           "&op=notices&limit=50", timeout=3)
+            if isinstance(got, dict) and got.get("ok"):
+                due, seen = push_due(got.get("open") or [], seen)
+                for n in due:
+                    push(f"{str(n.get('severity')).upper()} · {n.get('subject') or 'Douglas'}",
+                         str(n.get("text") or ""), "notice", f"notice-{n['id']}")
+            status = douglas_status()
+            waiting = (status.get("voice") or {}).get("pending") if status.get("agent") else None
+            if isinstance(waiting, dict) and waiting.get("id") and waiting["id"] not in asked:
+                asked.add(waiting["id"])
+                if len(asked) > 200:
+                    asked = {waiting["id"]}
+                push("Douglas is waiting for a yes",
+                     f"{PUSH_WHAT.get(waiting.get('kind'), 'A change')}, asked on "
+                     f"{PUSH_WHERE.get(waiting.get('via'), 'another line')}. Open the app to read it and answer.",
+                     "approval", "approval")
+        except Exception as exc:  # noqa: BLE001 - a dead watch pushes nothing, and says nothing
+            DECK.event("deck-api", f"push look failed: {exc}", "warn")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "deck-api/0.1"
@@ -2467,6 +2763,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, douglas_status())
 
         # The reply to a turn the phone recorded, for the phone to play.
+        if path == "/api/push":
+            if not self._authorised(query):
+                return self._json(403, {"error": "forbidden"})
+            # Which phone is asking comes in a header: a device token is
+            # no more for an address than the deck's own.
+            return self._json(200, push_view(self.headers.get("X-Push-Device") or ""))
+
         if path == "/api/douglas/speech":
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
@@ -2587,6 +2890,20 @@ class Handler(BaseHTTPRequestHandler):
             code, out = cameras_change(body)
             self._note(f"cameras {body.get('op')}: HTTP {code}")
             return self._json(code, out)
+
+        if path in ("/api/push/register", "/api/push/forget"):
+            code, out = (push_register if path.endswith("register") else push_forget)(body)
+            # That a phone was added or taken away: never its token.
+            self._note(("registered" if path.endswith("register") else "forgotten")
+                       + ("" if out.get("ok") else " refused"))
+            return self._json(code, out)
+        if path == "/api/push/test":
+            got = push("Doug Mission Control", "A test from node1: this phone gets notices and approvals.",
+                       "test", "test")
+            self._note(f"test to {got['sent']}, {got['failed']} refused")
+            return self._json(200 if got["sent"] else 502,
+                              {"ok": bool(got["sent"]), "sent": got["sent"], "failed": got["failed"],
+                               "message": "" if got["sent"] else got["why"]})
 
         if path == "/api/boot":
             intent = str(body.get("intent") or "plain")
@@ -2811,7 +3128,7 @@ def main() -> None:
         # as an ordinary user is still useful, just without the state file.
         pass
 
-    for fn in (poller, journal_follower):
+    for fn in (poller, journal_follower, push_watch):
         threading.Thread(target=fn, daemon=True).start()
 
     server = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
