@@ -191,6 +191,21 @@ check("the panel itself, from loopback, needs no token", get("/api/state"), 200)
 check("a request the proxy passed on does", get("/api/state", {"X-Forwarded-For": "100.64.0.9"}), 403)
 check("with the token it is let in", get("/api/state?token=deck-token", {"X-Forwarded-For": "100.64.0.9"}), 200)
 check("a wrong token is not", get("/api/state?token=nope", {"X-Forwarded-For": "100.64.0.9"}), 403)
+away = {"X-Forwarded-For": "100.64.0.9"}
+check("an app sends it in a header instead, and is let in the same",
+      get("/api/state", {**away, "Authorization": "Bearer deck-token"}), 200)
+check("whatever case the word is in", get("/api/state", {**away, "Authorization": "bearer deck-token"}), 200)
+check("a wrong one in the header is not", get("/api/state", {**away, "Authorization": "Bearer nope"}), 403)
+check("nor the right one under another scheme",
+      get("/api/state", {**away, "Authorization": "Basic deck-token"}), 403)
+check("nor the word with nothing after it", get("/api/state", {**away, "Authorization": "Bearer"}), 403)
+check("where the address has one too, the address is the one read",
+      (get("/api/state?token=nope", {**away, "Authorization": "Bearer deck-token"}),
+       get("/api/state?token=deck-token", {**away, "Authorization": "Bearer nope"})), (403, 200))
+d.DECK_TOKEN = ""
+check("with no deck token set up, an empty header opens nothing",
+      get("/api/state", {**away, "Authorization": "Bearer "}), 403)
+d.DECK_TOKEN = "deck-token"
 check("the proxy's identity header alone is enough to ask for one",
       get("/api/douglas", {"Tailscale-User-Login": "someone@example.com"}), 403)
 journal, real = io.StringIO(), sys.stderr
