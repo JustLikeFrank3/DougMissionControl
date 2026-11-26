@@ -497,7 +497,7 @@ def _pending(p) -> dict | None:
     if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not p["id"]:
         return None
     num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
-    return {"id": p["id"][:32], "kind": str(p.get("kind") or "")[:24], "text": str(p.get("text") or "")[:1500],
+    return {"id": p["id"][:32], "kind": str(p.get("kind") or "")[:24], "text": str(p.get("text") or "")[:8000],
             "via": str(p.get("via") or "")[:12], "asked": num(p.get("asked")), "until": num(p.get("until"))}
 
 
@@ -508,7 +508,41 @@ def _job(j) -> dict | None:
         return None
     num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
     return {"running": j["running"], "what": str(j.get("what") or "")[:300], "began": num(j.get("began")),
-            "ended": num(j.get("ended"))}
+            "ended": num(j.get("ended")), "report": _job_report(j.get("report"))}
+
+
+def _job_report(r) -> dict | None:
+    """What a job was handed and what became of it, as the pipeline has it
+    from the workshop: passed on only in the shape it is known to have, each
+    piece cut to size. Requirements carry one of four states and no other."""
+    if not isinstance(r, dict) or not isinstance(r.get("id"), str) or not r["id"]:
+        return None
+    text = lambda x, n: str(x or "")[:n]                                                        # noqa: E731
+    rows = lambda key, n: [x for x in (r.get(key) if isinstance(r.get(key), list) else [])[:n]  # noqa: E731
+                           if isinstance(x, dict)]
+    states = ("done", "outstanding", "blocked", "pending")
+    return {"id": r["id"][:8], "repo": text(r.get("repo"), 120), "branch": text(r.get("branch"), 80),
+            "kind": text(r.get("kind"), 12), "state": text(r.get("state"), 12),
+            "outcome": r.get("outcome") if r.get("outcome") in ("complete", "partial", "unmet") else "",
+            "asked": text(r.get("asked"), 1200), "base": text(r.get("base"), 12),
+            "base_branch": text(r.get("base_branch"), 80),
+            "before": [text(b, 300) for b in (r.get("before") if isinstance(r.get("before"), list) else [])[:3]
+                       if isinstance(b, str)],
+            "context": [{"from": text(c.get("from"), 80), "text": text(c.get("text"), 1500)} for c in rows("context", 3)],
+            "needs": [{"n": n["n"] if isinstance(n.get("n"), int) and not isinstance(n["n"], bool) else 0,
+                       "text": text(n.get("text"), 400), "accept": text(n.get("accept"), 300),
+                       "state": n.get("state") if n.get("state") in states else "outstanding",
+                       "note": text(n.get("note"), 240)} for n in rows("needs", 12)],
+            "stat": text(r.get("stat"), 80),
+            "files": [text(f, 120) for f in (r.get("files") if isinstance(r.get("files"), list) else [])[:12]
+                      if isinstance(f, str)],
+            "checks": [{"what": text(c.get("what"), 120), "ok": c.get("ok") is True, "said": text(c.get("said"), 240)}
+                       for c in rows("checks", 6)],
+            "ran": [{"cmd": text(c.get("cmd"), 160),
+                     "code": c["code"] if isinstance(c.get("code"), int) and not isinstance(c["code"], bool) else None}
+                    for c in rows("ran", 8)],
+            "looked": r.get("looked") if r.get("looked") in ("ok", "found", "none") else "",
+            "summary": text(r.get("summary"), 1500), "error": text(r.get("error"), 300), "pr": text(r.get("pr"), 200)}
 
 
 def relay_approval(body: dict) -> tuple[int, dict]:

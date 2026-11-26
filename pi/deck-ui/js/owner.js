@@ -58,30 +58,109 @@ export function waitingHead(p) {
   return (WHAT[p && p.kind] || 'A CHANGE') + ' · asked on ' + (WHERE[p && p.via] || 'another line');
 }
 
-/** The job in his workshop, in a line: that it is under way and for how
-    long, or that it ended and how long ago. How it went he says himself, in
-    the conversation, when it ends. */
-export function jobLine(job, now) {
-  if (!job) return '';
-  return job.running ? 'IN THE WORKSHOP · under way' + (job.began ? ' for ' + fmtAgo(job.began, now) : '')
-    : 'IN THE WORKSHOP · ended ' + (job.ended ? fmtAgo(job.ended, now) + ' ago' : 'a while ago');
+/** How the requirements a job was handed stand, in a few words; '' for a
+    job that was handed none. Counted here from each one's own state, so a
+    job that ended with some left never reads as done. */
+export function needsLine(report) {
+  var needs = (report && report.needs) || [];
+  if (!needs.length) return '';
+  var count = function (s) { return needs.filter(function (n) { return n.state === s; }).length; };
+  var done = count('done'), blocked = count('blocked'), pending = count('pending');
+  var out = needs.length - done - blocked - pending;
+  if (pending === needs.length) return needs.length + ' REQUIREMENT' + (needs.length === 1 ? '' : 'S');
+  return done + ' OF ' + needs.length + ' DONE' + (out ? ' · ' + out + ' OUTSTANDING' : '')
+    + (blocked ? ' · ' + blocked + ' BLOCKED' : '');
 }
 
-/** The job in his workshop, in `host` (hidden when there is none). Returns { paint(job) }. */
+/** The job in his workshop, in a line: that it is under way and for how
+    long, or that it ended and how long ago, and where it was handed
+    requirements, how many of them are done. */
+export function jobLine(job, now) {
+  if (!job) return '';
+  var needs = needsLine(job.report);
+  return (job.running ? 'IN THE WORKSHOP · under way' + (job.began ? ' for ' + fmtAgo(job.began, now) : '')
+    : 'IN THE WORKSHOP · ended ' + (job.ended ? fmtAgo(job.ended, now) + ' ago' : 'a while ago'))
+    + (needs ? ' · ' + needs : '');
+}
+
+/** Does a job that has ended fall short of what it was handed? */
+export function jobShort(job) {
+  var needs = (job && job.report && job.report.needs) || [];
+  return !!job && !job.running && needs.some(function (n) { return n.state !== 'done'; });
+}
+
+/** What a job was handed and what became of it, as rows to show under its
+    line: [kind, text, state]. kind is 'k' (a heading), 'v' (text under
+    it) or 'n' (a requirement, with its state). Whose words each is, is in
+    the heading: the person's, the workshop's own record, or the worker's. */
+export function jobRows(report) {
+  var r = report || {}, rows = [];
+  var add = function (k, v) { if (v) { rows.push(['k', k]); rows.push(['v', v]); } };
+  add('ASKED', r.asked);
+  add('WHERE', r.repo ? r.repo + (r.base_branch ? ' · from ' + r.base_branch : '')
+    + (r.base ? ' @ ' + r.base : '') + (r.branch ? ' · on ' + r.branch : '') : '');
+  (r.before || []).forEach(function (b, i) { add(i ? '' : 'SAID JUST BEFORE', b); });
+  (r.context || []).forEach(function (c) { add('HANDED OVER WITH IT · ' + (c.from || 'the conversation'), c.text); });
+  if ((r.needs || []).length) rows.push(['k', 'REQUIREMENTS · ' + needsLine(r) + ' · his own word on each']);
+  (r.needs || []).forEach(function (n) {
+    rows.push(['n', n.n + '. ' + n.text + (n.accept ? '\nDone when: ' + n.accept : '')
+      + (n.note ? '\n' + n.note : ''), n.state || 'outstanding']);
+  });
+  add('CHANGED', (r.stat || '') + ((r.files || []).length ? (r.stat ? '\n' : '') + r.files.join('\n') : ''));
+  var ran = (r.checks || []).map(function (c) {
+    return (c.ok ? 'passed' : 'FAILED') + ' · ' + c.what + (c.ok || !c.said ? '' : ' (' + c.said + ')');
+  }).concat((r.ran || []).map(function (c) {
+    return (c.code === null || c.code === undefined ? 'did not finish' : 'exit ' + c.code) + ' · ' + c.cmd;
+  }));
+  if (r.looked === 'ok') ran.push('a second look at the change found nothing to put right');
+  if (r.looked === 'found') ran.push('a second look found things to put right, and he went back to them');
+  if (r.state && r.state !== 'running' && r.state !== 'queued' && r.kind !== 'look') {
+    add('CHECKS AND WHAT WAS RUN', ran.join('\n') || 'nothing was run on the result');
+  }
+  add('WHAT WENT WRONG', r.error);
+  add('HIS OWN ACCOUNT · not checked', r.summary);
+  add('PULL REQUEST', r.pr);
+  return rows;
+}
+
+/** The job in his workshop, in `host` (hidden when there is none): its
+    line, what it was asked, and on a tap what it was handed and what became
+    of it. Returns { paint(job) }. */
 export function jobView(host) {
-  var head = el('div', 'job-h'), what = el('div', 'job-t');
+  var head = el('div', 'job-h'), what = el('div', 'job-t'), more = el('div', 'job-d'), open = false, last = '';
   host.classList.add('jobl');
   host.innerHTML = '';
   host.appendChild(head);
   host.appendChild(what);
+  host.appendChild(more);
   host.hidden = true;
+  more.hidden = true;
+  host.addEventListener('click', function () {
+    if (!more.childNodes.length) return;
+    open = !open;
+    more.hidden = !open;
+    host.classList.toggle('open', open);
+  });
   return {
     paint: function (job) {
       host.hidden = !job;
       if (!job) return;
       host.classList.toggle('on', !!job.running);
-      head.textContent = jobLine(job, Date.now() / 1000);
+      host.classList.toggle('short', jobShort(job));
+      var rows = job.report ? jobRows(job.report) : [];
+      head.textContent = jobLine(job, Date.now() / 1000) + (rows.length ? (open ? ' · tap to close' : ' · tap for more') : '');
       what.textContent = job.what || '';
+      var now = JSON.stringify(rows);
+      if (now === last) return;          // nothing new: what is being read stays where it is
+      last = now;
+      more.innerHTML = '';
+      rows.forEach(function (r) {
+        var row = el('div', 'job-' + r[0] + (r[2] ? ' ' + r[2] : ''));
+        if (r[0] === 'n') row.appendChild(el('span', 'job-s', String(r[2]).toUpperCase()));
+        row.appendChild(el('span', '', r[1]));
+        more.appendChild(row);
+      });
+      if (!rows.length) { open = false; more.hidden = true; host.classList.remove('open'); }
     }
   };
 }

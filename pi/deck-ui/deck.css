@@ -1132,6 +1132,17 @@ html, body {
 .job-h { font-size: 12px; letter-spacing: .14em; color: var(--mut); }
 .jobl.on .job-h { color: var(--am); }
 .job-t { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobl.short { border-left-color: var(--am); }
+.jobl.short .job-h { color: var(--am); }
+.job-d { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; padding-top: 6px;
+  border-top: 1px solid var(--ln); }
+.job-d[hidden] { display: none; }
+.job-k { font-size: 11px; letter-spacing: .14em; color: var(--mut); margin-top: 6px; }
+.job-v, .job-n { font-size: 14px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-n { display: flex; gap: 10px; align-items: baseline; }
+.job-s { flex: none; width: 104px; font-size: 11px; letter-spacing: .1em; color: var(--mut); }
+.job-n.done .job-s { color: var(--gr); }
+.job-n.outstanding .job-s, .job-n.blocked .job-s { color: var(--am); }
 .swv { gap: 0; }
 .sw-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
 .sw { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--ln); min-width: 0; }

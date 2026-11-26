@@ -149,7 +149,29 @@ with open(voice_file, "w") as f:
 got = agent.voice_state()
 check("the job in his workshop is passed on as that there is one, what it was asked to do, cut short, and since when",
       (got["job"]["running"], len(got["job"]["what"]), got["job"]["began"], got["job"]["ended"], sorted(got["job"])),
-      (True, 300, 1_800_000_000.0, None, ["began", "ended", "running", "what"]))
+      (True, 300, 1_800_000_000.0, None, ["began", "ended", "report", "running", "what"]))
+check("with no report of it, none is passed on", got["job"]["report"], None)
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "job": {
+        "running": False, "what": "Implement those improvements.", "began": 1.0, "ended": 2.0, "report": {
+            "id": "875c0c1f" + "x" * 50, "repo": "acme/kettle", "branch": "douglas/x-875c0c", "state": "done",
+            "outcome": "splendid", "asked": "Implement those improvements. " * 200, "base_branch": "main",
+            "before": ["Look into it.", 7], "context": [{"from": "the report of job aa11bb22", "text": "y" * 9000},
+                                                        "not one"],
+            "needs": [{"n": 1, "text": "Add a test", "accept": "a test passes", "state": "done", "note": ""},
+                      {"n": "two", "text": "Publish it", "state": "triumphant", "note": "z" * 900}] + [{}] * 30,
+            "files": ["boil.py", 9], "checks": [{"what": "syntax", "ok": "yes"}],
+            "ran": [{"cmd": "pytest", "code": 1}, {"cmd": "true", "code": True}], "looked": "maybe",
+            "summary": "s" * 9000, "secret": "x" * 5000}}}, f)
+rep = agent.voice_state()["job"]["report"]
+check("what a job was handed and what became of it is passed on in the shape it is known to have: each piece cut "
+      "to size, a requirement in one of its states and no other, and nothing it has no name for",
+      (rep["id"], rep["outcome"], len(rep["asked"]), rep["before"], len(rep["context"]), len(rep["context"][0]["text"]),
+       [(n["n"], n["state"], len(n["note"])) for n in rep["needs"][:2]], len(rep["needs"]), rep["files"],
+       rep["checks"], rep["ran"], rep["looked"], len(rep["summary"]), "secret" in rep),
+      ("875c0c1f", "", 1200, ["Look into it."], 1, 1500, [(1, "done", 0), (0, "outstanding", 240)], 12, ["boil.py"],
+       [{"what": "syntax", "ok": False, "said": ""}], [{"cmd": "pytest", "code": 1}, {"cmd": "true", "code": None}],
+       "", 1500, False))
 check("the change that is waiting is passed to the owner's screens in the shape it is known to have, and each tool "
       "as on, off or not set up and nothing else", (got["pending"], got["tools"]),
       (WAITING, {"search": "on", "repo": "off", "draw": "absent"}))

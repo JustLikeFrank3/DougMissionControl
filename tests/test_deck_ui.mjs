@@ -532,6 +532,52 @@ test('the job in his workshop is a line: under way and for how long, or ended an
   assert.equal(own.jobLine(null, 1000), '', 'no job is no line');
 });
 
+test('a job handed requirements says how many are done, and one that ended with some left is not shown as done', () => {
+  const needs = [{ n: 1, text: 'Retry the fetch', accept: 'it retries twice', state: 'done', note: 'server.py' },
+                 { n: 2, text: 'Add a test', accept: 'a test passes', state: 'outstanding', note: 'not written' },
+                 { n: 3, text: 'Publish it', accept: '', state: 'blocked', note: 'no network' }];
+  const job = { running: false, ended: 1000 - 720, report: { needs } };
+  assert.equal(own.needsLine(job.report), '1 OF 3 DONE · 1 OUTSTANDING · 1 BLOCKED');
+  assert.equal(own.jobLine(job, 1000), 'IN THE WORKSHOP · ended 12 m ago · 1 OF 3 DONE · 1 OUTSTANDING · 1 BLOCKED');
+  assert.equal(own.jobShort(job), true);
+  const all = { running: false, ended: 900, report: { needs: needs.map(n => ({ ...n, state: 'done' })) } };
+  assert.equal(own.needsLine(all.report), '3 OF 3 DONE');
+  assert.equal(own.jobShort(all), false);
+  const going = { running: true, began: 760, report: { needs: needs.map(n => ({ ...n, state: 'pending' })) } };
+  assert.equal(own.jobLine(going, 1000), 'IN THE WORKSHOP · under way for 4 m · 3 REQUIREMENTS');
+  assert.equal(own.jobShort(going), false, 'a job under way has fallen short of nothing yet');
+  assert.equal(own.needsLine({ needs: [] }), '');
+  assert.equal(own.needsLine(null), '');
+  assert.equal(own.jobShort({ running: false, report: null }), false, 'a job handed none is as it was');
+});
+
+test('what a job was handed and what became of it are rows: its words, its requirements, the files, what was run', () => {
+  const rows = own.jobRows({
+    asked: 'Then create a new branch off main and execute those improvements.', repo: 'acme/kettle',
+    base_branch: 'main', base: 'f64e28a4de9d', branch: 'douglas/then-create-a-new-branch-875c0c', state: 'done',
+    before: ['Look into it.'], context: [{ from: 'the report of job aa11bb22', text: 'Three things.' }],
+    needs: [{ n: 1, text: 'Retry the fetch', accept: 'it retries twice', state: 'done', note: '' },
+            { n: 2, text: 'Add a test', accept: '', state: 'outstanding', note: 'not written' }],
+    stat: '1 file changed', files: ['server.py'], checks: [{ what: 'Python syntax', ok: false, said: 'line 3' }],
+    ran: [{ cmd: 'pytest -q', code: 1 }, { cmd: 'sleep 999', code: null }], looked: 'found',
+    summary: 'Made it retry.', error: '', pr: '' });
+  assert.deepEqual(rows.filter(r => r[0] === 'k').map(r => r[1]), [
+    'ASKED', 'WHERE', 'SAID JUST BEFORE', 'HANDED OVER WITH IT · the report of job aa11bb22',
+    'REQUIREMENTS · 1 OF 2 DONE · 1 OUTSTANDING · his own word on each', 'CHANGED', 'CHECKS AND WHAT WAS RUN',
+    'HIS OWN ACCOUNT · not checked']);
+  assert.deepEqual(rows.filter(r => r[0] === 'n'), [
+    ['n', '1. Retry the fetch\nDone when: it retries twice', 'done'],
+    ['n', '2. Add a test\nnot written', 'outstanding']]);
+  const text = rows.map(r => r[1]).join('\n');
+  assert.ok(text.includes('acme/kettle · from main @ f64e28a4de9d · on douglas/then-create-a-new-branch-875c0c'));
+  assert.ok(text.includes('FAILED · Python syntax (line 3)\nexit 1 · pytest -q\ndid not finish · sleep 999\n'
+                          + 'a second look found things to put right, and he went back to them'));
+  assert.deepEqual(own.jobRows({ state: 'done', kind: 'task' }),
+                   [['k', 'CHECKS AND WHAT WAS RUN'], ['v', 'nothing was run on the result']]);
+  assert.deepEqual(own.jobRows({ state: 'running' }), [], 'a job under way has no result to have run anything on');
+  assert.deepEqual(own.jobRows(null), []);
+});
+
 test('every tool he has is a row with its state, and one this page has no words for is not hidden', () => {
   const rows = own.switchRows({ search: 'off', memory: 'on', draw: 'absent', teleport: 'on' });
   assert.deepEqual(rows.map(r => [r.name, r.state]),
