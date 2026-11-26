@@ -1240,6 +1240,12 @@ stopped says which it was, and that room means the model's memory. More
 room is a setting: a larger `-c` in `/etc/douglas/llama.env`, as far as the
 machine's memory allows, and `sudo systemctl restart llama-server`.
 
+*Running out of time.* A job that only reads had half an hour, whatever
+`WORK_SECONDS` said. On a large repository a step takes about a minute, so
+a look was ended with most of its sixty steps unused (job f307f1d4: 34
+steps in 2,292 seconds). It has an hour now, and the time is a setting of
+its own: `WORK_LOOK_SECONDS` in `work.env`, beside `WORK_LOOK_STEPS`.
+
 *A gh that is too old.* Ubuntu 24.04's own gh (2.45) cannot print a pull
 request or an issue any more: it asks GitHub for a field that GitHub has
 taken away, and `gh pr view` answers "GraphQL: Projects (classic) is being

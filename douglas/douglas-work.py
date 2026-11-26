@@ -80,7 +80,7 @@ Settings (environment; /etc/douglas/work.env):
                         someone is talking to Douglas
     WORK_JOB_DIR        the runner's place           /var/lib/douglas-job
     WORK_STEPS, WORK_SECONDS    how long one job may go on      100, 3600
-    WORK_LOOK_STEPS     how long a job that only reads may go on        60
+    WORK_LOOK_STEPS, WORK_LOOK_SECONDS   how long a job that only reads may go on   60, 3600
     WORK_DISK_MB        how large one job's work tree may grow       4096
     WORK_SLOT           the model server slot jobs keep to (optional)
     LLM_URL, LLM_MODEL  the model server, which the manager asks on a job's
@@ -139,7 +139,10 @@ SECONDS = int(E("WORK_SECONDS", "3600"))
 # A job that only reads: a question about the code that takes following it
 # through several files. It changes nothing and hands back a report.
 LOOK_STEPS = int(E("WORK_LOOK_STEPS", "60"))
-LOOK_SECONDS = min(SECONDS, 1800)
+# Its time is its own, and an hour: at half an hour, a look through a large
+# repository (job f307f1d4: 34 of its 60 steps in 2,292 seconds, about a
+# minute a step) was ended with most of its steps unused.
+LOOK_SECONDS = int(E("WORK_LOOK_SECONDS", "3600"))
 REPORT_MAX = 5000                                   # characters of what such a job found
 SLOT = E("WORK_SLOT")
 LLM_URL = E("LLM_URL", "http://127.0.0.1:8081").rstrip("/")
