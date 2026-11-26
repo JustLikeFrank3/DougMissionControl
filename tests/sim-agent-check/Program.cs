@@ -443,6 +443,86 @@ float[] Bands(double[] mag, int rate = 48000, int fftSize = 4096, int count = 64
         finally { File.Delete(path); }
     }
 
+    /* The same runway, but the plan asks for its other end (28R). The agent
+       derives the reciprocal geometry: heading 274.7, so the final leg sits
+       east of its threshold and the four legs are named for 28R. */
+    {
+        var flightPlanT = asm.GetType("FlightDeckSimAgent.FlightPlan");
+        var loadInfo = flightPlanT.GetMethod("LoadInfo", BindingFlags.Public | BindingFlags.Static);
+        var buildPattern = flightPlanT.GetMethod("BuildVisualPattern", BindingFlags.Public | BindingFlags.Static);
+        var planJson = flightPlanT.GetMethod("Json", BindingFlags.Public | BindingFlags.Static);
+        var runwayT = asm.GetType("FlightDeckSimAgent.RunwayFacilityRaw");
+        var path = Path.Combine(Path.GetTempPath(), $"flightdeck-{Guid.NewGuid():N}.pln");
+        File.WriteAllText(path, """
+            <SimBase.Document><FlightPlan.FlightPlan>
+              <DepartureID>KJFK</DepartureID><DestinationID>KORD</DestinationID>
+              <ArrivalDetails><RunwayNumberFP>28</RunwayNumberFP><RunwayDesignatorFP>RIGHT</RunwayDesignatorFP></ArrivalDetails>
+              <ApproachDetails><ApproachVisualPattern>
+                <ApproachVisualPatternType>Downwind</ApproachVisualPatternType>
+                <VisualPatternDistance>1.500</VisualPatternDistance>
+                <VisualPatternAltitude>1500.000</VisualPatternAltitude>
+              </ApproachVisualPattern></ApproachDetails>
+            </FlightPlan.FlightPlan></SimBase.Document>
+            """);
+        try
+        {
+            var info = loadInfo.Invoke(null, new object[] { path });
+            var runway = Activator.CreateInstance(runwayT);
+            foreach (var (name, value) in new (string, object)[] {
+                ("Latitude", 41.9742), ("Longitude", -87.9073), ("Altitude", 204.0),
+                ("Heading", 94.7f), ("Length", 3962.0f),
+                ("PrimaryNumber", 10), ("PrimaryDesignator", 1),
+                ("SecondaryNumber", 28), ("SecondaryDesignator", 2) })
+                runwayT.GetField(name).SetValue(runway, value);
+            var route = buildPattern.Invoke(null, new[] { info, runway });
+            var json = (JsonArray)planJson.Invoke(null, new[] { route });
+            Expect("28R pattern names the reciprocal runway",
+                $"{json.Count} {json[0]["id"]} {json[1]["id"]} {json[2]["id"]} {json[3]["id"]}",
+                "4 KORD DW KORD BASE KORD FINAL KORD 28R");
+            var thresholdLon = (double)json[3]["lon"];
+            var finalLon = (double)json[2]["lon"];
+            Expect("28R final lies east of its threshold",
+                $"{finalLon > thresholdLon}", "True");
+        }
+        finally { File.Delete(path); }
+    }
+
+    /* A plan naming a runway the facility does not hold yields no pattern: the
+       agent must not invent an arrival route from a runway it does not know. */
+    {
+        var flightPlanT = asm.GetType("FlightDeckSimAgent.FlightPlan");
+        var loadInfo = flightPlanT.GetMethod("LoadInfo", BindingFlags.Public | BindingFlags.Static);
+        var buildPattern = flightPlanT.GetMethod("BuildVisualPattern", BindingFlags.Public | BindingFlags.Static);
+        var runwayT = asm.GetType("FlightDeckSimAgent.RunwayFacilityRaw");
+        var path = Path.Combine(Path.GetTempPath(), $"flightdeck-{Guid.NewGuid():N}.pln");
+        File.WriteAllText(path, """
+            <SimBase.Document><FlightPlan.FlightPlan>
+              <DepartureID>KJFK</DepartureID><DestinationID>KORD</DestinationID>
+              <ArrivalDetails><RunwayNumberFP>05</RunwayNumberFP><RunwayDesignatorFP>LEFT</RunwayDesignatorFP></ArrivalDetails>
+              <ApproachDetails><ApproachVisualPattern>
+                <ApproachVisualPatternType>Downwind</ApproachVisualPatternType>
+                <VisualPatternDistance>1.500</VisualPatternDistance>
+                <VisualPatternAltitude>1500.000</VisualPatternAltitude>
+              </ApproachVisualPattern></ApproachDetails>
+            </FlightPlan.FlightPlan></SimBase.Document>
+            """);
+        try
+        {
+            var info = loadInfo.Invoke(null, new object[] { path });
+            var runway = Activator.CreateInstance(runwayT);
+            foreach (var (name, value) in new (string, object)[] {
+                ("Latitude", 41.9742), ("Longitude", -87.9073), ("Altitude", 204.0),
+                ("Heading", 94.7f), ("Length", 3962.0f),
+                ("PrimaryNumber", 10), ("PrimaryDesignator", 1),
+                ("SecondaryNumber", 28), ("SecondaryDesignator", 2) })
+                runwayT.GetField(name).SetValue(runway, value);
+            var route = buildPattern.Invoke(null, new[] { info, runway });
+            Expect("unknown runway yields no pattern",
+                ((System.Collections.IList)route).Count.ToString(), "0");
+        }
+        finally { File.Delete(path); }
+    }
+
 // A330 mode flags must be taken from its avionics, not the stock AP flags.
 var iniT = asm.GetType("FlightDeckSimAgent.IniA330");
 var iniRawT = asm.GetType("FlightDeckSimAgent.IniA330Raw");
