@@ -23,9 +23,10 @@ import { Btn, C, Card, Chip, Empty, Head, Hold, s as ui, T } from '../ui';
 
 type St = { status: string; kind: string; q: string };
 
-export function MemoryCard() {
+export function MemoryCard({ alone }: { alone?: boolean }) {
   const { deck, active } = useDeck();
-  const [open, setOpen] = useState(!!(getPrefs().open || {}).mem);
+  const [opened, setOpen] = useState(!!(getPrefs().open || {}).mem);
+  const open = alone || opened;      // on a page of its own it is simply open
   const [st, setSt] = useState<St>({ status: 'active', kind: '', q: '' });
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -87,7 +88,7 @@ export function MemoryCard() {
   };
 
   const toggle = () => {
-    const next = !open;
+    const next = !opened;
     setOpen(next);
     setPrefs({ open: { ...(getPrefs().open || {}), mem: next } });
   };
@@ -168,7 +169,7 @@ export function MemoryCard() {
 
   return (
     <Card>
-      <Head title="MEMORY" pill={memoryCount(stats)} onPress={toggle} open={open} />
+      <Head title="MEMORY" pill={memoryCount(stats)} onPress={alone ? undefined : toggle} open={open} />
       {open ? (
         <View style={{ gap: 10 }}>
           <TextInput value={find} onChangeText={(v) => { setFind(v); if (!v && st.q) pickSt({ ...st, q: '' }); }}

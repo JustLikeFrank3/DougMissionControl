@@ -16,9 +16,10 @@ import { useDeck } from '../deck';
 import { chatRows, chatsCount, switchesPill, switchRows } from '../lib/owner';
 import { Btn, C, Card, Empty, Head, HoldSwitch, Note, Row, s as ui, T, TapSwitch } from '../ui';
 
-export function ChatsCard({ chats, changed }: { chats: any; changed: () => void }) {
+export function ChatsCard({ chats, changed, alone }: { chats: any; changed: () => void; alone?: boolean }) {
   const { deck } = useDeck();
-  const [open, setOpen] = useState(false);
+  const [opened, setOpen] = useState(false);
+  const open = alone || opened;
   const [note, setNote] = useState({ text: '', bad: false });
   const ask = (body: object, done: string) => {
     setNote({ text: '', bad: false });
@@ -31,7 +32,8 @@ export function ChatsCard({ chats, changed }: { chats: any; changed: () => void 
   const rows = chatRows(chats, Date.now() / 1000);
   return (
     <Card>
-      <Head title="CONVERSATIONS" pill={chats ? chatsCount(chats) : '—'} onPress={() => setOpen(!open)} open={open} />
+      <Head title="CONVERSATIONS" pill={chats ? chatsCount(chats) : '—'} onPress={alone ? undefined : () => setOpen(!open)}
+            open={open} />
       {chats && chats.title ? <T size={13} tone="mut" numberOfLines={1}>{chats.title}</T> : null}
       {open ? (
         <View style={{ gap: 8 }}>
@@ -79,9 +81,11 @@ export function ChatsCard({ chats, changed }: { chats: any; changed: () => void 
   );
 }
 
-export function SwitchesCard({ tools, changed }: { tools: Record<string, string> | null; changed: () => void }) {
+export function SwitchesCard({ tools, changed, alone }:
+  { tools: Record<string, string> | null; changed: () => void; alone?: boolean }) {
   const { deck } = useDeck();
-  const [open, setOpen] = useState(false);
+  const [opened, setOpen] = useState(false);
+  const open = alone || opened;
   const [note, setNote] = useState({ text: '', bad: false });
   const pill = switchesPill(tools);
   const rows = switchRows(tools);
@@ -96,7 +100,8 @@ export function SwitchesCard({ tools, changed }: { tools: Record<string, string>
   };
   return (
     <Card>
-      <Head title="WHAT HE MAY USE" pill={pill.text} tone={pill.cls} onPress={() => setOpen(!open)} open={open} />
+      <Head title="WHAT HE MAY USE" pill={pill.text} tone={pill.cls} onPress={alone ? undefined : () => setOpen(!open)}
+            open={open} />
       {open ? (
         <View>
           {!rows.length ? (

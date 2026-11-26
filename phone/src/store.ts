@@ -10,7 +10,7 @@ const LINK = 'dmc-deck-link';
 const PREFS = 'dmc-prefs';
 
 export type Link = { base: string; token: string };
-export type Prefs = { open?: Record<string, boolean>; push?: boolean };
+export type Prefs = { open?: Record<string, boolean>; push?: boolean; page?: string };
 
 export async function loadLink(): Promise<Link | null> {
   try {

@@ -18,9 +18,10 @@ import { Btn, C, Card, Empty, Head, HoldSwitch, Note, Row, T, TapSwitch } from '
 
 type Shot = { busy?: string; error?: string; uri?: string; ratio?: number; cap?: string; name?: string };
 
-export function CamerasCard() {
+export function CamerasCard({ alone }: { alone?: boolean }) {
   const { deck } = useDeck();
-  const [open, setOpen] = useState(false);
+  const [opened, setOpen] = useState(false);
+  const open = alone || opened;
   const [v, refresh] = usePoll('/api/cameras', 15000, open);
   const [note, setNote] = useState({ text: '', bad: false });
   const [shot, setShot] = useState<Shot | null>(null);
@@ -59,7 +60,7 @@ export function CamerasCard() {
   return (
     <Card>
       <Head title="CAMERAS" pill={!open && v === undefined ? '—' : !ready ? '—' : st.global_on ? on + ' on' : 'OFF'}
-            onPress={() => (open ? close() : setOpen(true))} open={open} />
+            onPress={alone ? undefined : () => (open ? close() : setOpen(true))} open={open} />
       {!open || v === undefined ? null : !v || !v.installed ? (
         <Empty text={v ? 'DougRing is not installed on node1 (dougring/setup.sh).' : 'node1 did not answer.'} />
       ) : !v.up ? (

@@ -24,6 +24,14 @@ What the app has that the page does not:
   change of Douglas's waiting for a yes, a machine that has stopped
   answering.
 
+Where the page is one long column, the app gives each part of the deck a
+page of its own, reached from the menu button in the top bar: WORKSTATION,
+DOUGLAS, NOTICES, MEMORY, CONVERSATIONS, WHAT HE MAY USE, CAMERAS, FLEET and
+THIS PHONE. The menu says what there is to say beside each (ONLINE, 2 NEW,
+WAITING FOR A YES), the button carries a mark when something wants looking
+at, and the app opens on the page it was last on. A notification that is
+tapped opens the page it is about.
+
 The rules of the deck hold here as on the page: everything shown is
 observed, every command that starts or stops something is a hold, and a
 missing reading is a dash, never a zero.
@@ -113,6 +121,7 @@ src/ShareSheet.tsx   "Ask Douglas" from another app
 src/push.ts          Apple's device token, handed to node1
 src/cards/           one file per card of the deck
 src/lib/             the pure logic, ported from pi/deck-ui/js: what is said, and when
+src/lib/pages.ts     the pages, and what the menu says beside each
 __tests__/           tests of src/lib
 ```
 
