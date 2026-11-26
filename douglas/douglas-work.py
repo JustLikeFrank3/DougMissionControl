@@ -98,6 +98,7 @@ import os
 import pwd
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -149,6 +150,23 @@ GRACE = int(E("WORK_GRACE", "300"))                 # seconds past its time befo
 LLM_TOKENS = int(E("WORK_MAX_TOKENS", "3000"))      # one step's reply, at most
 CONTEXT_MAX = int(E("WORK_CONTEXT_MAX", "48000"))   # tokens of conversation before a job wraps up
 GIT = E("WORK_GIT", "/usr/bin/git")
+# gh, GitHub's own command line, where it is installed: what a pull request,
+# an issue or a run of the checks is read with, of any of them and not only
+# of a job's own. It is run by the manager, which has the network and the
+# token, and never by a job. What reads is run when it is asked for. What
+# writes to GitHub is run only where pushing is switched on (WORK_PUSH), and
+# then only on a yes: asked for, it is not run but read back, the command
+# as it would be run, and it is run when the same command comes again with
+# the mark that was handed out with the read-back (see op_gh).
+GH = E("WORK_GH", "/usr/bin/gh")
+GH_READS = {"pr": ("list", "view", "diff", "checks", "status"), "issue": ("list", "view", "status"),
+            "run": ("list", "view"), "release": ("list", "view")}
+GH_WRITES = {"pr": ("merge", "close", "reopen", "comment", "review", "ready"),
+             "issue": ("create", "comment", "close", "reopen"), "run": ("rerun",)}
+# Which repository is asked about is the manager's to say, and nothing is
+# opened in a browser: a word that names another repository or host is not
+# passed on.
+GH_NOT = re.compile(r"-[A-Za-z]*[Rw].*|--repo(=.*)?|--web|--hostname(=.*)?")
 # Where a repository's work goes, when that is not its default branch
 # ("owner/name=branch"): what the code is read from, what a job starts from,
 # what a pull request is opened against.
@@ -554,6 +572,27 @@ def git(*args: str, cwd: str | None = None, timeout: float = 60, auth: bool = Fa
                               **({} if data else {"text": True, "errors": "replace"}))
     except subprocess.TimeoutExpired:
         raise Problem(f"git took longer than {int(timeout)} seconds and was stopped.") from None
+
+
+def gh(*args: str, timeout: float = 60):
+    """One gh command of the manager's own. The token is in its environment
+    and on no command line; it asks nothing of a person, pages nothing and
+    keeps what it keeps in the manager's own place."""
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": WORK_DIR,
+           "GH_CONFIG_DIR": os.path.join(WORK_DIR, "gh"), "GH_PROMPT_DISABLED": "1",
+           "GH_NO_UPDATE_NOTIFIER": "1", "GH_PAGER": "cat", "PAGER": "cat", "NO_COLOR": "1"}
+    host = urllib.parse.urlsplit(GIT_URL).hostname or ""
+    if TOKEN:
+        env["GH_TOKEN" if host in ("", "github.com") else "GH_ENTERPRISE_TOKEN"] = TOKEN
+    if host and host != "github.com":
+        env["GH_HOST"] = host
+    try:
+        return subprocess.run([GH, *args], cwd=WORK_DIR, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=timeout, text=True, errors="replace")
+    except subprocess.TimeoutExpired:
+        raise Problem(f"gh took longer than {int(timeout)} seconds and was stopped.") from None
+    except OSError:
+        raise Problem("gh could not be run on this machine.") from None
 
 
 def why(err: str) -> str:
@@ -1585,6 +1624,80 @@ class Manager:
         return clip(text, RESULT_MAX), dict(self.tag(owner, name, meta),
                                             checks="failed" if bad else "running" if rest else "passed")
 
+    def op_gh(self, repo: str = "", args: str = "", said: str = "", agreed: str = "") -> tuple[str, dict]:
+        """What gh prints of a repository cloned here: a pull request (any
+        of them, open or merged, a job's or not), its diff, its checks, an
+        issue, a run. Of that repository only; what it prints is somebody's
+        text, and goes back as that. A command that writes to GitHub (a
+        merge, a comment, a close) is not run when it is asked for: it comes
+        back as an Ask, to be read back, with a mark of the command and the
+        repository. It is run when it comes again with that mark (`agreed`),
+        which is the pipeline's to send, after the person's yes."""
+        owner, name, meta = self.need(repo, said)
+        try:
+            words = shlex.split(str(args))[:24]
+        except ValueError:
+            raise Problem("Those words for gh could not be read: a quote in them is not closed.") from None
+        if words[:1] == ["gh"]:
+            words = words[1:]
+        writes = len(words) > 1 and words[1] in GH_WRITES.get(words[0], ())
+        if len(words) < 2 or not (writes or words[1] in GH_READS.get(words[0], ())):
+            raise Problem("gh is run here for these and nothing else. To read: " + "; ".join(
+                f"{k} {', '.join(v)}" for k, v in GH_READS.items()) + ". To write, on the person's yes: "
+                + "; ".join(f"{k} {', '.join(v)}" for k, v in GH_WRITES.items())
+                + ". For example: pr view 6 --comments.")
+        # What a comment or a title says is the person's text, and is read
+        # back with the command: it is not looked at as a word of gh's.
+        rest = [w for i, w in enumerate(words[2:])
+                if not i or words[i + 1] not in ("-b", "--body", "-t", "--title")]
+        for w in rest:
+            if GH_NOT.fullmatch(w) or "://" in w or "#" in w:
+                raise Problem(f"gh is asked about {owner}/{name} only, and opens nothing in a browser: "
+                              f"leave out {clip(w, 40)!r}.")
+        if not os.path.exists(GH):
+            raise Problem("gh, GitHub's command line, is not installed on this machine. "
+                          "douglas/work-setup.sh installs it.")
+        if writes:
+            # What is sent is what is read back: no file of this machine's,
+            # no editor, and no going round a branch's protection.
+            for w in rest:
+                if re.fullmatch(r"--admin|--body-file(=.*)?|--template(=.*)?|--editor|--recover(=.*)?|-[A-Za-z]*[Fe].*", w):
+                    raise Problem(f"Nothing was run: {clip(w, 40)!r} is not passed on to gh. What a comment "
+                                  "says goes in --body, in the command itself.")
+            if not PUSH or not TOKEN:
+                raise Problem("Nothing was run: writing to GitHub is not switched on for this machine "
+                              "(WORK_PUSH and a token that may write, in work.env).")
+            if words[:2] == ["pr", "merge"] and not any(
+                    w in ("-m", "--merge", "-s", "--squash", "-r", "--rebase") for w in words[2:]):
+                words.append("--merge")          # gh asks which way, and here there is nobody to ask
+            line = " ".join(shlex.quote(w) for w in words)
+            stamp = hashlib.sha256(f"{owner}/{name}\0{line}".encode()).hexdigest()[:16]
+            if not agreed or str(agreed) != stamp:
+                raise Ask(f"Nothing has been run yet. On {owner}/{name}, which is "
+                          f"{'private' if meta.get('private') else 'public'}, on GitHub, I would run: "
+                          f"gh {clip(line, 600)}. That writes to GitHub, and may not be undone. "
+                          "Say yes and I run it.",
+                          **dict(self.tag(owner, name, meta), stamp=stamp, args=line))
+            log(f"gh {words[0]} {words[1]} on {owner}/{name}: run on a yes")
+        got = gh(*words, "-R", f"{owner}/{name}")
+        out = got.stdout.strip()
+        if writes and got.returncode:            # not done, whatever it printed on the way
+            raise Problem("It was not done. gh said: " + clip(" ".join(
+                (got.stderr or out or "it failed and gave no reason").split()), 300))
+        if not out:                              # failed checks are a non-zero exit with something printed
+            err = " ".join((got.stderr or "").split())
+            if got.returncode:
+                low = err.lower()
+                raise Problem("gh said: " + clip(err or "it failed and gave no reason", 300) + (
+                    " The access token on this machine may not cover that."
+                    if "401" in low or "403" in low or "not accessible" in low or "auth" in low else ""))
+            out = err or "(It printed nothing.)"
+        if writes:
+            return (clip(f"Done: gh {' '.join(words)}, on {owner}/{name}. It printed:\n" + unbracket(out),
+                         RESULT_MAX), self.tag(owner, name, meta))
+        return (clip(f"gh {' '.join(words)}, of {owner}/{name}, printed:\n" + unbracket(out), RESULT_MAX),
+                self.tag(owner, name, meta))
+
     def notes(self, owner: str, bare: str, sha: str) -> dict:
         """What the repository says to whoever works on it, for a job to be
         handed: the first of the usual files that it has. Only of the
@@ -2554,7 +2667,7 @@ class Manager:
            "status": ("job", "repo"), "wait": ("job", "seconds"), "stop": ("job",),
            "changes": ("repo", "job", "path"), "offer": ("repo", "job"), "push": ("job", "sha"),
            "issues": ("repo", "said"), "issue": ("repo", "number", "words", "said"),
-           "checks": ("repo", "job")}
+           "checks": ("repo", "job"), "gh": ("repo", "args", "said", "agreed")}
 
     def call(self, req) -> dict:
         op = req.get("op") if isinstance(req, dict) else None

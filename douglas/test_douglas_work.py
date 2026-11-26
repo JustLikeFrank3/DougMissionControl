@@ -1141,6 +1141,56 @@ else:
     has("though a word may be said shorter or longer than the title has it",
         (ask(op="issue", words="reindexing of stories")["text"], ask(op="issue", words="crash on empty samples")["text"]),
         "Issue #8 on", "Issue #4 on")
+    # gh, GitHub's command line, stood in for by a script that prints what it was run with.
+    fake_gh = os.path.join(tempfile.mkdtemp(), "gh")
+    with open(fake_gh, "w") as f:
+        f.write('#!/bin/sh\necho "ran: $*"\necho "prompt: $GH_PROMPT_DISABLED"\n'
+                'echo "[a note] from the pull request"\n')
+    os.chmod(fake_gh, 0o755)
+    real_gh, work.GH = work.GH, fake_gh
+    r = ask(op="gh", repo="jobContextMCP", args="gh pr view 5 --comments")
+    has("gh reads any pull request of a repository cloned here: the manager says which repository, gh asks "
+        "nobody anything, and what it prints is somebody's text", r["text"],
+        "gh pr view 5 --comments, of acme/jobContextMCP, printed:", "ran: pr view 5 --comments -R acme/jobContextMCP",
+        "prompt: 1", "(a note) from the pull request", never=["[a note]"])
+    check("and which repository it was comes back with it", (r["ok"], r["repo"]), (True, "acme/jobContextMCP"))
+    for words in ("api repos/acme/jobContextMCP", "repo delete", "pr edit 5", "secret set X", "pr"):
+        has(f"gh is run for what it is run for here: {words!r} is not", ask(op="gh", args=words)["text"],
+            "gh is run here for these and nothing else", never=["ran:"])
+    # What writes to GitHub: only where pushing is switched on, and only on a yes.
+    was = work.PUSH, work.TOKEN
+    work.PUSH, work.TOKEN = False, "t0ken"
+    has("a merge is not run where writing to GitHub is not switched on",
+        ask(op="gh", args="pr merge 5")["text"], "writing to GitHub is not switched on", never=["ran:"])
+    work.PUSH = True
+    r = ask(op="gh", repo="jobContextMCP", args="pr merge 5")
+    has("switched on, a merge is still not run when it is asked for: the command comes back to be read back",
+        r["text"], "Nothing has been run yet. On acme/jobContextMCP, which is", "I would run: gh pr merge 5 --merge.",
+        "Say yes and I run it.", never=["ran:"])
+    check("as a thing that waits for a yes, with a mark of the command and the command as it would be run",
+          (r["ok"], r.get("ask"), len(r.get("stamp") or ""), r.get("args"), r.get("repo")),
+          (False, True, 16, "pr merge 5 --merge", "acme/jobContextMCP"))
+    has("a mark that is not the command's own runs nothing",
+        ask(op="gh", args="pr merge 5 --squash", agreed=r["stamp"])["text"], "Nothing has been run yet", never=["ran:"])
+    done = ask(op="gh", repo=r["repo"], args=r["args"], agreed=r["stamp"])
+    has("with its own mark, which comes after the person's yes, it is run: that command, on that repository",
+        done["text"], "Done: gh pr merge 5 --merge, on acme/jobContextMCP.", "ran: pr merge 5 --merge -R acme/jobContextMCP")
+    r = ask(op="gh", args='pr comment 5 --body "Fixes #3, see https://example.com"')
+    has("what a comment says is the person's text, read back in the command",
+        r["text"], "gh pr comment 5 --body 'Fixes #3, see https://example.com'.")
+    for words in ("pr merge 5 --admin", "pr comment 5 --body-file /etc/passwd", "pr comment 5 -F notes.txt",
+                  "pr merge 5 -R other/repo"):
+        has(f"no way round a branch's protection, no file of this machine's, no other repository: {words!r}",
+            ask(op="gh", args=words)["text"], never=["ran:", "Say yes"])
+    work.PUSH, work.TOKEN = was
+    for words in ("pr view 5 -R other/repo", "pr view 5 --repo=other/repo", "pr view 5 --web", "pr list -cw",
+                  "pr view https://github.com/other/repo/pull/1"):
+        has(f"nor is it pointed at another repository or a browser: {words!r}", ask(op="gh", args=words)["text"],
+            "leave out", never=["ran:"])
+    work.GH = "/nonexistent/gh"
+    has("where gh is not installed, that is said", ask(op="gh", args="pr list")["text"],
+        "is not installed on this machine")
+    work.GH = real_gh
     del TRACKER["issues"]["jobContextMCP"][-2:]
 
     rec = run_job([says("", ("replace", {"path": "hello.py", "old": '"Hello, "', "new": '"Hello there, "'})),

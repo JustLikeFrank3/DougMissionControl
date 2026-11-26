@@ -3406,6 +3406,15 @@ HELD = {
                "other": "Nothing was forgotten.",
                "other_note": "[The person did not say yes to what was read back to be forgotten, so "
                              "nothing was forgotten.]"},
+    # A gh command that writes to GitHub: a merge, a comment, a close.
+    "gh": {"late": "That waited too long for a yes and was not run.",
+           "late_note": "[The gh command that was read back to the person was not answered in "
+                        "time. It was not run, and nothing on GitHub was changed.]",
+           "no": "Left alone. Nothing on GitHub was changed.",
+           "unclear": "Nothing is run yet. Say yes to run it, or no to leave it.",
+           "other": "That was not run.",
+           "other_note": "[The person did not say yes to the gh command that was read back to "
+                         "them, so it was not run and nothing on GitHub was changed.]"},
     # A job that would be made of somebody else's words: an issue the owner
     # did not write, comments on a pull request that are not the owner's.
     "job": {"late": "That job waited too long for a yes and was not started.",
@@ -3428,6 +3437,17 @@ def push_made(change: dict) -> str:
     log("repo push " + ("made" if got.get("ok") else "not made"))
     return str(got.get("text") or "The workshop gave no answer, so it is not known whether "
                                   "anything was pushed.")
+
+
+def gh_made(change: dict) -> str:
+    """Run a gh command the person has just said yes to, and say truthfully
+    what became of it. Only ever called for that: the command, the
+    repository and the mark are the ones that were read back."""
+    got = workshop("gh", wait=120, **change["args"])
+    TURN.made = bool(got.get("ok"))
+    log("repo gh " + ("run" if got.get("ok") else "not run"))
+    return str(got.get("text") or "The workshop gave no answer, so it is not known whether "
+                                  "it was run.")
 
 
 def held() -> bool:
@@ -4660,12 +4680,12 @@ REPO_DO = {"list": "repos", "clone": "clone", "update": "update", "about": "abou
            "files": "files", "read": "read", "find": "find", "search": "search",
            "history": "log", "work": "work", "status": "status", "changes": "changes",
            "stop": "stop", "push": "offer", "issues": "issues", "issue": "issue", "fix": "work",
-           "revise": "work", "checks": "checks", "study": "work"}
+           "revise": "work", "checks": "checks", "study": "work", "gh": "gh"}
 # What each of those is sent with, besides the repository.
 REPO_ARGS = {"files": ("path", "find", "said"), "read": ("path", "line", "find", "said"),
              "find": ("words", "said"), "search": ("words", "path", "said"), "about": ("said",),
              "changes": ("path",), "list": (), "stop": (), "issues": ("said",),
-             "issue": ("number", "words", "said"), "checks": ()}
+             "issue": ("number", "words", "said"), "checks": (), "gh": ("args", "said")}
 # What is done only on the person's own asking, seen by this program in
 # their own words: what starts a job, brings a repository in, or offers a push.
 REPO_ASKED_FOR = {"work": ("A job is started", "\"Fix ...\" or \"Add ...\"."),
@@ -4724,7 +4744,8 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
     except (TypeError, ValueError):
         line = number = 0
     have = {"path": str(path or "")[:300], "find": str(words or "")[:200], "words": str(words or "")[:200],
-            "line": line, "said": said[:600], "number": number}
+            "line": line, "said": said[:600], "number": number,
+            "args": " ".join(str(words or "").split())[:300]}      # for gh: what it is run with
     if do in REPO_ASKED_FOR and not ctx.get("routed"):
         # A job is started, a repository cloned and a push offered when the
         # person asks for it, and this program has seen that in their own
@@ -4791,6 +4812,18 @@ def tool_repo(do: str = "", repo: str = "", path: str = "", words: str = "", tas
         log("repo job held for a yes")
         return ("No job has been started. Whose words it would be made of is being read back to the "
                 "person now, and they will be asked to say yes.")
+    if do == "gh" and got.get("ask") and got.get("stamp") and got.get("args") and "held" in ctx:
+        # A gh command that writes to GitHub (a merge, a comment, a close)
+        # is not run here. The workshop says what would be run; that is read
+        # back as this turn's reply, word for word, and it is run only if
+        # the next message is a plain yes (see HELD and gh_made), by this
+        # program: that command, on that repository, as it was read back.
+        ctx["held"] = {"kind": "gh", "area": "repo", "action": "gh", "readback": str(got.get("text") or ""),
+                       "args": {"repo": str(got.get("repo") or args.get("repo") or ""),
+                                "args": str(got["args"]), "agreed": str(got["stamp"])}}
+        log("repo gh held for a yes")
+        return ("Nothing has been run. The command is being read back to the person now, and "
+                "they will be asked to say yes.")
     if do == "list" and got.get("ok"):
         # "Can you work on repositories?": what is cloned, and what he can do
         # with it, in this program's words, for him to answer from. Left to
@@ -4811,7 +4844,11 @@ REPO_CAN = (
     "something is, what a file does); look into it at length, as a job that reads through the "
     "code file after file, changes nothing, and reports back in some minutes with the files and "
     "functions it read, when the person asks for something to be traced or gone through; read "
-    "the issues in its tracker on GitHub, and what GitHub's checks said of a pull request; have "
+    "the issues in its tracker on GitHub, and what GitHub's checks said of a pull request; read "
+    "any pull request of it, open or merged, with its diff and what was written on it, or the "
+    "list of them, with gh, GitHub's own command line, which the repo tool runs for you; with "
+    "gh too, merge, close or comment on a pull request or an issue when the person asks, "
+    "which is read back to them first and done when they say yes; have "
     "a change made as a job, on the person's own words or on an issue; go on from an earlier "
     "job with what was written on its pull request; and push a job's branch as a pull request "
     "when the person asks and then says yes. Nothing has to be installed for any of that.")
@@ -4834,6 +4871,14 @@ REPO_TOOL = (
     "its pull request, a check that failed, or what the person now asks for), "
     "status (how the job is going, or what became of it), changes (what the job changed), "
     "checks (what GitHub's checks said of a job's pull request), "
+    "gh (run gh, GitHub's command line, to read from the repository on GitHub: any pull "
+    "request, issue or run; words is what gh is run with, one of pr list, pr view, pr diff, "
+    "pr checks, pr status, issue list, issue view, run list, run view, release list, release "
+    "view, and what follows it, for example: pr view 6 --comments. When the person asks for "
+    "something to be done on GitHub, also one of pr merge, pr close, pr reopen, pr comment, "
+    "pr review, pr ready, issue create, issue comment, issue close, issue reopen, run rerun, "
+    "for example: pr merge 6, or pr comment 6 --body \"Looks good.\" Those are not run at "
+    "once: the command is read back to the person, and run only if they then say yes), "
     "stop (stop the job), push (offer the job's branch to GitHub as a pull request: what would "
     "go is read back to the person, and it is pushed only if they then say yes).")
 # A message that may be about a repository, when none is in the conversation.
@@ -4876,6 +4921,16 @@ REPO_ASKED = (
     "CHANGES: it asks to see what the job changed: the diff, the patch, the changed files.\n"
     "CHECKS: it asks whether the checks, the tests or the build passed on GitHub for the "
     "pull request, or what they said.\n"
+    "PRS: it asks which pull requests the repository has, or which are open.\n"
+    "PR and the pull request's number: it asks to read, see, look at or sum up one pull "
+    "request, or what it says, what it changes or what was written on it. Only to read it: "
+    "more work on it is REVISE, its checks are CHECKS, and opening one is PUSH.\n"
+    "GH and a command for gh, GitHub's command line, without the word gh: it asks for "
+    "something to be done on GitHub to a pull request or an issue that is there already: "
+    "merged, closed, reopened, approved, commented on, marked ready, or a failed run run "
+    "again. The command is one of pr merge, pr close, pr reopen, pr comment, pr review, pr "
+    "ready, issue comment, issue close, issue reopen, run rerun, then the number, and for a "
+    "comment --body and its words in double quotes.\n"
     "STUDY: it asks for something to be worked out by reading through the code at length, "
     "more than one look at it can give: how something goes from one end to the other, traced "
     "step by step, with the file and the function at each step; which test covers something "
@@ -4893,7 +4948,7 @@ REPO_ASKED = (
     "NO: it asks for none of these: small talk, a question about something else, or about "
     "the world outside the code.\n\n"
     "Answers look like: CLONE jobcontextmcp. LIST. ISSUES. ISSUE 12. FIX 12. FIX login "
-    "crash. WORK. REVISE. STATUS. CHANGES. CHECKS. STUDY. STOP. PUSH. ABOUT. FILE server.py. "
+    "crash. WORK. REVISE. STATUS. CHANGES. CHECKS. PRS. PR 6. GH pr merge 6. STUDY. STOP. PUSH. ABOUT. FILE server.py. "
     "FIND tone profile. NO.")
 # What to do with what the program got for him, said in the turn that has it
 # (see SEARCHED): one answer to give from, and no further looking this turn.
@@ -4979,6 +5034,14 @@ def repo_wanted(said: str, ask=None, before: str = "", last: str = "") -> dict |
     if word in ("ISSUE", "FIX"):                    # an issue: its number, or words of its title
         m = re.fullmatch(r"(?:issue\s*)?(?:number\s*)?#?\s*(\d{1,7})", rest, re.I)
         return dict({"do": word.lower()}, **({"number": int(m[1])} if m else {"words": rest} if rest else {}))
+    if word == "GH":                                # something done on GitHub: read back first, run on a yes
+        rest = re.sub(r"(?i)^gh\s+", "", rest)
+        rest += '"' if rest.count('"') % 2 else ""  # the closing quote went with the answer's last full stop
+        return {"do": "gh", "words": rest} if rest else None
+    if word in ("PR", "PRS"):                       # read with gh: the one with that number, or the list
+        m = re.fullmatch(r"(?:pull request\s*|pr\s*)?(?:number\s*)?#?\s*(\d{1,7})", rest, re.I) \
+            if word == "PR" else None
+        return {"do": "gh", "words": f"pr view {int(m[1])} --comments" if m else "pr list --state all --limit 15"}
     return {"do": word.lower()} if word in ("LIST", "STATUS", "CHANGES", "STOP", "PUSH", "ABOUT", "ISSUES",
                                             "REVISE", "CHECKS", "STUDY") else None
 
@@ -5183,7 +5246,8 @@ def offer_tools() -> None:
                      "the one this conversation is about."},
             "path": {"type": "string", "description": "A file or folder, for files, read and changes."},
             "words": {"type": "string", "description": "What to look for, for find, search, "
-                      "files and read. For issue and fix: words of the issue's title."},
+                      "files and read. For issue and fix: words of the issue's title. For gh: "
+                      "what gh is run with, such as pr view 6 --comments."},
             "task": {"type": "string", "description": "For work: what is to be done to the "
                      "code, in the person's own words."},
             "line": {"type": "integer", "description": "For read: the line to start at."},
@@ -5282,7 +5346,7 @@ def job_shown() -> dict | None:
 
 def held_name(waiting: dict) -> str:
     """What a change that waits for a yes is called in the journal and the record."""
-    return ({"push": "repo push", "job": "repo job", "forget": "memory forget"}.get(waiting.get("kind") or "")
+    return ({"push": "repo push", "job": "repo job", "forget": "memory forget", "gh": "repo gh"}.get(waiting.get("kind") or "")
             or f"jobcontext {waiting['area']}.{waiting['action']}")
 
 
@@ -5835,6 +5899,7 @@ class Pipeline:
         TURN.made = True
         made = (push_made(waiting) if kind == "push" else self.job_made(waiting, via)
                 if kind == "job" else forget_made(waiting) if kind == "forget"
+                else gh_made(waiting) if kind == "gh"
                 else jc_commit(waiting))
         name = held_name(waiting)
         audit("change", name.split()[0], f"{name.split()[-1]} on a yes{where}", bool(getattr(TURN, "made", True)))
@@ -6381,7 +6446,7 @@ class Pipeline:
                     log(f"asked something of a repository ({want['do']}): done before he "
                         f"answers, in {time.time() - began:.1f} s")
                     told = REPO_FOUND if want["do"] in ("about", "files", "read", "find", "search") \
-                        else REPO_READ if want["do"] in ("issues", "issue", "checks") else REPO_DONE
+                        else REPO_READ if want["do"] in ("issues", "issue", "checks", "gh") else REPO_DONE
                     ctx["rounds"] = 1
                     remember(call, found)
                     msgs[-1] = put()

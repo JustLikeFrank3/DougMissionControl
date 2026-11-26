@@ -1120,6 +1120,30 @@ branch, and the pull request that is open has them: a second is not opened.
 "Did the checks pass?" is answered from GitHub's check runs for the commit
 it has.
 
+*Any pull request, read with gh.* "Read PR 6", "which pull requests are
+there?": the manager runs `gh`, GitHub's own command line, on the
+repository, and he answers from what it prints. Any pull request of a
+repository cloned here, open or merged, a job's or not; and he may run gh
+himself for the rest of what it reads (`pr list`, `view`, `diff`, `checks`,
+`status`; `issue list`, `view`, `status`; `run list`, `view`; `release
+list`, `view`). The manager says which repository, and what gh prints is
+handed over as somebody's text. `work-setup.sh` installs it (`apt install
+gh`); it uses the token in `work.env`, which for a private repository needs
+"Pull requests: Read-only" at least. A job still has no gh and no network.
+
+*Writing to GitHub with gh, on a yes.* "Merge PR 6", "close issue 3",
+"comment on PR 6 that it looks good": `pr merge`, `close`, `reopen`,
+`comment`, `review`, `ready`; `issue create`, `comment`, `close`, `reopen`;
+`run rerun`. Only with `WORK_PUSH=1` and a token that may write, and never
+at once: the command is read back as it would be run, with the repository
+and whether it is public, and that is the whole of the turn's reply. Only
+if the next message is a plain yes, from the same device and within three
+minutes, is it run, by the program: that command, on that repository. A
+merge with no way named is a merge commit. `--admin`, a body from a file
+and another repository are not passed on. The token then needs "Pull
+requests: Read and write", and "Issues" and "Actions" likewise for issues
+and for running a check again.
+
 *Where the work goes.* Onto a branch of its own, `douglas/<a few
 words>-<id>`, in his clone, committed under the name Douglas, and there it
 stays. `douglas/fetch-work.sh`, run in a checkout on another machine, brings
