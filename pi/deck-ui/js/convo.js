@@ -57,8 +57,9 @@ export function atBottom(scrollTop, scrollHeight, clientHeight, slack) {
   return scrollHeight - clientHeight - scrollTop <= (slack == null ? 24 : slack);
 }
 
-export function earlierPath(before, limit) {
-  return ROUTE + '?before=' + encodeURIComponent(before) + '&limit=' + (limit || PAGE);
+export function earlierPath(before, limit, chat) {
+  return ROUTE + '?before=' + encodeURIComponent(before) + '&limit=' + (limit || PAGE)
+    + (chat ? '&chat=' + encodeURIComponent(chat) : '');
 }
 
 /* ── the log ─────────────────────────────────────────────────────────────── */
@@ -68,7 +69,7 @@ export function earlierPath(before, limit) {
 // rowClass: the class of the EARLIER row.
 export function convoLog(el, opts) {
   var older = [], recent = null, shown = [];
-  var more = true, loading = false, failed = false, stuck = true, key = '';
+  var more = true, loading = false, failed = false, stuck = true, key = '', chat = '';
 
   el.addEventListener('scroll', function () {
     stuck = atBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
@@ -81,8 +82,10 @@ export function convoLog(el, opts) {
     loading = true;
     failed = false;
     draw();
-    opts.get(earlierPath(before)).then(function (r) {
+    var asked = chat;
+    opts.get(earlierPath(before, 0, chat)).then(function (r) {
       loading = false;
+      if (asked !== chat) { draw(); return; }   // another conversation is up by now: not its lines
       if (r && r.ok && Array.isArray(r.lines)) {
         older = mergeTurns(r.lines, older);
         // An answer with nothing in it ends the asking even if it says more
@@ -156,6 +159,14 @@ export function convoLog(el, opts) {
     // Draws the lines /api/douglas carries (null: the agent did not answer).
     // True when the log was drawn again, false when nothing had changed.
     paint: function (turns) { recent = turns; return draw(); },
+    // Which conversation the lines are of, where he keeps several: another
+    // one starts the log again, with none of the last one's earlier lines.
+    chat: function (id) {
+      id = id || '';
+      if (id === chat) return;
+      chat = id;
+      older = []; more = true; failed = false; stuck = true; key = '';
+    },
     // A picture that has just loaded made the log taller: one that was
     // following the newest line goes on following it.
     follow: function () { if (stuck) el.scrollTop = el.scrollHeight; },

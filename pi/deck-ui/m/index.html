@@ -148,6 +148,19 @@
       </div>
     </section>
 
+    <!-- His conversations: the one in front of him, the ones kept, a new
+         one. Opening one is a touch, deleting one a hold. Closed until tapped. -->
+    <section class="card memc" id="ch-card">
+      <button type="button" class="head tap" id="ch-head" aria-expanded="false">
+        <h2>CONVERSATIONS</h2>
+        <span class="pill" id="ch-count">—</span>
+      </button>
+      <div class="ch-now" id="ch-now"></div>
+      <div class="mem-body" id="ch-body" hidden>
+        <div id="ch"></div>
+      </div>
+    </section>
+
     <!-- What he may use, and the switch for each. A touch takes one away
          and giving it back takes a hold; he finds out at his next turn and
          cannot reach the switches himself. Closed until tapped. -->

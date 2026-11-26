@@ -489,6 +489,9 @@ def voice_state() -> dict:
             # up. Passed on only in the shape they are known to have.
             "pending": _pending(v.get("pending")),
             "job": _job(v.get("job")),
+            # The conversation in front of him and the ones that are kept,
+            # where they are: a number, a name and when, for each.
+            "chats": _chats(v.get("chats")),
             "tools": ({str(k)[:24]: s for k, s in list(v["tools"].items())[:40] if s in ("on", "off", "absent")}
                       if isinstance(v.get("tools"), dict) else None)}
 
@@ -499,6 +502,38 @@ def _pending(p) -> dict | None:
     num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
     return {"id": p["id"][:32], "kind": str(p.get("kind") or "")[:24], "text": str(p.get("text") or "")[:8000],
             "via": str(p.get("via") or "")[:12], "asked": num(p.get("asked")), "until": num(p.get("until"))}
+
+
+CHAT_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def _chats(c) -> dict | None:
+    """Which conversation is in front of him, and the ones kept: passed on
+    only in the shape they are known to have."""
+    if not isinstance(c, dict) or not CHAT_ID.fullmatch(str(c.get("id") or "")):
+        return None
+    num = lambda x: x if isinstance(x, (int, float)) and not isinstance(x, bool) else None      # noqa: E731
+    rows = [{"id": r["id"], "title": str(r.get("title") or "")[:80], "updated": num(r.get("updated")),
+             "turns": r["turns"] if isinstance(r.get("turns"), int) and not isinstance(r["turns"], bool) else 0,
+             "via": str(r.get("via") or "")[:12]}
+            for r in (c.get("list") if isinstance(c.get("list"), list) else [])[:60]
+            if isinstance(r, dict) and CHAT_ID.fullmatch(str(r.get("id") or ""))]
+    return {"id": c["id"], "title": str(c.get("title") or "")[:80],
+            "kept": c["kept"] if isinstance(c.get("kept"), int) and not isinstance(c["kept"], bool) else len(rows),
+            "list": rows}
+
+
+def relay_chat(body: dict) -> tuple[int, dict]:
+    """What the owner's screens do with his conversations: a new one,
+    another put in front of him, a name, one deleted. Passed to the pipeline
+    in the one shape it has."""
+    op, cid, title = body.get("op"), body.get("id") or "", body.get("title") or ""
+    if op not in ("new", "switch", "rename", "delete") or not isinstance(cid, str) or not isinstance(title, str) \
+            or (cid and not CHAT_ID.fullmatch(cid)) or (op == "switch" and not cid):
+        return 400, {"ok": False, "message": "a conversation is asked for by op (new, switch, rename, delete) "
+                                             "and its number"}
+    url = VOICE_PTT_URL.replace("/ptt", "/chat", 1) if VOICE_PTT_URL else ""
+    return _relay(url, {"op": op, "id": cid, "title": " ".join(title.split())[:80]}, op, timeout=5)
 
 
 def _job(j) -> dict | None:
@@ -583,25 +618,28 @@ def relay_switch(body: dict) -> tuple[int, dict]:
                  "off": [str(x)[:24] for x in out.get("off") or []][:40] if isinstance(out.get("off"), list) else None}
 
 
-def transcript() -> list[dict]:
+def transcript(chat: str = "") -> list[dict]:
     """The last N turns. Reads only the file's tail, so a transcript that
-    has grown for a year costs the same as one from this morning."""
+    has grown for a year costs the same as one from this morning. With
+    `chat`, the last N of that conversation: looked for further back, since
+    other conversations' lines lie between."""
+    span = (512 if chat else 64) * 1024
     try:
         with open(TRANSCRIPT_FILE, "rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
-            f.seek(max(0, size - 64 * 1024))
+            f.seek(max(0, size - span))
             tail = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return []
-    if size > 64 * 1024:
+    if size > span:
         tail = tail[1:]          # the first line is probably cut mid-record
     turns = []
     # Parse the whole tail and keep the last N good turns: slicing lines
     # first would let one torn write cost the panel a real turn.
     for line in tail:
         turn = _turn(line)
-        if turn is not None:
+        if turn is not None and (not chat or turn.get("chat") == chat):
             turns.append(turn)
     return turns[-TRANSCRIPT_TURNS:]
 
@@ -621,6 +659,8 @@ def _turn(line) -> dict | None:
             "via": str(t.get("via") or "voice")}
     if PICTURE_ID.fullmatch(str(t.get("image") or "")):
         turn["image"] = t["image"]       # he drew one: GET /picture?id= has it
+    if CHAT_ID.fullmatch(str(t.get("chat") or "")):
+        turn["chat"] = t["chat"]         # which conversation the line is of
     return turn
 
 
@@ -630,7 +670,7 @@ TRANSCRIPT_CHUNK = 64 * 1024
 TRANSCRIPT_READ_MAX = 4 * 1024 * 1024
 
 
-def transcript_before(before: object, limit: object) -> dict:
+def transcript_before(before: object, limit: object, chat: object = "") -> dict:
     """The newest `limit` turns older than `before`, oldest first, for a
     screen scrolled up past what /status carries. The file is read backwards
     from its end a chunk at a time, and never more than TRANSCRIPT_READ_MAX
@@ -646,6 +686,7 @@ def transcript_before(before: object, limit: object) -> dict:
     except (TypeError, ValueError):
         limit = TRANSCRIPT_PAGE
     limit = max(1, min(TRANSCRIPT_PAGE_MAX, limit))
+    chat = chat if isinstance(chat, str) and CHAT_ID.fullmatch(chat) else ""     # one conversation's lines only
     found: list[dict] = []                 # newest first while reading
     try:
         with open(TRANSCRIPT_FILE, "rb") as f:
@@ -665,7 +706,7 @@ def transcript_before(before: object, limit: object) -> dict:
                 # the end of a line whose beginning is in the next chunk back.
                 rest = lines.pop(0) if pos > 0 else b""
                 for line in reversed(lines):
-                    _older(line, before, found)
+                    _older(line, before, found, chat)
                     if len(found) > limit:
                         break
     except OSError:
@@ -676,9 +717,11 @@ def transcript_before(before: object, limit: object) -> dict:
     return {"ok": True, "lines": list(reversed(found[:limit])), "more": more}
 
 
-def _older(line: bytes, before: float, found: list) -> None:
+def _older(line: bytes, before: float, found: list, chat: str = "") -> None:
     turn = _turn(line.decode("utf-8", "replace")) if line.strip() else None
     ts = turn.get("ts") if turn else None
+    if chat and turn and turn.get("chat") != chat:
+        return
     if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts < before:
         found.append(turn)
 
@@ -1080,7 +1123,9 @@ def vitals() -> dict:
 
 
 def status() -> dict:
-    return dict(vitals(), voice=voice_state(), transcript=transcript())
+    voice = voice_state()
+    # Where conversations are kept, the lines of the one in front of him.
+    return dict(vitals(), voice=voice, transcript=transcript((voice.get("chats") or {}).get("id") or ""))
 
 
 def vitals_socket() -> socket.socket | None:
@@ -1169,7 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised():
                 return self._send(403, {"error": "forbidden"})
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
-            return self._send(200, transcript_before(q.get("before"), q.get("limit")))
+            return self._send(200, transcript_before(q.get("before"), q.get("limit"), q.get("chat") or ""))
         if path == "/memory":
             if not self._authorised():
                 return self._send(403, {"error": "forbidden"})
@@ -1180,7 +1225,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
-        if path not in ("/ptt", "/say", "/hear", "/memory", "/approval", "/switch"):
+        if path not in ("/ptt", "/say", "/hear", "/memory", "/approval", "/switch", "/chat"):
             return self._send(404, {"error": "not found"})
         if not self._authorised():
             return self._send(403, {"error": "forbidden"})
@@ -1196,7 +1241,7 @@ class Handler(BaseHTTPRequestHandler):
             code, out = memory(body.get("op"), body, MEMORY_CHANGES)
             return self._send(code, out)
         relay = {"/say": relay_say, "/hear": relay_hear, "/approval": relay_approval,
-                 "/switch": relay_switch}.get(path, relay_ptt)
+                 "/switch": relay_switch, "/chat": relay_chat}.get(path, relay_ptt)
         code, out = relay(body if isinstance(body, dict) else {})
         return self._send(code, out)
 

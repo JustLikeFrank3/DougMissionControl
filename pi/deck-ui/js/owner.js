@@ -239,6 +239,110 @@ export function approvalView(host, opts) {
   };
 }
 
+var CHAT_WHERE = { webui: 'chat page', phone: 'phone', deck: 'panel', voice: 'voice', chat: 'chat window' };
+
+/** His conversations as rows, the one last spoken in first: its name, how
+    much was said in it and when, and whether it is the one in front of him. */
+export function chatRows(chats, now) {
+  if (!chats || !Array.isArray(chats.list)) return [];
+  return chats.list.map(function (c) {
+    var n = c.turns || 0;
+    return { id: c.id, title: c.title || '(no name yet)', here: c.id === chats.id,
+             sub: n + (n === 1 ? ' exchange' : ' exchanges')
+               + (c.updated ? ' · ' + fmtAgo(c.updated, now) + ' ago' : '')
+               + (CHAT_WHERE[c.via] ? ' · ' + CHAT_WHERE[c.via] : '') };
+  });
+}
+
+/** What goes beside the tab or the card's name: how many are kept. */
+export function chatsCount(chats) {
+  return chats ? (chats.kept || 0) + ' KEPT' : '';
+}
+
+/**
+ * His conversations, in `host`: a new one, another put in front of him, a
+ * name for one, one deleted (a hold).
+ *   opts.post(path, body); opts.name(title, done): asks for a name and calls
+ *   done(text), where the screen has a way to type one; opts.changed()
+ * Returns { paint(chats) }: call it with every frame of his state.
+ */
+export function chatsView(host, opts) {
+  var last = '', note = el('div', 'mem-note'), list = el('div', 'ch-list'), bar = el('div', 'ch-bar');
+  var fresh = el('button', 'sw-b on ch-new', 'NEW CONVERSATION');
+  fresh.type = 'button';
+  host.classList.add('swv');
+  host.innerHTML = '';
+  bar.appendChild(fresh);
+  bar.appendChild(note);
+  host.appendChild(bar);
+  host.appendChild(list);
+
+  function ask(body, done) {
+    note.textContent = '';
+    opts.post('/api/douglas/chat', body).then(function (a) {
+      note.classList.toggle('bad', !(a && a.ok));
+      note.textContent = a && a.ok ? done : (a && (a.message || a.text)) || 'node1 did not answer';
+      if (a && a.ok && opts.changed) opts.changed();
+    });
+  }
+  fresh.addEventListener('click', function () { ask({ op: 'new' }, 'A new one is in front of him.'); });
+
+  function row(r) {
+    var line = el('div', 'sw ch' + (r.here ? ' here' : ''));
+    var words = el('div', 'sw-w');
+    words.appendChild(el('b', '', r.title));
+    words.appendChild(el('small', '', r.sub));
+    line.appendChild(words);
+    if (r.here) {
+      line.appendChild(el('span', 'sw-b none ch-b', 'IN FRONT OF HIM'));
+    } else {
+      var open = el('button', 'sw-b on ch-b', 'OPEN');
+      open.type = 'button';
+      open.setAttribute('aria-label', 'open ' + r.title);
+      open.addEventListener('click', function () { ask({ op: 'switch', id: r.id }, 'It is in front of him.'); });
+      line.appendChild(open);
+    }
+    if (opts.name) {
+      var name = el('button', 'sw-b ch-b', 'NAME');
+      name.type = 'button';
+      name.addEventListener('click', function () {
+        opts.name(r.title, function (text) {
+          if (text && text.trim()) ask({ op: 'rename', id: r.id, title: text }, 'Named.');
+        });
+      });
+      line.appendChild(name);
+    }
+    // Opening one is a touch; deleting one takes a hold.
+    var gone = el('button', 'sw-b off hold-btn ch-b');
+    gone.type = 'button';
+    gone.setAttribute('aria-label', 'hold to delete ' + r.title);
+    gone.appendChild(el('i', 'hold'));
+    gone.appendChild(el('span', '', 'HOLD · DELETE'));
+    wireHold(gone, function () { ask({ op: 'delete', id: r.id }, 'Deleted.'); });
+    line.appendChild(gone);
+    return line;
+  }
+
+  return {
+    paint: function (chats) {
+      // Not the times: a list drawn again every second would let go of a hold.
+      var key = JSON.stringify(chats ? [chats.id, chats.list.map(function (c) { return [c.id, c.title, c.turns]; })] : null);
+      if (key === last) return;
+      last = key;
+      list.innerHTML = '';
+      fresh.hidden = !chats;
+      var rows = chatRows(chats, Date.now() / 1000);
+      if (!chats) {
+        list.appendChild(el('div', 'mem-empty', 'His conversations are not kept: the voice pipeline on Douglas ' +
+          'is not answering, is older than this, or has VOICE_CHATS_DIR set to "-".'));
+      } else if (!rows.length) {
+        list.appendChild(el('div', 'mem-empty', 'None is kept yet. One is, from the first thing said in it.'));
+      }
+      rows.forEach(function (r) { list.appendChild(row(r)); });
+    }
+  };
+}
+
 /**
  * What he may use, in `host`.
  *   opts.post(path, body)

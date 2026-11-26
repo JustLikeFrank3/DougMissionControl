@@ -21,7 +21,7 @@ import { fmtAgo } from './format.js';
 import { memoryView, didView } from './memory.js';
 import { servicesLine, diskPct } from './fleet.js';
 import { noticesView, navNotices } from './notices.js';
-import { approvalView, switchesView, jobView } from './owner.js';
+import { approvalView, switchesView, jobView, chatsView, chatsCount } from './owner.js';
 import { camerasView } from './cameras.js';
 import { convoLog, whoLabel } from './convo.js';
 
@@ -29,7 +29,7 @@ var POLL_MS = 2000, POLL_FAST_MS = 500;   // fast while talking: state moves
 var timer = null, timerMs = 0, last = null, pressed = false, convo = null;
 var MEM_MS = 20000;                       // his memory moves by the minute, not the second
 var tab = 'convo', memory = null, did = null, notices = null, memTimer = null;
-var approval = null, switches = null, job = null, cameras = null;
+var approval = null, switches = null, job = null, cameras = null, chats = null;
 
 /* ── DECK status line + nav subtitle (SSE frame) ──────────────────────── */
 
@@ -98,6 +98,7 @@ function showTab(name) {
   $('dgl-mem').hidden = name !== 'mem';
   $('dgl-ntc').hidden = name !== 'ntc';
   $('dgl-sw').hidden = name !== 'sw';
+  $('dgl-ch').hidden = name !== 'ch';
   $('dgl-cam').hidden = name !== 'cam';
   if (cameras) { if (name === 'cam') cameras.refresh(); else cameras.close(); }
   $('dgl-did').hidden = name !== 'did';
@@ -134,6 +135,12 @@ function paint(d) {
   // may use has a tab of its own.
   if (approval) approval.paint(agent ? voice.pending : null);
   if (job) job.paint(agent ? voice.job : null);
+  if (chats) {
+    chats.paint(agent ? voice.chats || null : null);
+    $('dgl-ch-count').textContent = chatsCount(agent ? voice.chats : null);
+  }
+  // The lines are those of the conversation in front of him.
+  if (convo) convo.chat(agent && voice.chats ? voice.chats.id : '');
   if (switches) {
     var tools = agent ? voice.tools : null;
     switches.paint(tools);
@@ -299,6 +306,10 @@ export function wireDouglas() {
   did = didView($('dgl-did'), { get: getJSON, rows: 40 });
   approval = approvalView($('dgl-apv'), { post: post, via: 'deck' });
   switches = switchesView($('dgl-sw'), { post: post });
+  chats = chatsView($('dgl-ch'), {
+    post: post, changed: tick,
+    name: function (title, done) { openKeyboard('NAME THE CONVERSATION', done, title); },
+  });
   // The panel is loopback: the picture route needs no token here.
   cameras = camerasView($('dgl-cam'), {
     get: getJSON, post: post, count: $('dgl-cam-count'),

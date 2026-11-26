@@ -1856,7 +1856,8 @@ class Manager:
             "asked_until": until, "asked": len(asks), "failed": len(failed)}
 
     def op_work(self, repo: str = "", task: str = "", before=None, issue=0, words: str = "",
-                agreed: str = "", revise=0, look=0, needs=None, context=None) -> tuple[str, dict]:
+                agreed: str = "", revise=0, look=0, needs=None, context=None,
+                called: str = "") -> tuple[str, dict]:
         """Start a job: on the person's own words; on an issue from the
         repository's tracker (`issue`, its number, or `words` of its title);
         going on from the branch an earlier job left (`revise`); or one
@@ -1904,6 +1905,18 @@ class Manager:
                     raise Problem("Say what should be done to the code, in a sentence.")
             jid = secrets.token_hex(4)
             it = more.get("issue") if isinstance(more.get("issue"), dict) else None
+            named = "-".join(re.findall(r"[a-z0-9]+", str(called or "").lower()))[:48].strip("-")
+            if not branch and named and not look:
+                # A branch by the name the person gave it, under douglas/ like
+                # every job's: that prefix is what marks a branch as a job's
+                # own, and the only kind that is ever pushed. Made from the
+                # branch work goes to, like any other; never one that is there.
+                branch = "douglas/" + (named[8:].strip("-") if named.startswith("douglas-") else named)
+                if not BRANCH.fullmatch(branch):
+                    raise Problem("That is no name for a branch. A few words, letters and numbers.")
+                if self.rev(bare, "refs/heads/" + branch):
+                    raise Problem(f"There is a branch {branch} in my clone already, from an earlier job. Say "
+                                  "another name, or ask for more to be done to that job's work.")
             if not branch:
                 slug = "-".join(re.findall(r"[a-z0-9]+", (it["title"] if it else task).lower())[:5])
                 slug = slug[:36].strip("-") or "work"
@@ -2756,7 +2769,7 @@ class Manager:
            "search": ("repo", "words", "path", "at", "said"), "find": ("repo", "words", "said"),
            "log": ("repo", "count", "at"),
            "work": ("repo", "task", "before", "issue", "words", "agreed", "revise", "look", "needs",
-                    "context"),
+                    "context", "called"),
            "findings": ("repo", "said"),
            "status": ("job", "repo"), "wait": ("job", "seconds"), "stop": ("job",),
            "changes": ("repo", "job", "path"), "offer": ("repo", "job"), "push": ("job", "sha"),

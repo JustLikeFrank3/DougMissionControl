@@ -216,8 +216,35 @@ check("a yes given on the phone goes to the pipeline with its number, as a yes f
        (200, {"ok": False, "message": "That is no longer waiting for an answer."}),
        [("/approve", {"id": "a1b2c3d4", "yes": True, "via": "phone"}), ("/approve", {"id": "a1b2c3d4", "yes": False, "via": "deck"}),
         ("/approve", {"id": "zzzz", "yes": True, "via": "deck"})]))
+Pipe.seen.clear()
+check("what is done with a conversation goes to the pipeline as which thing, the conversation's number and a name "
+      "of a few words, and nothing else: what is not one of the four, or no number of his, is not passed on",
+      (agent.relay_chat({"op": "new", "extra": "x"})[0],
+       agent.relay_chat({"op": "switch", "id": "a1b2c3d4e5f6"})[0],
+       agent.relay_chat({"op": "rename", "id": "a1b2c3d4e5f6", "title": "  The   boiler " + "x" * 200})[0],
+       [agent.relay_chat(b)[0] for b in ({}, {"op": "burn"}, {"op": "switch"}, {"op": "switch", "id": "../etc/passwd"},
+                                         {"op": "delete", "id": 7}, {"op": "rename", "id": "a1b2c3d4e5f6", "title": 5})],
+       [(p, sorted(b), len(b["title"])) for p, b in Pipe.seen]),
+      (200, 200, 200, [400] * 6, [("/chat", ["id", "op", "title"], 0), ("/chat", ["id", "op", "title"], 0),
+                                  ("/chat", ["id", "op", "title"], 80)]))
 pipe.shutdown()
 agent.VOICE_PTT_URL = ""
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "chats": {
+        "id": "a1b2c3d4e5f6", "title": "The boiler " * 30, "kept": 2, "path": "/var/lib/douglas/chats", "list": [
+            {"id": "a1b2c3d4e5f6", "title": "The boiler", "updated": 1_800_000_000.0, "turns": 3, "via": "phone",
+             "history": ["x" * 5000]},
+            {"id": "not-a-number", "title": "x"}, "nor this", {"id": "0123456789ab", "title": 9, "turns": "many"}]}}, f)
+got = agent.voice_state()["chats"]
+check("his conversations are passed to the owner's screens in the shape they are known to have: which is in front "
+      "of him, and for each a number, a name, when and how much; never what was said in one",
+      (got["id"], len(got["title"]), got["kept"], got["list"], sorted(got)),
+      ("a1b2c3d4e5f6", 80, 2,
+       [{"id": "a1b2c3d4e5f6", "title": "The boiler", "updated": 1_800_000_000.0, "turns": 3, "via": "phone"},
+        {"id": "0123456789ab", "title": "9", "updated": None, "turns": 0, "via": ""}], ["id", "kept", "list", "title"]))
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "chats": {"id": "nope", "list": []}}, f)
+check("and where there is none in that shape, none", agent.voice_state()["chats"], None)
 check("a switch is a tool and a true or a false; without the switches installed it says so",
       ([agent.relay_switch(b)[0] for b in ({}, {"tool": "search"}, {"tool": "search", "on": "off"}, {"tool": 3, "on": True},
                                            {"tool": "search\ndouglas-agent: all is well", "on": True},
@@ -730,6 +757,23 @@ check("exactly enough left says there is no more", agent.transcript_before(1003,
 check("no `before` is the newest, the limit kept to a hundred, a strange one to the default",
       ([x["ts"] for x in agent.transcript_before(None, 2)["lines"]], len(agent.transcript_before("", 500)["lines"]),
        len(agent.transcript_before("nan", "lots")["lines"])), ([1248, 1249], 100, 30))
+with open(transcript_file, "a") as f:
+    f.write("\n")                # the record above may end in the middle of a line
+    for i in range(6):
+        f.write(json.dumps({"ts": 2000 + i, "who": "user" if i % 2 == 0 else "douglas", "text": f"line {i}",
+                            "via": "phone", "chat": "a1b2c3d4e5f6" if i < 4 else "0123456789ab"}) + "\n")
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time(), "chats": {"id": "a1b2c3d4e5f6", "title": "x", "list": []}}, f)
+check("where he keeps several conversations, a screen is given the lines of the one in front of him, and its "
+      "earlier ones are asked for by its number: another conversation's lines are not among them",
+      ([x["text"] for x in agent.status()["transcript"]],
+       [x["text"] for x in agent.transcript_before(2003, 10, "a1b2c3d4e5f6")["lines"]],
+       [x["text"] for x in agent.transcript_before(None, 10, "0123456789ab")["lines"]],
+       agent.transcript()[-1]["chat"], len(agent.transcript_before(None, 3, "../x")["lines"])),
+      (["line 0", "line 1", "line 2", "line 3"][-agent.TRANSCRIPT_TURNS:], ["line 0", "line 1", "line 2"],
+       ["line 4", "line 5"], "0123456789ab", 3))
+with open(voice_file, "w") as f:
+    json.dump({"state": "idle", "ts": time.time()}, f)
 agent.TRANSCRIPT_CHUNK = real_chunk
 real_cap = agent.TRANSCRIPT_READ_MAX
 agent.TRANSCRIPT_READ_MAX = 2000     # a record far longer than one request may read

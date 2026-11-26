@@ -1144,6 +1144,12 @@ html, body {
 .job-n.done .job-s { color: var(--gr); }
 .job-n.outstanding .job-s, .job-n.blocked .job-s { color: var(--am); }
 .swv { gap: 0; }
+.ch-bar { display: flex; align-items: center; gap: 14px; padding: 0 0 8px; }
+.ch-bar .mem-note { margin: 0; }
+.ch-list { display: flex; flex-direction: column; overflow-y: auto; }
+.sw.ch.here .sw-w b { color: var(--acc); }
+.sw-b.ch-b { width: 132px; min-height: 44px; font-size: 12px; }
+.sw-b.ch-new { width: auto; padding: 0 18px; }
 .sw-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
 .sw { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--ln); min-width: 0; }
 .sw-w { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

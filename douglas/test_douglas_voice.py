@@ -70,6 +70,7 @@ agent = load("agent", "douglas-agent.py")      # the reader of what we write
 real_wants_change, real_lookup_wanted = voice.wants_change, voice.lookup_wanted
 voice.wants_change = lambda said, ask=None: False
 voice.lookup_wanted = lambda tool, said, ask=None: None
+voice.HISTORY_IDLE_S = 3600.0     # most of what follows was written for a conversation that ends when it goes quiet
 
 
 def on_disk():
@@ -4555,6 +4556,20 @@ check("which of them a job is written from (all but those that read the owner's 
                         {"role": "tool", "name": "repo", "content": "x"}, {"role": "assistant", "content": "It greets."},
                         {"role": "user", "content": "Hello."}, {"role": "assistant", "content": "Hello."}])),
       (["Hello."], [{"said": "What does hello.py do?", "reply": "It greets."}]))
+voice.TURN.ctx = {"said": ["x"], "lookups": 0, "held": None, "talk": [], "convo": [], "routed": True,
+                  "after": lambda job: None}
+SHOP["answers"]["work"] = {"ok": True, "repo": "acme/kettle", "job": "0a0b0c0d", "text": "Started."}
+SHOP["calls"].clear()
+BRIEF["points"] = "STANDS"
+for task in ("Add a --quiet flag on a new branch called quiet-flag.", "Fix the timer on a branch named `fix/timer`, please.",
+             "Add a --quiet flag on a new branch off main."):
+    voice.tool_repo(do="work", task=task)
+check("a name the person gives the branch goes with the job; with none given, none is sent and the workshop "
+      "makes one up as before",
+      [c[1].get("called") for c in SHOP["calls"] if c[0] == "work"], ["quiet-flag", "fix/timer", None])
+BRIEF["points"] = "POINTS"
+voice.TURN.ctx = None
+voice.WORKING.update(job="", ended=0.0, what="", report=None)
 long = "Add a module. " + "It should handle the next case as well. " * 40 + "And end with a farewell."
 PUT_BRIEF = []
 check("a long request reaches the job whole, where it used to be cut at its six hundredth character",
@@ -4564,11 +4579,13 @@ check("a long request reaches the job whole, where it used to be cut at its six 
 SHOP["answers"] = {"work": {"ok": True, "repo": "acme/jobContextMCP", "job": "875c0c1f", "text": "Started."}}
 SHOP["route"] = {"do": "work", "task": "Add a --verbose flag to hello.py."}
 SHOP["script"] = lambda msgs: {"content": "Started."}
-SHOP["wait"] = [dict(DONE_PLAIN)]
+SHOP["wait"] = [{"ok": True, "state": "running", "text": "Still at it."}] * 40 + [dict(DONE_PLAIN)]     # it takes a while
+voice.WORKING["ended"] = time.time()          # a job not long over: every message is asked about
 n = len(repo_lines())
 repo_says("Add a --verbose flag to hello.py.")
 rp.last_exchange = time.time() - voice.HISTORY_IDLE_S - 60       # as if it had run for longer than the quiet allowed
 job_ends(n + 3)
+until(lambda: time.time() - rp.last_exchange < 30)
 SHOP["route"] = None
 SHOP["script"] = lambda msgs: {"content": "It added the flag."}
 repo_says("What did it do?", goes_on=True)
@@ -4590,6 +4607,182 @@ voice.complete, voice.memory = was_complete, was_memory
 SHOP["answers"], SHOP["wait"], SHOP["route"] = {}, [], None
 voice.WORKING.update(job="", ended=0.0, what="", report=None)
 rp.forget()
+
+
+print("-- conversations: several, kept, and come back to --")
+c_dir = os.path.join(ddir, "chats")
+c_state, c_lines = os.path.join(ddir, "chats.json"), os.path.join(ddir, "chats.jsonl")
+CH = {"shown": [], "say": lambda msgs: {"content": "Noted."}, "sums": []}
+
+
+def chat_llm(msgs, tools=None):
+    CH["shown"] = list(msgs)
+    return CH["say"](msgs)
+
+
+def chat_sum(before, dropped):
+    CH["sums"].append((before, dropped))
+    return f"summary {len(CH['sums'])}"
+
+
+def chat_pipe():
+    return voice.Pipeline(voice.StateFile(c_state), voice.Transcript(c_lines), send=lambda *a: True,
+                          snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, chat_llm),
+                          tts=fake_tts, routed=lambda *a, **k: None, wanted=lambda *a, **k: None,
+                          minded=lambda *a, **k: None, chats=voice.Chats(c_dir), summed=chat_sum)
+
+
+def chat_file_lines():
+    try:
+        with open(c_lines, encoding="utf-8") as f:
+            return [json.loads(x) for x in f]
+    except OSError:
+        return []
+
+
+def chat_says(pipe, text, via="phone"):
+    n = len(chat_file_lines())
+    pipe.say(text, via)
+    until(lambda: len(chat_file_lines()) >= n + 2 and pipe.state == "idle")
+    return chat_file_lines()[-1]["text"]
+
+
+was_idle, voice.HISTORY_IDLE_S = voice.HISTORY_IDLE_S, 0.0
+cp = chat_pipe()
+cp.resume()
+check("with none kept yet there is one, new and unnamed, and nothing on disk",
+      (cp.chats_shown()["title"], cp.chats_shown()["list"], os.listdir(c_dir)), ("New conversation", [], []))
+chat_says(cp, "The boiler is a Vaillant, fitted in 2019.")
+first = cp.chat["id"]
+voice.CONVO.update(private=True, repo="acme/kettle")
+cp.last_exchange = time.time() - 90000
+chat_says(cp, "And it is serviced every March.")
+check("a conversation is not forgotten for having gone quiet, however long: it goes on, and is named after what "
+      "was first said in it",
+      ([m["content"].split("\n\n[")[0] for m in cp.history if m["role"] == "user"], cp.chat["id"] == first,
+       cp.chats_shown()["title"]),
+      (["The boiler is a Vaillant, fitted in 2019.", "And it is serviced every March."], True,
+       "The boiler is a Vaillant, fitted in 2019."))
+check("it is written down as it stands, the owner's alone, and every line of the record says which conversation "
+      "it is of",
+      (os.listdir(c_dir), oct(os.stat(os.path.join(c_dir, first + ".json")).st_mode & 0o777),
+       {x.get("chat") for x in chat_file_lines()}), ([first + ".json"], "0o600", {first}))
+check("a new one begins with nothing of the one before in front of him, and what belonged to that one (the "
+      "repository, that the owner's records were read) stays with it",
+      (cp.chat_do("new"), cp.history, cp.chat["id"] != first, voice.CONVO["private"], voice.CONVO["repo"]),
+      ((True, "new"), [], True, False, ""))
+chat_says(cp, "What is a good name for a goat?")
+second = cp.chat["id"]
+check("both are on the owner's screens, the one last spoken in first, each with its name and how much was said",
+      ([(c["title"], c["turns"]) for c in cp.chats_shown()["list"]], cp.chats_shown()["id"], cp.chats_shown()["kept"]),
+      ([("What is a good name for a goat?", 1), ("The boiler is a Vaillant, fitted in 2019.", 2)], second, 2))
+check("going back to the first puts it in front of him as it was, with what belonged to it",
+      (cp.chat_do("switch", first), [m["content"].split("\n\n[")[0] for m in cp.history if m["role"] == "user"],
+       voice.CONVO["private"], voice.CONVO["repo"], cp.chat["title"]),
+      ((True, "switched"), ["The boiler is a Vaillant, fitted in 2019.", "And it is serviced every March."], True,
+       "acme/kettle", "The boiler is a Vaillant, fitted in 2019."))
+chat_says(cp, "When was it fitted?")
+check("and he answers there with all of it in front of him, the line marked as that conversation's",
+      ("The boiler is a Vaillant, fitted in 2019." in json.dumps(CH["shown"]), "goat" in json.dumps(CH["shown"]),
+       chat_file_lines()[-1]["chat"]), (True, False, first))
+check("a conversation is given a name, by its number or as the one in front of him; one that is not there is "
+      "said not to be",
+      (cp.chat_do("rename", second, "  Goat   names "), cp.chat_do("rename", "", "The boiler"),
+       cp.chat_do("rename", "0" * 12, "x"), cp.chat_do("switch", "../etc"), cp.chat_do("burn", first),
+       sorted(c["title"] for c in cp.chats_shown()["list"])),
+      ((True, "renamed"), (True, "renamed"), (False, "There is no such conversation."),
+       (False, "There is no such conversation."),
+       (False, "That is not something to do with a conversation: new, switch, rename or delete."),
+       ["Goat names", "The boiler"]))
+cp.st.update(state="thinking")
+check("none of it while he is in the middle of a turn", cp.chat_do("new"),
+      (False, "Douglas is busy (thinking): try again in a moment"))
+cp.st.update(state="idle")
+voice.CONVO.update(private=False, repo="")
+cp2 = chat_pipe()
+cp2.resume()
+check("after a restart the conversation last spoken in is in front of him again, as it was",
+      (cp2.chat["id"], cp2.chat["title"], len([m for m in cp2.history if m["role"] == "user"]),
+       voice.CONVO["private"], voice.CONVO["repo"], cp2.tr.chat), (first, "The boiler", 3, True, "acme/kettle", first))
+check("one is deleted, and the one in front of him gives way to a new one when it is that",
+      (cp2.chat_do("delete", second), cp2.chat_do("delete"), cp2.history, os.listdir(c_dir),
+       cp2.chat_do("delete", second)),
+      ((True, "deleted"), (True, "deleted"), [], [], (False, "There is no such conversation.")))
+# -- what no longer fits is summed up, and the summary stays in front of him
+was_chars, voice.HISTORY_CHARS = voice.HISTORY_CHARS, 400
+CH["say"] = lambda msgs: {"content": "A long answer about the garden. " * 6}
+chat_says(cp2, "Tell me about the garden plan.")
+chat_says(cp2, "And the greenhouse?")
+until(lambda: cp2.chat["summary"])
+chat_says(cp2, "What did we say first?")
+check("a conversation that has outgrown what he can hold loses its oldest exchanges from sight only: they are "
+      "summed up, and the summary is at the top of what he is shown from then on, and kept with the conversation",
+      (CH["sums"][0][0], "The person: Tell me about the garden plan." in CH["sums"][0][1],
+       "Douglas: A long answer about the garden." in CH["sums"][0][1],
+       "What came before the part you can see, summed up by this program: summary" in CH["shown"][0]["content"],
+       "Tell me about the garden plan." in json.dumps(CH["shown"][1:]),
+       cp2.chats.load(cp2.chat["id"])["summary"].startswith("summary")), ("", True, True, True, False, True))
+until(lambda: len(CH["sums"]) >= 2)
+check("the next part to go is added to the summary there was", CH["sums"][1][0], "summary 1")
+voice.HISTORY_CHARS = was_chars
+# -- a chat page's chats are conversations of their own
+CH["say"] = lambda msgs: {"content": "Paris."}
+house, house_said = cp2.chat["id"], len(cp2.history)
+ok, reply = cp2.ask("What is the capital of France?", "webui", chat="", turns=[])
+page_chat = next(c for c in cp2.chats.listed() if c["via"] == "webui")
+check("a chat begun on the chat page is a conversation of its own, kept beside the others: the house's is put "
+      "aside for the turn and is as it was afterwards",
+      (ok, reply, cp2.chat["id"] == house, len(cp2.history) == house_said, page_chat["title"], page_chat["turns"],
+       "garden" in json.dumps(CH["shown"]), chat_file_lines()[-1]["chat"] == page_chat["id"]),
+      (True, "Paris.", True, True, "What is the capital of France?", 1, False, True))
+CH["say"] = lambda msgs: {"content": "About two million."}
+mark = voice.chat_mark("What is the capital of France?", "Paris.")
+cp2.ask("How many people live there?", "webui", chat=mark,
+        turns=[{"role": "user", "content": "What is the capital of France?"}, {"role": "assistant", "content": "Paris."}])
+check("its next message is known for the same chat by how it began, and is answered with that chat in front of him",
+      ([c["turns"] for c in cp2.chats.listed() if c["via"] == "webui"],
+       "What is the capital of France?" in json.dumps(CH["shown"]), cp2.chat["id"] == house), ([2], True, True))
+cp2.ask("And of Spain?", "webui", chat=voice.chat_mark("Name a river.", "The Ebro."),
+        turns=[{"role": "user", "content": "Name a river."}, {"role": "assistant", "content": "The Ebro."}])
+check("a chat he has not seen before is begun from what the page says was said in it, and the two are not mixed",
+      (sorted(c["turns"] for c in cp2.chats.listed() if c["via"] == "webui"),
+       "Name a river." in json.dumps(CH["shown"]), "France" in json.dumps(CH["shown"])), ([2, 2], True, False))
+check("the chat page's chats are not what a restart puts in front of him",
+      (lambda p: (p.resume(), p.chat["id"])[1])(chat_pipe()), house)
+# -- a job reports to the conversation it was asked in
+voice.WORKING.update(job="", ended=0.0, what="", report=None)
+asked_in = cp2.chat["id"]
+SHOP["wait"] = [dict(DONE_PLAIN)]
+cp2.chat_do("new")
+chat_says(cp2, "Something else entirely.")
+n = len(chat_file_lines())
+cp2._work("ab12cd34", "phone", -1, asked_in)
+check("a job that ends while another conversation is in front of him leaves its news with the one it was asked "
+      "in, for when that is come back to",
+      (voice.CONVO["news"], "The job you started has ended" in cp2.chats.load(asked_in)["state"]["news"],
+       cp2.chat_do("switch", asked_in), "The job you started has ended" in voice.CONVO["news"]),
+      ("", True, (True, "switched"), True))
+# -- a guest's conversation is nobody's to keep
+kept = len(cp2.chats.index)
+voice.CHATGPT_TOKEN = "t" * 40
+cp2.ask("What do you remember about the boiler?", "chatgpt", turns=[{"role": "user", "content": "Hello."}])
+check("what ChatGPT says to him is not kept as a conversation", len(cp2.chats.index), kept)
+voice.CHATGPT_TOKEN = ""
+# -- with no place to keep them there is the one, as before
+plain = voice.Pipeline(voice.StateFile(c_state), voice.Transcript(c_lines), send=lambda *a: True,
+                       snd_format=lambda: (16000, 2, 1), stt=fake_stt, llm=lambda m: voice.llm(m, chat_llm),
+                       tts=fake_tts, routed=lambda *a, **k: None, wanted=lambda *a, **k: None)
+check("where conversations are not kept, the screens are told of none and nothing can be done with them",
+      (plain.chats_shown(), plain.chat_do("new")[0], plain.tr.chat), (None, False, ""))
+voice.HISTORY_IDLE_S = 300.0
+plain.history = [{"role": "user", "content": "x"}, {"role": "assistant", "content": "y"}]
+plain.last_exchange = time.time() - 400
+chat_says(plain, "Hello again.")
+check("and a number of seconds in the settings brings back a conversation that ends when it has gone quiet",
+      [m["content"].split("\n\n[")[0] for m in plain.history if m["role"] == "user"], ["Hello again."])
+voice.HISTORY_IDLE_S = was_idle
+voice.CONVO.update(private=False, repo="", news="", pending=None)
+voice.WORKING.update(job="", ended=0.0, what="", report=None)
 
 voice.workshop = real_shop
 sock_path = os.path.join(ddir, "work.sock")

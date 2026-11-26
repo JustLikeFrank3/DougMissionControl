@@ -1953,6 +1953,25 @@ else:
           (True, recq["id"], "acme/jobContextMCP", recq["summary"], "Trace how the greeting is built in hello.py."))
     has("and where no look has reported, there is nothing to take requirements from",
         ask(op="findings", repo="kettle")["text"], "No look through the code has reported anything here.")
+    rec = run_job([says("", ("write", {"path": "named.txt", "content": "named\n"})),
+                   says("", ("done", {"summary": "Wrote named.txt."}))],
+                  repo="jobContextMCP", task="Add a file called named.txt on a branch called Tone_Fix 2.",
+                  called="Tone_Fix 2")
+    check("a job goes on a branch by the name the person gave it, under douglas/ like every job's, made from the "
+          "branch work goes to",
+          (rec["branch"], rec["commits"], bare_git("merge-base", "--is-ancestor", rec["base"],
+                                                   "refs/heads/douglas/tone-fix-2") == "",
+           "on a new branch made from there: douglas/tone-fix-2" in first_told()),
+          ("douglas/tone-fix-2", 1, True, True))
+    has("a name that is taken is not used again: he is told to pick another, or to go on with that job's work",
+        ask(op="work", repo="jobContextMCP", task="Add another file on that branch.", called="tone fix 2")["text"],
+        "There is a branch douglas/tone-fix-2 in my clone already")
+    main_at = bare_git("rev-parse", "refs/remotes/origin/main")
+    rec = run_job([says("", ("write", {"path": "x.txt", "content": "x\n"})), says("", ("done", {"summary": "Wrote x.txt."}))],
+                  repo="jobContextMCP", task="Add a file called x.txt.", called="../../main")
+    check("and a name is never a way out of douglas/, nor to main: what it comes to is a job's own branch",
+          (rec["branch"], bare_git("rev-parse", "refs/remotes/origin/main") == main_at,
+           bare_git("for-each-ref", "--format=%(refname)", "refs/heads/main")), ("douglas/main", True, ""))
     was_owner, work.OWNER = work.OWNER, "somebody-else"
     r = ask(op="work", repo="jobContextMCP", task=ASKED, needs=NEEDS[:2], context=CONTEXT)
     has("in a repository that is not the owner's own, a job made of what was said in the conversation is not "

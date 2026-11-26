@@ -430,7 +430,10 @@ LLM_MAX_TOKENS=1500
 #DOUGLAS_SYSTEM_PROMPT=You are Douglas, ...
 VOICE_MAX_LISTEN_S=20
 VOICE_HISTORY_CHARS=24000
-VOICE_HISTORY_IDLE_S=3600
+# A conversation goes on until a new one is begun; 0 is never forgotten for
+# having gone quiet. They are kept, one file each, beside the transcript
+# (VOICE_CHATS_DIR to keep them elsewhere, "-" to keep none).
+VOICE_HISTORY_IDLE_S=0
 VOICE_STATE_FILE=/run/douglas/voice.json
 TRANSCRIPT_FILE=/var/lib/douglas/transcript.jsonl
 CONF

@@ -32,6 +32,8 @@ following its journald output. flightsim-boot.sh is unmodified.
     GET  /api/douglas/memory     ?op=list|get|events|stats: what he remembers,
                                  and the record of what he did
     POST /api/douglas/memory     {"op":"correct|add|delete|restore|purge", ...}
+    POST /api/douglas/chat       {"op":"new|switch|rename|delete","id":"...","title":"..."}:
+                                 his conversations, where they are kept
                                  the owner puts a memory right or takes it away
     GET  /api/cameras            DougRing: switches, cameras, health, journal (owner)
     POST /api/cameras            {"op":"switch|enable|disable|name|forget|refresh", ...}
@@ -1777,6 +1779,15 @@ def douglas_owner(what: str, body: dict) -> tuple[int, dict]:
         if not isinstance(pid, str) or not pid or not isinstance(yes, bool):
             return 400, {"ok": False, "message": "an answer is the number of what is waiting, and yes: true or false"}
         ask = {"id": pid[:32], "yes": yes, "via": "phone" if body.get("via") == "phone" else "deck"}
+    elif what == "chat":
+        # His conversations: a new one, another put in front of him, a name
+        # for one, one deleted. A number of his making, and a few words.
+        op, cid, title = body.get("op"), body.get("id") or "", body.get("title") or ""
+        if op not in ("new", "switch", "rename", "delete") or not isinstance(cid, str) \
+                or not isinstance(title, str) or (cid and not re.fullmatch(r"[0-9a-f]{12}", cid)):
+            return 400, {"ok": False, "message": "a conversation is asked for by op (new, switch, rename, "
+                                                 "delete) and its number"}
+        ask = {"op": op, "id": cid, "title": " ".join(title.split())[:80]}
     else:
         tool, on = body.get("tool"), body.get("on")
         if not isinstance(tool, str) or not re.fullmatch(r"[a-z_]{1,24}", tool) or not isinstance(on, bool):
@@ -1959,7 +1970,7 @@ def douglas_memory(op: object, fields: dict, change: bool) -> tuple[int, dict]:
     return 200, got
 
 
-def douglas_transcript(before: object, limit: object) -> tuple[int, dict]:
+def douglas_transcript(before: object, limit: object, chat: object = "") -> tuple[int, dict]:
     """Older lines of his conversation, for a screen scrolled up past what
     /api/douglas carries. Only numbers are passed on to the agent."""
     if not DOUGLAS_AGENT_TOKEN:
@@ -1975,6 +1986,8 @@ def douglas_transcript(before: object, limit: object) -> tuple[int, dict]:
         ask["limit"] = str(max(1, min(100, int(limit))))
     except (TypeError, ValueError):
         pass
+    if isinstance(chat, str) and re.fullmatch(r"[0-9a-f]{12}", chat):
+        ask["chat"] = chat                       # one conversation's lines, by its number
     url = f"http://{DOUGLAS_HOST}:{DOUGLAS_AGENT_PORT}/transcript?token={DOUGLAS_AGENT_TOKEN}"
     # Read here rather than through _ws_json: a hundred long lines can be
     # more than the quarter megabyte it stops at.
@@ -2480,7 +2493,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised(query):
                 return self._json(403, {"error": "forbidden"})
             code, out = douglas_transcript((query.get("before") or [""])[0],
-                                           (query.get("limit") or [""])[0])
+                                           (query.get("limit") or [""])[0], (query.get("chat") or [""])[0])
             return self._json(code, out)
 
         # A picture he drew, for the line of his it came with.
@@ -2628,6 +2641,14 @@ class Handler(BaseHTTPRequestHandler):
             code, out = douglas_owner("approval", body)
             # That an answer was given and which way: never what it was to.
             self._note(("yes" if body.get("yes") is True else "no" if body.get("yes") is False else "not an answer")
+                       + ("" if out.get("ok") else " refused"))
+            return self._json(code, out)
+
+        if path == "/api/douglas/chat":
+            code, out = douglas_owner("chat", body)
+            # Which thing was done with a conversation: never its name.
+            op = body.get("op")
+            self._note((op if op in ("new", "switch", "rename", "delete") else "not a thing to do")
                        + ("" if out.get("ok") else " refused"))
             return self._json(code, out)
 

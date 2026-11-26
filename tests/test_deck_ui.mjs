@@ -578,6 +578,19 @@ test('what a job was handed and what became of it are rows: its words, its requi
   assert.deepEqual(own.jobRows(null), []);
 });
 
+test('his conversations are rows, the one in front of him marked, each with how much was said and when', () => {
+  const chats = { id: 'bbbbbbbbbbbb', title: 'The boiler', kept: 2, list: [
+    { id: 'aaaaaaaaaaaa', title: 'Goat names', updated: 1000 - 240, turns: 1, via: 'webui' },
+    { id: 'bbbbbbbbbbbb', title: '', updated: 1000 - 7200, turns: 3, via: 'phone' }] };
+  assert.deepEqual(own.chatRows(chats, 1000), [
+    { id: 'aaaaaaaaaaaa', title: 'Goat names', here: false, sub: '1 exchange · 4 m ago · chat page' },
+    { id: 'bbbbbbbbbbbb', title: '(no name yet)', here: true, sub: '3 exchanges · 2 h 0 m ago · phone' }]);
+  assert.equal(own.chatsCount(chats), '2 KEPT');
+  assert.equal(own.chatsCount(null), '', 'where none are kept there is no count');
+  assert.deepEqual(own.chatRows(null, 1000), []);
+  assert.deepEqual(own.chatRows({ id: 'x' }, 1000), [], 'a state with no list in it is no rows');
+});
+
 test('every tool he has is a row with its state, and one this page has no words for is not hidden', () => {
   const rows = own.switchRows({ search: 'off', memory: 'on', draw: 'absent', teleport: 'on' });
   assert.deepEqual(rows.map(r => [r.name, r.state]),
@@ -657,6 +670,7 @@ test('only a log already at its newest line follows a new one down', () => {
 test('the earlier lines are asked for by a number only', () => {
   assert.equal(convo.earlierPath(1795566756.75), '/api/douglas/transcript?before=1795566756.75&limit=30');
   assert.equal(convo.earlierPath(5, 10), '/api/douglas/transcript?before=5&limit=10');
+  assert.equal(convo.earlierPath(5, 10, 'a1b2c3d4e5f6'), '/api/douglas/transcript?before=5&limit=10&chat=a1b2c3d4e5f6');
 });
 
 test('a line ChatGPT said is named CHATGPT, not YOU', () => {

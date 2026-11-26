@@ -412,6 +412,17 @@ check("what is not an answer is not passed on: no number, or a yes that only loo
       ([post("/api/douglas/approval", b)[0] for b in ({}, {"yes": True}, {"id": "a1b2c3d4"}, {"id": "a1b2c3d4", "yes": "true"},
                                                        {"id": "a1b2c3d4", "yes": 1}, {"id": 5, "yes": True})],
        len(ASKED) - n), ([400] * 6, 0))
+code, out, log = post("/api/douglas/chat", {"op": "rename", "id": "a1b2c3d4e5f6", "title": "  The   boiler ", "x": 1})
+check("what is done with one of his conversations is passed to his agent as which thing, its number and a name; "
+      "the journal has which thing, and not the name",
+      (code, ASKED[-1][1], ASKED[-1][3], log.strip()),
+      (200, "/chat", {"op": "rename", "id": "a1b2c3d4e5f6", "title": "The boiler"},
+       "http: /api/douglas/chat from 127.0.0.1: rename refused"))
+n = len(ASKED)
+check("what is not one of the four things, or no number of his, is not passed on",
+      ([post("/api/douglas/chat", b)[0] for b in ({}, {"op": "burn"}, {"op": "switch", "id": "../../etc"},
+                                                   {"op": "delete", "id": 5}, {"op": "new", "title": 9})],
+       len(ASKED) - n), ([400] * 5, 0))
 code, out, log = post("/api/douglas/switch", {"tool": "search", "on": False, "op": "write"})
 check("a switch is passed on as the tool and the way, and the journal has both",
       (code, ASKED[-1][1], ASKED[-1][3], log.strip()),

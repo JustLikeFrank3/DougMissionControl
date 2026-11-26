@@ -16,7 +16,7 @@ import { fmtAgo, fmtClock, fmtDur, fmtTime } from '../js/format.js';
 import { memoryView, didView } from '../js/memory.js';
 import { machineLine } from '../js/fleet.js';
 import { noticesView } from '../js/notices.js';
-import { approvalView, switchesView, jobView } from '../js/owner.js';
+import { approvalView, switchesView, jobView, chatsView, chatsCount } from '../js/owner.js';
 import { camerasView } from '../js/cameras.js';
 import { convoLog, whoLabel } from '../js/convo.js';
 
@@ -505,6 +505,11 @@ function paintDouglas(d) {
   // The last few turns, and the earlier ones scrolled up to. A log drawn
   // again is the moment to let go of pictures no longer in it.
   shown = {};
+  var kept = agent && d.voice ? d.voice.chats || null : null;
+  chats.paint(kept);
+  $('ch-count').textContent = kept ? chatsCount(kept) : '—';
+  $('ch-now').textContent = kept ? kept.title : '';
+  convo.chat(kept ? kept.id : '');           // the lines are those of the conversation in front of him
   if (convo.paint(agent ? (d.transcript || []) : null)) {
     Object.keys(pics).forEach(function (id) { if (!shown[id]) delete pics[id]; });
   }
@@ -1116,6 +1121,16 @@ function tickNotices() { notices.refresh(); }
 
 var approval = approvalView($('dgl-apv'), { post: post, via: 'phone' });
 var switches = switchesView($('sw'), { post: post });
+// His conversations: a new one, another opened, a name, one deleted.
+var chats = chatsView($('ch'), {
+  post: post,
+  name: function (title, done) { var t = window.prompt('Name the conversation', title); if (t != null) done(t); },
+});
+$('ch-head').addEventListener('click', function () {
+  var open = $('ch-body').hidden;
+  $('ch-body').hidden = !open;
+  $('ch-head').setAttribute('aria-expanded', open ? 'true' : 'false');
+});
 var job = jobView($('dgl-job'));
 
 // ── the cameras ──────────────────────────────────────────────────────────
